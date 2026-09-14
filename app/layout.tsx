@@ -3,8 +3,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
+  title: 'TradingOS 2.0',
+  description: 'AI-native trading operations control console',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -26,11 +26,14 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'light dark',
+  colorScheme: 'dark light',
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: 'white' },
-    { media: '(prefers-color-scheme: dark)', color: 'black' },
+    { media: '(prefers-color-scheme: dark)', color: '#05070a' },
+    { media: '(prefers-color-scheme: light)', color: '#f5f5f5' },
   ],
+  width: 'device-width',
+  initialScale: 1,
+  userScalable: true,
 }
 
 export default function RootLayout({
