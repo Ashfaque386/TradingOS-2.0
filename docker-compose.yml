@@ -7,6 +7,9 @@ services:
     image: tradingos-2.0-backend:latest
     container_name: TradingOS-2.0-Backend
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       ENV: ${ENV:-development}
       POSTGRES_USER: ${POSTGRES_USER:-tradingos}
@@ -18,6 +21,10 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       AGENT_GATEWAY_CONFIG_PATH: /app/config/tradingos.config.json
+      # redis is its own container/image (no Postgres+API-style coupling
+      # reason applies to it) — reached over the Docker network by service
+      # name, not localhost.
+      REDIS_URL: redis://redis:6379/0
       # Opt-in: unset by default, so a stock deployment never gets a
       # hardcoded credential baked in. Set both in .env to have the
       # container ensure this SystemAdministrator user exists on every
@@ -60,6 +67,20 @@ services:
         condition: service_healthy
     ports:
       - "${FRONTEND_HOST_PORT:-3000}:3000"
+
+  redis:
+    image: redis:7-alpine
+    container_name: TradingOS-2.0-Redis
+    restart: unless-stopped
+    # Not published to the host: only the backend talks to it, over the
+    # internal Docker network — same "don't publish a port unless something
+    # outside the container needs it" rule as Postgres.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   tradingos-2.0_pgdata:

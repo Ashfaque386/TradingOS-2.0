@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,10 +11,13 @@ from src.api.router import api_router
 from src.api.routes.health import router as health_router
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
+from src.core.redis_client import get_redis
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
 from src.observability.logging import configure_logging
+from src.orchestration.recovery import reap_incomplete_runs
+from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
 
 configure_logging()
 
@@ -42,8 +46,32 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     watcher = ConfigWatcher(config_path)
     watcher.start()
 
+    redis = get_redis()
+    async with AsyncSessionLocal() as session:
+        reaped = await reap_incomplete_runs(session, redis)
+
+    recovery_tasks: list[asyncio.Task] = []
+    if reaped:
+        logger.info("orchestration.runs_reaped", run_ids=[str(r) for r in reaped])
+        # Reaping only makes stuck tasks reclaimable; it doesn't itself
+        # resume execution. drive_run_to_quiescence() safely no-ops for a
+        # reaped run that isn't RUNNING (e.g. PLANNING, whose re-entry is a
+        # narrower crash window not yet handled here), so it's safe to call
+        # for every reaped run unconditionally. Fired as background tasks
+        # (not awaited) so app startup — and the /health endpoint — isn't
+        # blocked on however long recovery takes.
+        recovery_tasks = [
+            asyncio.create_task(drive_run_to_quiescence(AsyncSessionLocal, redis, run_id))
+            for run_id in reaped
+        ]
+
+    stall_sweep_task = start_stall_sweep_loop(AsyncSessionLocal, redis)
+
     yield
 
+    stall_sweep_task.cancel()
+    for task in recovery_tasks:
+        task.cancel()
     watcher.stop()
 
 
