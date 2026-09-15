@@ -18,6 +18,12 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       AGENT_GATEWAY_CONFIG_PATH: /app/config/tradingos.config.json
+      # Opt-in: unset by default, so a stock deployment never gets a
+      # hardcoded credential baked in. Set both in .env to have the
+      # container ensure this SystemAdministrator user exists on every
+      # boot (idempotent — safe to leave set across restarts).
+      DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
     ports:
       # API_HOST_PORT always publishes — it's the only way to reach the app.
       - "${API_HOST_PORT:-8000}:8000"
