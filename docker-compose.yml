@@ -17,6 +17,7 @@ services:
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      AGENT_GATEWAY_CONFIG_PATH: /app/config/tradingos.config.json
     ports:
       # API_HOST_PORT always publishes — it's the only way to reach the app.
       - "${API_HOST_PORT:-8000}:8000"
@@ -31,6 +32,10 @@ services:
       - "${POSTGRES_HOST_PORT:+$POSTGRES_HOST_PORT:}5432"
     volumes:
       - tradingos-2.0_pgdata:/var/lib/postgresql/data
+      # Bind mount, not a named volume: config/tradingos.config.json is
+      # meant to be hand-edited from the host while the container runs —
+      # the Agent Gateway hot-reloads on any change (Build Spec §6.2).
+      - ./config:/app/config
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

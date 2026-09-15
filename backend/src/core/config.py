@@ -17,6 +17,12 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # Relative to CWD by default, which is correct for the single container
+    # (WORKDIR /app, config/ bind-mounted at /app/config — see
+    # docker-compose.yml). Local dev running `uvicorn` from backend/ needs
+    # this overridden in .env to "../config/tradingos.config.json".
+    agent_gateway_config_path: str = "config/tradingos.config.json"
+
 
 @lru_cache
 def get_settings() -> Settings:
