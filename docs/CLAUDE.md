@@ -65,7 +65,7 @@ See Build Specification §4 for the full layout. High points:
 
 Track progress here as phases complete — update this section at the end of every phase.
 
-- [ ] Phase 0 — Repo & Foundations
+- [x] Phase 0 — Repo & Foundations — backend scaffold (§4 tree), FastAPI + async SQLAlchemy + Alembic baseline (`users`, `refresh_tokens`), JWT access/refresh auth with refresh-token reuse-detection, table-based RBAC policy engine (`src/core/rbac.py`) enforced via a single `require_role` dependency, Docker Compose (`api`+`postgres`), 21 passing tests. Note: `docker compose build` could not be executed in this sandbox (Docker Hub pulls are blocked by the session's egress policy) — verified the equivalent behavior instead by running `alembic upgrade head` and the API directly against a local Postgres 16 and exercising register/login/refresh/reuse-detection/RBAC over HTTP; please confirm `docker compose up` once in a normal environment.
 - [ ] Phase 1 — Agent Gateway
 - [ ] Phase 2 — Orchestration Engine
 - [ ] Phase 3 — Agent Roster, LLM Router & Skill Registry
