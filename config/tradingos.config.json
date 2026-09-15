@@ -1,0 +1,56 @@
+{
+  // Agent Gateway config (Build Spec §6.1). JSON5-tolerant: comments and
+  // trailing commas are fine. Hand-edit this file while the app is
+  // running — a valid change applies within a few seconds; an invalid
+  // one is rejected with a clear error and the app keeps running on the
+  // last-known-good config. Driven by the same functions as
+  // `tradingos-cli agents ...` / `tradingos-cli config ...`.
+  //
+  // Note: a CLI-driven edit rewrites this file as plain formatted JSON
+  // and will NOT preserve these comments — hand-edit if you want to keep
+  // them.
+  version: 1,
+
+  infra: {
+    llmProviders: {
+      order: ["anthropic", "openai", "gemini", "deepseek", "ollama"],
+      fallbackPolicy: "next-on-failure",
+    },
+    brokerFailover: { primary: "zerodha", fallback: "upstox" },
+    // Read-only pointers — the actual limit values live in Postgres
+    // behind the dual-control stage/confirm flow (Phase 6). This file
+    // cannot set a risk threshold directly.
+    riskThresholdRefs: { maxDrawdownPct: 15, wsLatencyMs: 100 },
+  },
+
+  agents: {
+    defaults: {
+      model: "auto",
+      heartbeatEnabled: false,
+      skills: ["market-data-read", "notification-send"],
+    },
+    entries: {
+      "ceo-agent": {
+        identity: { name: "CEO", emoji: "🧠", theme: "cyan" },
+        heartbeatEnabled: true,
+        heartbeatIntervalMinutes: 10,
+      },
+      "risk-manager": {
+        identity: { name: "Risk Manager", emoji: "🛡️", theme: "amber" },
+        heartbeatEnabled: true,
+        heartbeatIntervalMinutes: 5,
+      },
+    },
+  },
+
+  bindings: [
+    { agentId: "ceo-agent", match: { channel: "telegram", accountId: "ops" } },
+  ],
+
+  agentToAgentPolicy: {
+    default: "deny",
+    allow: [
+      { from: "risk-manager", to: "ceo-agent", scope: "read-artefacts" },
+    ],
+  },
+}

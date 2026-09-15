@@ -7,8 +7,23 @@
 # prior build. When you add a new model module, add its import to this file
 # in the SAME change, not as a follow-up.
 
+from src.models.agent_binding import AgentBinding
+from src.models.agent_config_version import AgentConfigVersion, ConfigVersionStatus
+from src.models.agent_identity import AgentIdentity
+from src.models.agent_to_agent_policy import AgentToAgentPolicy
+from src.models.audit_log import AuditLog
 from src.models.base import Base
 from src.models.refresh_token import RefreshToken
 from src.models.user import User
 
-__all__ = ["Base", "RefreshToken", "User"]
+__all__ = [
+    "AgentBinding",
+    "AgentConfigVersion",
+    "AgentIdentity",
+    "AgentToAgentPolicy",
+    "AuditLog",
+    "Base",
+    "ConfigVersionStatus",
+    "RefreshToken",
+    "User",
+]
