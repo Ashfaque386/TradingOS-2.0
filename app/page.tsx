@@ -1,7 +1,8 @@
 'use client'
 
-import { Activity, Bot, FlaskConical, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react'
+import { Activity, Bot, FlaskConical, ShieldCheck, TrendingUp, WalletCards, SlidersHorizontal } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
+import { roleLabel, useAuth } from '@/components/auth/auth-provider'
 
 const metrics = [
   { label: 'Active agents', value: '24', detail: '22 online · 2 idle', icon: Bot, accent: 'text-cyan-300' },
@@ -11,6 +12,9 @@ const metrics = [
 ]
 
 export default function Home() {
+  const { role } = useAuth()
+  const isReadOnly = role === 'ReadOnlyAuditor'
+
   return (
     <ShellLayout>
       <div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
@@ -24,7 +28,7 @@ export default function Home() {
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs">
               <div className="flex items-center gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-emerald-200 shadow-[0_0_30px_rgba(52,211,153,0.08)]"><span className="size-2 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_12px_#6ee7b7]" /><span><strong className="block font-medium text-emerald-100">Neural mesh online</strong><span className="text-emerald-200/60">NSE / BSE · 09:42:18 IST</span></span></div>
-              <span className="chip">24 AGENTS SYNCED</span><span className="chip">LATENCY 18MS</span>
+              <span className="chip">24 AGENTS SYNCED</span><span className="chip">LATENCY 18MS</span><span className="chip">ROLE: {roleLabel(role)}</span>
             </div>
           </div>
           <div className="scanline" aria-hidden="true" />
@@ -57,7 +61,7 @@ export default function Home() {
             <div className="mt-4 flex justify-between font-mono text-[10px] text-muted-foreground"><span>09:15</span><span>12:30</span><span>15:30</span></div>
           </article>
 
-          <article className="panel-glow min-h-[330px] p-5 sm:p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-foreground">Agent activity</p><p className="mt-1 text-xs text-muted-foreground">Autonomous event stream</p></div><WalletCards className="size-4 text-violet-300" aria-hidden="true" /></div><div className="mt-7 flex flex-col gap-5">{['Momentum Scout completed scan','Risk Sentinel updated exposure','Nifty Breakout queued backtest'].map((event,index)=><div key={event} className="flex gap-3"><span className={`mt-1.5 size-2 shrink-0 rounded-full ${index === 1 ? 'bg-amber-300' : 'bg-emerald-300'} shadow-[0_0_10px_currentColor]`} /><div><p className="text-sm text-foreground">{event}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{index + 2}m ago · verified</p></div></div>)}</div></article>
+          <article className="panel-glow min-h-[330px] p-5 sm:p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-foreground">Agent activity</p><p className="mt-1 text-xs text-muted-foreground">Autonomous event stream</p></div>{isReadOnly ? <span className="chip">READ ONLY</span> : <button className="chip hover:border-cyan-300/50 hover:text-cyan-100"><SlidersHorizontal className="size-3" /> MANAGE AGENTS</button>}</div><div className="mt-7 flex flex-col gap-5">{['Momentum Scout completed scan','Risk Sentinel updated exposure','Nifty Breakout queued backtest'].map((event,index)=><div key={event} className="flex gap-3"><span className={`mt-1.5 size-2 shrink-0 rounded-full ${index === 1 ? 'bg-amber-300' : 'bg-emerald-300'} shadow-[0_0_10px_currentColor]`} /><div><p className="text-sm text-foreground">{event}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{index + 2}m ago · verified</p></div></div>)}</div></article>
         </section>
       </div>
     </ShellLayout>

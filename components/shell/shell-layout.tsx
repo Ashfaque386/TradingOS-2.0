@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Sidebar } from './sidebar'
 import { TopBar } from './top-bar'
+import { useAuth } from '@/components/auth/auth-provider'
 
 interface ShellLayoutProps {
   children: React.ReactNode
@@ -13,6 +14,7 @@ export function ShellLayout({ children }: ShellLayoutProps) {
   const [powerSave, setPowerSave] = useState<boolean>(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false)
   const [activeNav, setActiveNav] = useState<string>('overview')
+  const { role, setRole, signOut } = useAuth()
 
   // Persist theme and power-save to localStorage
   useEffect(() => {
@@ -63,6 +65,9 @@ export function ShellLayout({ children }: ShellLayoutProps) {
         marketHours="open"
         systemHealth="healthy"
         userName="Trader"
+        role={role}
+        onRoleChange={setRole}
+        onLogout={signOut}
       />
 
       {/* Sidebar */}
