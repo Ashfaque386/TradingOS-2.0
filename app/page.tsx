@@ -7,6 +7,7 @@ import type { Mesh } from 'three'
 import { Activity, AlertTriangle, Bot, CheckCircle2, ChevronDown, Cpu, Gauge, LockKeyhole, MemoryStick, Radio, ShieldAlert, Sparkles as SparklesIcon, Timer, TrendingUp, Wifi } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
+import { usePreferences } from '@/components/providers/preferences-provider'
 
 type PulseState = 'IDLE' | 'RESEARCHING' | 'EXECUTING' | 'AWAITING APPROVAL' | 'RISK ALERT'
 
@@ -41,20 +42,21 @@ const activities = [
   ['SY', 'Audit log checkpoint sealed', '28m ago', 'success'],
 ] as const
 
-function PulseOrb({ state }: { state: PulseState }) {
+function PulseOrb({ state, reduceMotion }: { state: PulseState; reduceMotion: boolean }) {
   const mesh = useMemo(() => ({ current: null as Mesh | null }), [])
   const config = stateConfig[state]
   useFrame((_, delta) => {
-    if (mesh.current) {
-      mesh.current.rotation.y += delta * (state === 'RISK ALERT' ? 1.8 : state === 'RESEARCHING' ? 0.8 : 0.28)
-      mesh.current.rotation.x = Math.sin(Date.now() / 1300) * 0.08
-      const pulse = state === 'AWAITING APPROVAL' ? 1 + Math.sin(Date.now() / 260) * .08 : state === 'RISK ALERT' ? 1 + Math.sin(Date.now() / 110) * .045 : 1
-      mesh.current.scale.setScalar(pulse)
-    }
+    // In reduced-motion / power-save mode the orb holds a static pose — the state
+    // color and the text status pill still communicate the current state.
+    if (reduceMotion || !mesh.current) return
+    mesh.current.rotation.y += delta * (state === 'RISK ALERT' ? 1.8 : state === 'RESEARCHING' ? 0.8 : 0.28)
+    mesh.current.rotation.x = Math.sin(Date.now() / 1300) * 0.08
+    const pulse = state === 'AWAITING APPROVAL' ? 1 + Math.sin(Date.now() / 260) * .08 : state === 'RISK ALERT' ? 1 + Math.sin(Date.now() / 110) * .045 : 1
+    mesh.current.scale.setScalar(pulse)
   })
   return (
     <group>
-      <Float speed={state === 'RISK ALERT' ? 4 : 1.2} rotationIntensity={.3} floatIntensity={.35}>
+      <Float enabled={!reduceMotion} speed={state === 'RISK ALERT' ? 4 : 1.2} rotationIntensity={.3} floatIntensity={.35}>
         <mesh ref={mesh}>
           <icosahedronGeometry args={[1.35, 5]} />
           <meshStandardMaterial color={config.color} emissive={config.color} emissiveIntensity={state === 'RISK ALERT' ? 2.2 : 1.2} metalness={.75} roughness={.2} wireframe={state === 'RESEARCHING'} />
@@ -64,14 +66,17 @@ function PulseOrb({ state }: { state: PulseState }) {
         <sphereGeometry args={[1, 32, 32]} />
         <meshBasicMaterial color={config.color} transparent opacity={.07} />
       </mesh>
-      <Sparkles count={state === 'RISK ALERT' ? 180 : 90} scale={state === 'RISK ALERT' ? 5.2 : 4.2} size={state === 'RISK ALERT' ? 4 : 2.4} speed={state === 'EXECUTING' ? 2 : state === 'RISK ALERT' ? 4 : .55} color={config.color} />
+      {/* Particle flourishes are decorative — dropped in reduced-motion / power-save. */}
+      {!reduceMotion && (
+        <Sparkles count={state === 'RISK ALERT' ? 180 : 90} scale={state === 'RISK ALERT' ? 5.2 : 4.2} size={state === 'RISK ALERT' ? 4 : 2.4} speed={state === 'EXECUTING' ? 2 : state === 'RISK ALERT' ? 4 : .55} color={config.color} />
+      )}
       <pointLight color={config.color} intensity={state === 'RISK ALERT' ? 9 : 5} distance={6} />
     </group>
   )
 }
 
-function PulseScene({ state }: { state: PulseState }) {
-  return <Canvas camera={{ position: [0, 0, 5.4], fov: 42 }} dpr={[1, 1.5]}><ambientLight intensity={.5} /><PulseOrb state={state} /><OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={.35} /></Canvas>
+function PulseScene({ state, reduceMotion }: { state: PulseState; reduceMotion: boolean }) {
+  return <Canvas frameloop={reduceMotion ? 'demand' : 'always'} camera={{ position: [0, 0, 5.4], fov: 42 }} dpr={[1, 1.5]}><ambientLight intensity={.5} /><PulseOrb state={state} reduceMotion={reduceMotion} /><OrbitControls enableZoom={false} enablePan={false} autoRotate={!reduceMotion} autoRotateSpeed={.35} /></Canvas>
 }
 
 function Vitals() {

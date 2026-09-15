@@ -13,15 +13,12 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { ROLES, roleLabel, type MockRole } from '@/components/auth/auth-provider'
+import { PALETTES } from '@/components/providers/preferences-provider'
+import { OPEN_COMMAND_PALETTE_EVENT } from '@/components/shell/command-palette'
 
-const PALETTES = [
-  { id: 'nominal', label: 'Nominal', color: '#06b6d4' },
-  { id: 'caution', label: 'Caution', color: '#f59e0b' },
-  { id: 'risk', label: 'Risk', color: '#ef4444' },
-  { id: 'neutral', label: 'Neutral', color: '#6b7280' },
-  { id: 'light', label: 'Light', color: '#f5f5f5' },
-  { id: 'contrast', label: 'Contrast', color: '#ffffff' },
-]
+function openCommandPalette() {
+  window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE_EVENT))
+}
 
 interface TopBarProps {
   palette?: string
@@ -75,7 +72,11 @@ export function TopBar({
 
       {/* Center: Search/Command */}
       <div className="flex-1 max-w-md mx-6">
-        <button className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-[var(--glass-border)] text-muted-foreground hover:text-foreground hover:bg-white/10 transition-all duration-200">
+        <button
+          onClick={openCommandPalette}
+          aria-label="Open command palette"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-[var(--glass-border)] text-muted-foreground hover:text-foreground hover:bg-white/10 transition-all duration-200"
+        >
           <Search className="w-4 h-4" />
           <span className="text-sm text-muted-foreground hidden sm:inline">
             Search or press
