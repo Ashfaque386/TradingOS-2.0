@@ -41,5 +41,10 @@ PYEOF
 echo "[api] running migrations..."
 alembic upgrade head
 
+if [ -n "$DEFAULT_ADMIN_EMAIL" ] && [ -n "$DEFAULT_ADMIN_PASSWORD" ]; then
+    echo "[api] ensuring default admin user exists..."
+    python -m scripts.create_admin "$DEFAULT_ADMIN_EMAIL" "$DEFAULT_ADMIN_PASSWORD"
+fi
+
 echo "[api] starting uvicorn..."
 exec uvicorn src.main:app --host 0.0.0.0 --port 8000

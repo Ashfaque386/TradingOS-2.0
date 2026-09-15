@@ -73,6 +73,7 @@ Track progress here as phases complete — update this section at the end of eve
   - **Known, accepted trade-off:** a CLI-driven config mutation rewrites the file as plain formatted JSON (via `json.dumps`), so it does not preserve hand-added JSON5 comments. Hand-edit if comments matter to you.
   - **Known, accepted trade-off:** if a CLI mutation runs against the same file a live app process is watching, both the CLI's own apply and the app's independent hot-reload detection will each write an `agent_config_versions` row for the same content — a harmless duplicate, not a correctness issue (verified live).
   - Verified live end-to-end against the real seed config and a running server: hand-edited the file mid-run (valid change applied within seconds, invalid change rejected with a clear error, app never crashed) and drove the identical changes via `tradingos-cli`.
+  - **Default admin bootstrap (opt-in):** set `DEFAULT_ADMIN_EMAIL` + `DEFAULT_ADMIN_PASSWORD` in `.env` and `backend/scripts/api-entrypoint.sh` ensures that `SystemAdministrator` user exists on every boot (idempotent — creates it once, re-promotes/resets its password on later boots, never errors). Unset by default so a stock deployment never has a credential baked in; without it, the first user to register through the app becomes admin automatically (existing Phase 0 behavior). Verified live across a container restart.
 - [ ] Phase 2 — Orchestration Engine
 - [ ] Phase 3 — Agent Roster, LLM Router & Skill Registry
 - [ ] Phase 4 — Strategy Pipeline & Sandbox
