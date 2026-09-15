@@ -296,7 +296,7 @@
   .search-box input { width: 150px; border: 0; outline: 0; background: transparent; color: #e2e8f0; font-size: .72rem; }
   .outline-action, .text-button { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid rgba(103,232,249,.2); border-radius: .5rem; background: rgba(34,211,238,.04); padding: .55rem .7rem; color: #a5f3fc; font-size: .68rem; transition: .2s ease; }
   .outline-action:hover, .text-button:hover { border-color: rgba(103,232,249,.55); background: rgba(34,211,238,.1); }
-  .fleet-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px); gap: .85rem; align-items: start; }
+  .fleet-layout { display: flex; flex-direction: column; gap: .85rem; align-items: stretch; }
   .fleet-canvas, .fleet-workspace { overflow: hidden; border: 1px solid rgba(111,225,255,.14); border-radius: 1rem; background: linear-gradient(145deg, rgba(11,24,43,.9), rgba(5,10,22,.94)); box-shadow: inset 0 1px rgba(255,255,255,.05), 0 20px 60px rgba(0,0,0,.18); }
   .fleet-canvas { min-height: 660px; }
   .canvas-toolbar { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,.07); padding: .8rem 1rem; }
@@ -325,7 +325,7 @@
   .status-active { background: #34d399; color: #34d399; }.status-executing { background: #94a3b8; color: #94a3b8; animation: status-blink .8s ease-in-out infinite; }.status-degraded { background: #fbbf24; color: #fbbf24; }.status-disabled { background: #f87171; color: #f87171; }
   .tree-legend { display: flex; flex-wrap: wrap; gap: 1rem; border-top: 1px solid rgba(255,255,255,.06); padding: .75rem 1rem; color: #64748b; font: .55rem 'JetBrains Mono', monospace; }
   .tree-legend span { display: inline-flex; align-items: center; gap: .35rem; }
-  .fleet-workspace { position: sticky; top: 76px; max-height: calc(100vh - 95px); }
+  .fleet-workspace { position: static; width: 100%; max-height: none; }
   .workspace-header { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgba(255,255,255,.07); padding: 1.15rem; }
   .workspace-header h2 { margin-top: .4rem; color: #f8fafc; font-size: 1.1rem; letter-spacing: -.03em; }
   .workspace-sub { display: flex; align-items: center; gap: .35rem; margin-top: .45rem; color: #64748b; font: .58rem 'JetBrains Mono', monospace; }
