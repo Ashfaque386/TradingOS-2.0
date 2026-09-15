@@ -36,6 +36,14 @@ pnpm docker:up
 
 instead of `docker compose up` directly — it checks whether `API_HOST_PORT` (default 8000) and `FRONTEND_HOST_PORT` (default 3000) are free and automatically walks forward to the next free port for whichever one is busy, then runs `docker compose up` with those ports. Any extra flags (e.g. `-d`) are passed through: `pnpm docker:up -d`.
 
+**No Node/pnpm installed?** Use the native Windows equivalent instead, no extra tooling required:
+
+```powershell
+.\scripts\docker-up.cmd -d --build
+```
+
+(Runs `scripts/docker-up.ps1` via PowerShell — same port-fallback logic, same env vars, same passthrough of extra flags.)
+
 ## Learn More
 
 To learn more, take a look at the following resources:
