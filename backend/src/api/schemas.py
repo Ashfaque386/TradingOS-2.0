@@ -3,6 +3,8 @@ import uuid
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from src.core.roles import Role
+from src.models.organization_run import FailureClass, RunSource, RunStatus, RunType
+from src.models.task import TaskStatus
 
 
 class UserRegisterRequest(BaseModel):
@@ -32,3 +34,31 @@ class TokenPairResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+class CreateRunRequest(BaseModel):
+    objective: str = Field(min_length=1, max_length=4000)
+
+
+class TaskSummaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    plan_key: str
+    capability: str
+    name: str
+    status: TaskStatus
+    failure_class: FailureClass | None
+    last_error: str | None
+
+
+class RunResponse(BaseModel):
+    id: uuid.UUID
+    objective: str
+    source: RunSource
+    run_type: RunType
+    status: RunStatus
+    failure_class: FailureClass | None
+    source_run_id: uuid.UUID | None
+    error: str | None
+    tasks: list[TaskSummaryResponse] = []

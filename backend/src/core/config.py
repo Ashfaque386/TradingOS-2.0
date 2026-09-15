@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     env: str = "development"
 
     database_url: str = "postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos"
+    redis_url: str = "redis://localhost:6379/0"
 
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"

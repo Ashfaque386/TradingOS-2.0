@@ -11,19 +11,52 @@ from src.models.agent_binding import AgentBinding
 from src.models.agent_config_version import AgentConfigVersion, ConfigVersionStatus
 from src.models.agent_identity import AgentIdentity
 from src.models.agent_to_agent_policy import AgentToAgentPolicy
+from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
 from src.models.base import Base
+from src.models.organization_run import (
+    NON_TERMINAL_STATUSES,
+    TERMINAL_STATUSES,
+    FailureClass,
+    OrganizationRun,
+    RunSource,
+    RunStatus,
+    RunType,
+)
+from src.models.organizational_decision import OrganizationalDecision
+from src.models.organizational_event import OrganizationalEvent
+from src.models.organizational_plan import OrganizationalPlan, PlanStatus
 from src.models.refresh_token import RefreshToken
+from src.models.result_artefact import ResultArtefact
+from src.models.task import Task, TaskStatus
+from src.models.task_dependency import TaskDependency
 from src.models.user import User
 
 __all__ = [
+    "NON_TERMINAL_STATUSES",
+    "TERMINAL_STATUSES",
     "AgentBinding",
     "AgentConfigVersion",
     "AgentIdentity",
     "AgentToAgentPolicy",
+    "ApprovalRequest",
+    "ApprovalStatus",
     "AuditLog",
     "Base",
     "ConfigVersionStatus",
+    "FailureClass",
+    "OrganizationRun",
+    "OrganizationalDecision",
+    "OrganizationalEvent",
+    "OrganizationalPlan",
+    "PlanStatus",
     "RefreshToken",
+    "ResultArtefact",
+    "RunSource",
+    "RunStatus",
+    "RunType",
+    "Task",
+    "TaskDependency",
+    "TaskStatus",
     "User",
 ]

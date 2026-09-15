@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.core.db as db_module
@@ -42,9 +43,29 @@ async def db_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]
             yield session
 
     app.dependency_overrides[db_module.get_db] = override_get_db
+    # Orchestration routes/task-engine dispatch need to open more than one
+    # session themselves (concurrent task execution) — see
+    # src/orchestration/task_engine.py's module docstring — so they depend
+    # on get_session_factory rather than a single get_db session. Override
+    # it the same way, to the same isolated per-test engine.
+    app.dependency_overrides[db_module.get_session_factory] = lambda: session_factory
     yield session_factory
     app.dependency_overrides.pop(db_module.get_db, None)
+    app.dependency_overrides.pop(db_module.get_session_factory, None)
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def redis_client() -> AsyncIterator[Redis]:
+    """A real Redis client (this sandbox/CI runs a real redis-server) for
+    orchestration tests exercising the event bus's publish side directly.
+    Pub/sub has no durable state to reset between tests, so no cleanup
+    beyond closing the connection is needed.
+    """
+    settings = get_settings()
+    client = Redis.from_url(settings.redis_url, decode_responses=True)
+    yield client
+    await client.aclose()
 
 
 @pytest_asyncio.fixture
