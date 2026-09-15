@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Home,
   Zap,
@@ -39,6 +39,7 @@ export function Sidebar({
   activeId = 'overview',
   onNavClick,
 }: SidebarProps) {
+  const router = useRouter()
   const handleToggle = () => {
     onCollapsedChange?.(!isCollapsed)
   }
@@ -58,7 +59,7 @@ export function Sidebar({
           return (
             <button
               key={item.id}
-              onClick={() => onNavClick?.(item.id)}
+              onClick={() => { onNavClick?.(item.id); if (item.id === 'mission-control') router.push('/mission-control'); if (item.id === 'overview') router.push('/'); }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                 isActive
                   ? 'bg-[var(--current-accent)]/20 text-[var(--current-accent)] border border-[var(--current-accent)]/50'

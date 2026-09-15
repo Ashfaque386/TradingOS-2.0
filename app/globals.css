@@ -217,6 +217,34 @@
   @media (max-width: 980px) { .kpi-strip { grid-template-columns: repeat(3, 1fr); }.kpi-strip > div:nth-child(3) { border-right: 0; }.kpi-strip > div:nth-child(n+4) { border-top: 1px solid rgba(255,255,255,.07); } }
   @media (max-width: 640px) { .pulse-header { flex-direction: column; }.pulse-dev-control { align-items: flex-start; }.pulse-orb { height: 270px; }.kpi-strip { grid-template-columns: repeat(2, 1fr); }.kpi-strip > div { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); }.kpi-strip > div:nth-child(odd) { border-right: 1px solid rgba(255,255,255,.07); } }
 
+  .mission-hero { background: linear-gradient(120deg, rgba(14, 25, 60, .78), rgba(25, 12, 55, .72)); border: 1px solid rgba(103, 232, 249, .16); border-radius: 18px; padding: 24px; box-shadow: 0 0 60px rgba(59, 130, 246, .1), inset 0 1px rgba(255,255,255,.06); }
+  .mission-tab { display: inline-flex; align-items: center; gap: 8px; padding: 12px 14px; color: var(--muted-foreground); font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; transition: .2s ease; }
+  .mission-tab:hover, .mission-tab-active { color: #a5f3fc; border-color: #22d3ee; }
+  .badge-count { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: rgba(251,191,36,.18); color: #fcd34d; font: 10px 'JetBrains Mono', monospace; }
+  .kanban-column { min-width: 238px; flex: 1; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; background: rgba(255,255,255,.025); padding: 14px; }
+  .task-card, .queue-card { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: linear-gradient(145deg, rgba(18, 26, 58, .9), rgba(8, 13, 32, .82)); padding: 14px; box-shadow: inset 0 1px rgba(255,255,255,.04); transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
+  .task-card { cursor: grab; }
+  .task-card:active { cursor: grabbing; }
+  .task-card:hover, .queue-card:hover { transform: translateY(-2px); border-color: rgba(103,232,249,.34); box-shadow: 0 12px 30px rgba(8, 145, 178, .1); }
+  .avatar-stack { display: flex; }
+  .avatar-stack span { display: grid; place-items: center; width: 22px; height: 22px; margin-right: -5px; border: 2px solid #10152b; border-radius: 999px; background: linear-gradient(135deg, #164e63, #7c3aed); color: #cffafe; font: 8px 'JetBrains Mono', monospace; }
+  .graph-line { position: absolute; height: 1px; background: linear-gradient(90deg, #67e8f9, #a78bfa, #4ade80); opacity: .55; }
+  .graph-node { position: relative; z-index: 1; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; background: #10162d; padding: 8px 4px; font: 9px 'JetBrains Mono', monospace; color: #94a3b8; }
+  .status-chip { border-radius: 999px; padding: 4px 7px; font: 9px 'JetBrains Mono', monospace; letter-spacing: .08em; }
+  .status-amber { color: #fcd34d; background: rgba(251,191,36,.12); }
+  .status-green { color: #86efac; background: rgba(74,222,128,.12); }
+  .status-red { color: #fca5a5; background: rgba(248,113,113,.12); }
+  .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+  .metric-grid span { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 8px 6px; color: #64748b; font: 8px 'JetBrains Mono', monospace; }
+  .metric-grid b { display: block; margin-top: 4px; color: #dbeafe; font-size: 11px; }
+  .button-primary, .button-secondary, .button-danger { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 8px 10px; font-size: 11px; font-weight: 600; transition: .2s ease; }
+  .button-primary { background: #0891b2; color: white; box-shadow: 0 0 18px rgba(34,211,238,.18); }
+  .button-secondary { border: 1px solid rgba(255,255,255,.12); color: #a5b4fc; background: rgba(255,255,255,.04); }
+  .button-danger { border: 1px solid rgba(248,113,113,.18); color: #fca5a5; background: rgba(248,113,113,.06); }
+  .button-primary:hover, .button-secondary:hover, .button-danger:hover { filter: brightness(1.2); transform: translateY(-1px); }
+  .icon-button { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; color: #94a3b8; }
+  @media (max-width: 640px) { .metric-grid { grid-template-columns: repeat(2, 1fr); } .mission-hero { padding: 18px; } }
+
   /* Palette system via data attributes */
   [data-palette='nominal'] {
     --current-accent: var(--accent-nominal);
