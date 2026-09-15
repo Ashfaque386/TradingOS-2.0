@@ -83,6 +83,7 @@ class EffectiveAgentConfig:
     theme: str | None
     voice: str | None
     model: str
+    enabled: bool
     heartbeat_enabled: bool
     heartbeat_interval_minutes: int | None
     skills: tuple[str, ...]
@@ -101,6 +102,7 @@ def _merge_one(
         theme=identity.theme if identity else None,
         voice=identity.voice if identity else None,
         model=(override.model if override and override.model is not None else defaults.model),
+        enabled=(override.enabled if override and override.enabled is not None else True),
         heartbeat_enabled=(
             override.heartbeat_enabled
             if override and override.heartbeat_enabled is not None

@@ -7,6 +7,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.agents.scheduler import start_heartbeat_loop
 from src.api.router import api_router
 from src.api.routes.health import router as health_router
 from src.core.config import get_settings
@@ -66,10 +67,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ]
 
     stall_sweep_task = start_stall_sweep_loop(AsyncSessionLocal, redis)
+    heartbeat_task = start_heartbeat_loop(AsyncSessionLocal)
 
     yield
 
     stall_sweep_task.cancel()
+    heartbeat_task.cancel()
     for task in recovery_tasks:
         task.cancel()
     watcher.stop()

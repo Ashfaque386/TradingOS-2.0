@@ -19,7 +19,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
-from src.gateway.roster import ROSTER_IDS
+from src.gateway.roster import ROSTER_BY_ID, ROSTER_IDS
 
 
 class _StrictCamelModel(BaseModel):
@@ -92,6 +92,11 @@ class AgentEntryConfig(_StrictCamelModel):
     """
 
     identity: AgentIdentityConfig | None = None
+    # Per-agent circuit-breaker toggle (Build Spec §7.2): None means "use
+    # the roster default of enabled". Audit Agent can never be set to
+    # False here (RosterAgent.can_disable=False, checked below) — enforced
+    # at the config layer in addition to graph-build time (src/agents/graph.py).
+    enabled: bool | None = None
     heartbeat_enabled: bool | None = None
     heartbeat_interval_minutes: int | None = Field(default=None, gt=0)
     model: str | None = None
@@ -110,6 +115,17 @@ class AgentsConfig(_StrictCamelModel):
                 f"agents.entries references agent id(s) not in the fixed 24-agent "
                 f"roster: {unknown}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _cannot_disable_non_disableable_agents(self) -> "AgentsConfig":
+        for agent_id, entry in self.entries.items():
+            roster_agent = ROSTER_BY_ID.get(agent_id)
+            if roster_agent is not None and not roster_agent.can_disable and entry.enabled is False:
+                raise ValueError(
+                    f"agents.entries.{agent_id}.enabled cannot be false: "
+                    f"{roster_agent.display_name} cannot be disabled (Build Spec §7.1)"
+                )
         return self
 
 

@@ -14,6 +14,7 @@ from src.models.agent_to_agent_policy import AgentToAgentPolicy
 from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
 from src.models.base import Base
+from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
 from src.models.organization_run import (
     NON_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
@@ -26,6 +27,7 @@ from src.models.organization_run import (
 from src.models.organizational_decision import OrganizationalDecision
 from src.models.organizational_event import OrganizationalEvent
 from src.models.organizational_plan import OrganizationalPlan, PlanStatus
+from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.models.refresh_token import RefreshToken
 from src.models.result_artefact import ResultArtefact
 from src.models.task import Task, TaskStatus
@@ -45,11 +47,15 @@ __all__ = [
     "Base",
     "ConfigVersionStatus",
     "FailureClass",
+    "HeartbeatLog",
+    "HeartbeatStatus",
     "OrganizationRun",
     "OrganizationalDecision",
     "OrganizationalEvent",
     "OrganizationalPlan",
     "PlanStatus",
+    "PromptVersion",
+    "PromptVersionStatus",
     "RefreshToken",
     "ResultArtefact",
     "RunSource",
