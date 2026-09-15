@@ -1,0 +1,10 @@
+# Scripts that get exec'd via shebang inside Linux containers must always
+# checkout with LF line endings, regardless of a checkout's autocrlf
+# setting. Windows git installs commonly convert LF -> CRLF on checkout;
+# a "#!/bin/sh\r" shebang isn't a valid interpreter path on Linux, so
+# Docker's exec fails with a misleading "no such file or directory" the
+# moment it tries to run the script directly as ENTRYPOINT/CMD.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.conf text eol=lf
