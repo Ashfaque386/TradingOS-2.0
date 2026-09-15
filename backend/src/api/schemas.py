@@ -62,3 +62,26 @@ class RunResponse(BaseModel):
     source_run_id: uuid.UUID | None
     error: str | None
     tasks: list[TaskSummaryResponse] = []
+
+
+class AgentSummaryResponse(BaseModel):
+    agent_id: str
+    display_name: str
+    department: str
+    can_disable: bool
+    enabled: bool
+    capabilities: list[str]
+    skills: list[str]
+    heartbeat_enabled: bool
+
+
+class RunPipelineRequest(BaseModel):
+    objective: str = Field(min_length=1, max_length=4000)
+
+
+class RunPipelineResponse(BaseModel):
+    objective: str
+    node_log: list[str]
+    deployment_result: dict | None
+    evaluation_verdict: dict | None
+    rejection_count: int

@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     # this overridden in .env to "../config/tradingos.config.json".
     agent_gateway_config_path: str = "config/tradingos.config.json"
 
+    # LLM router (src/agents/llm_router.py) provider credentials. All
+    # optional: a provider with no key configured simply fails fast and the
+    # router falls through to the next one in infra.llm_providers.order.
+    anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    ollama_base_url: str = "http://localhost:11434"
+
 
 @lru_cache
 def get_settings() -> Settings:
