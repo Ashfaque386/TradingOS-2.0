@@ -31,6 +31,7 @@ COPY alembic.ini ./
 COPY scripts ./scripts
 
 RUN pip install . \
+    && sed -i 's/\r$//' scripts/container-entrypoint.sh scripts/api-entrypoint.sh \
     && chmod +x scripts/container-entrypoint.sh scripts/api-entrypoint.sh
 
 COPY supervisord.conf /etc/supervisor/conf.d/tradingos.conf
