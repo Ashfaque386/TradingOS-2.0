@@ -24,6 +24,18 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Running the full app in Docker
+
+`docker compose up` builds and runs the frontend (this Next.js app) and the backend together — see the repo-root `Dockerfile` and `docker-compose.yml`, and `docs/CLAUDE.md` for the full architecture.
+
+If port 8000 or 3000 is already taken by something else on your machine, use:
+
+```bash
+pnpm docker:up
+```
+
+instead of `docker compose up` directly — it checks whether `API_HOST_PORT` (default 8000) and `FRONTEND_HOST_PORT` (default 3000) are free and automatically walks forward to the next free port for whichever one is busy, then runs `docker compose up` with those ports. Any extra flags (e.g. `-d`) are passed through: `pnpm docker:up -d`.
+
 ## Learn More
 
 To learn more, take a look at the following resources:
