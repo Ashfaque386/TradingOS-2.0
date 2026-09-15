@@ -11,9 +11,19 @@
 // layer without showing up as "in use" to a normal OS-level socket bind,
 // so a pre-check can wrongly report a busy port as free. Retrying on the
 // real error is the only reliable source of truth.
+//
+// It also does not trust a 0 exit code alone: `docker compose up -d`
+// has been observed to exit 0 while a container's port silently failed to
+// publish (confirmed live), so every "success" is double-checked with
+// `docker port <container> <port>` before being declared real.
 'use strict'
 
 const { spawn } = require('child_process')
+
+const CONTAINERS = {
+  backend: { name: 'TradingOS-2.0-Backend', containerPort: 8000 },
+  frontend: { name: 'TradingOS-2.0-Frontend', containerPort: 3000 },
+}
 
 function runDockerComposeUp(apiPort, frontendPort, extraArgs) {
   return new Promise((resolve) => {
@@ -40,6 +50,20 @@ function runDockerComposeUp(apiPort, frontendPort, extraArgs) {
       resolve({ code: 1, output: `${output}\n${err.message}` })
     })
     child.on('exit', (code) => resolve({ code: code ?? 1, output }))
+  })
+}
+
+function isPortPublished(containerName, containerPort) {
+  return new Promise((resolve) => {
+    const child = spawn('docker', ['port', containerName, String(containerPort)], {
+      shell: process.platform === 'win32',
+    })
+    let output = ''
+    child.stdout.on('data', (chunk) => {
+      output += chunk.toString()
+    })
+    child.on('error', () => resolve(false))
+    child.on('exit', () => resolve(output.trim().length > 0))
   })
 }
 
@@ -76,9 +100,27 @@ async function main() {
     const { code, output } = await runDockerComposeUp(apiPort, frontendPort, extraArgs)
 
     if (code === 0) {
-      console.log(`[docker:up] Backend:  http://localhost:${apiPort}`)
-      console.log(`[docker:up] Frontend: http://localhost:${frontendPort}`)
-      process.exit(0)
+      const [backendOk, frontendOk] = await Promise.all([
+        isPortPublished(CONTAINERS.backend.name, CONTAINERS.backend.containerPort),
+        isPortPublished(CONTAINERS.frontend.name, CONTAINERS.frontend.containerPort),
+      ])
+
+      if (backendOk && frontendOk) {
+        console.log(`[docker:up] Backend:  http://localhost:${apiPort}`)
+        console.log(`[docker:up] Frontend: http://localhost:${frontendPort}`)
+        process.exit(0)
+      }
+
+      if (!frontendOk) {
+        frontendPort += 1
+        console.log(`[docker:up] Frontend port didn't actually publish — bumping to ${frontendPort} and retrying...`)
+        await removeContainer('frontend')
+      } else {
+        apiPort += 1
+        console.log(`[docker:up] Backend port didn't actually publish — bumping to ${apiPort} and retrying...`)
+        await removeContainer('backend')
+      }
+      continue
     }
 
     const conflict = parsePortConflict(output)

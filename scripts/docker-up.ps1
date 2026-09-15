@@ -10,10 +10,27 @@
 # can wrongly report a busy port as free (confirmed live). Retrying on the
 # real error from `docker compose up` is the only reliable source of truth.
 #
+# It also does not trust a 0 exit code alone: `docker compose up -d` has
+# been observed to exit 0 while a container's port silently failed to
+# publish (confirmed live), so every "success" is double-checked with
+# `docker port <container> <port>` before being declared real.
+#
+# Output is captured via file redirection (`*>`), not a pipeline (`2>&1 |
+# ...`): piping a native command's stderr through the PowerShell pipeline
+# wraps each line in a NativeCommandError object (visible as garbled
+# "docker.exe : ... NativeCommandError" noise, confirmed live), which can
+# corrupt the exact text this script matches against. File redirection
+# captures the raw text untouched.
+#
 # Usage (from the repo root):
 #   .\scripts\docker-up.ps1 -d --build
 # or, if PowerShell's execution policy blocks running scripts:
 #   .\scripts\docker-up.cmd -d --build
+
+$BackendContainer = 'TradingOS-2.0-Backend'
+$BackendContainerPort = 8000
+$FrontendContainer = 'TradingOS-2.0-Frontend'
+$FrontendContainerPort = 3000
 
 function Invoke-DockerComposeUp {
     param([int]$ApiPort, [int]$FrontendPort, [string[]]$ExtraArgs)
@@ -22,14 +39,28 @@ function Invoke-DockerComposeUp {
     $env:FRONTEND_HOST_PORT = "$FrontendPort"
 
     $allArgs = @('compose', 'up') + $ExtraArgs
-    $output = & docker @allArgs 2>&1 | Out-String
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        & docker @allArgs *> $tempFile
+        $code = $LASTEXITCODE
+        $output = Get-Content -Path $tempFile -Raw -ErrorAction SilentlyContinue
+        if (-not $output) { $output = '' }
+    } finally {
+        Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
     Write-Host $output
-    return @{ Code = $LASTEXITCODE; Output = $output }
+    return @{ Code = $code; Output = $output }
+}
+
+function Test-PortPublished {
+    param([string]$ContainerName, [int]$ContainerPort)
+    $portOutput = & docker port $ContainerName $ContainerPort 2>$null
+    return [bool]$portOutput
 }
 
 function Remove-ComposeContainer {
     param([string]$Service)
-    & docker compose rm -f $Service 2>&1 | Out-Null
+    & docker compose rm -f $Service *> $null
 }
 
 $apiPort = 8000
@@ -46,9 +77,25 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     $result = Invoke-DockerComposeUp -ApiPort $apiPort -FrontendPort $frontendPort -ExtraArgs $extraArgs
 
     if ($result.Code -eq 0) {
-        Write-Host "[docker:up] Backend:  http://localhost:$apiPort"
-        Write-Host "[docker:up] Frontend: http://localhost:$frontendPort"
-        exit 0
+        $backendOk = Test-PortPublished -ContainerName $BackendContainer -ContainerPort $BackendContainerPort
+        $frontendOk = Test-PortPublished -ContainerName $FrontendContainer -ContainerPort $FrontendContainerPort
+
+        if ($backendOk -and $frontendOk) {
+            Write-Host "[docker:up] Backend:  http://localhost:$apiPort"
+            Write-Host "[docker:up] Frontend: http://localhost:$frontendPort"
+            exit 0
+        }
+
+        if (-not $frontendOk) {
+            $frontendPort++
+            Write-Host "[docker:up] Frontend port didn't actually publish - bumping to $frontendPort and retrying..."
+            Remove-ComposeContainer -Service 'frontend'
+        } else {
+            $apiPort++
+            Write-Host "[docker:up] Backend port didn't actually publish - bumping to $apiPort and retrying..."
+            Remove-ComposeContainer -Service 'backend'
+        }
+        continue
     }
 
     if ($result.Output -match 'Bind for [\d\.]+:(\d+) failed: port is already allocated') {
