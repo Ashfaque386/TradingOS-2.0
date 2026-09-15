@@ -22,6 +22,21 @@
 # corrupt the exact text this script matches against. File redirection
 # captures the raw text untouched.
 #
+# Even with file redirection, an $ErrorActionPreference of 'Stop' (or, on
+# PowerShell 7.3+, $PSNativeCommandUseErrorActionPreference) makes
+# PowerShell intercept a native command's stderr writes as terminating
+# errors and display them via its own NativeCommandError formatting
+# *instead of* letting them flow into the redirect target — confirmed
+# live: Docker BuildKit's normal (non-error) progress output goes to
+# stderr, and with a strict $ErrorActionPreference the real "Bind for ...
+# failed" error text never made it into the captured file at all, so it
+# was never detected. Both preferences are reset below so this script's
+# behavior does not depend on whatever the caller's profile/session set.
+$ErrorActionPreference = 'Continue'
+if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+#
 # Usage (from the repo root):
 #   .\scripts\docker-up.ps1 -d --build
 # or, if PowerShell's execution policy blocks running scripts:
