@@ -18,8 +18,17 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
     ports:
+      # API_HOST_PORT always publishes — it's the only way to reach the app.
       - "${API_HOST_PORT:-8000}:8000"
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      # POSTGRES_HOST_PORT is opt-in: Postgres and the API talk to each
+      # other over localhost inside this one container regardless, so
+      # nothing needs port 5432 published on the host by default — that's
+      # exactly the port most dev machines already have something bound
+      # to. Set POSTGRES_HOST_PORT to publish it anyway (e.g. for psql/a
+      # GUI client from the host); leave it unset and this line publishes
+      # nothing, so a fresh `git pull` + `docker compose up` never hits a
+      # host port conflict here again.
+      - "${POSTGRES_HOST_PORT:+$POSTGRES_HOST_PORT:}5432"
     volumes:
       - tradingos-2.0_pgdata:/var/lib/postgresql/data
     healthcheck:
