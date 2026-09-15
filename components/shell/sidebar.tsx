@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import {
   Home,
   Zap,
@@ -15,53 +15,48 @@ import {
 } from 'lucide-react'
 
 const NAV_ITEMS = [
-  { id: 'overview', label: 'Overview', icon: Home },
-  { id: 'mission-control', label: 'Mission Control', icon: Zap },
-  { id: 'agents', label: 'Agent Fleet', icon: Network },
-  { id: 'strategies', label: 'Strategies', icon: Beaker },
-  { id: 'backtests', label: 'Backtests', icon: BarChart3 },
-  { id: 'orders', label: 'Orders & Trades', icon: ArrowLeftRight },
-  { id: 'analysis', label: 'Market Analysis', icon: Activity },
-  { id: 'audit', label: 'Audit Log', icon: Shield },
-  { id: 'settings', label: 'Settings', icon: Settings },
+  { label: 'Overview', icon: Home, href: '/' },
+  { label: 'Mission Control', icon: Zap, href: '/mission-control' },
+  { label: 'Agent Fleet', icon: Network, href: '/agent-fleet' },
+  { label: 'Strategies', icon: Beaker, href: '/strategies' },
+  { label: 'Backtests', icon: BarChart3, href: '/backtests' },
+  { label: 'Orders & Trades', icon: ArrowLeftRight, href: '/orders' },
+  { label: 'Market Analysis', icon: Activity, href: '/analysis' },
+  { label: 'Audit Log', icon: Shield, href: '/audit' },
+  { label: 'Settings', icon: Settings, href: '/settings' },
 ]
 
 interface SidebarProps {
   isCollapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
-  activeId?: string
-  onNavClick?: (id: string) => void
 }
 
-export function Sidebar({
-  isCollapsed = false,
-  onCollapsedChange,
-  activeId = 'overview',
-  onNavClick,
-}: SidebarProps) {
+export function Sidebar({ isCollapsed = false, onCollapsedChange }: SidebarProps) {
   const router = useRouter()
-  const handleToggle = () => {
-    onCollapsedChange?.(!isCollapsed)
-  }
+  const pathname = usePathname()
+
+  const isActive = (href: string) =>
+    href === '/' ? pathname === '/' : pathname.startsWith(href)
 
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen bg-[var(--glass-bg)] border-r border-[var(--glass-border)] transition-all duration-300 flex flex-col z-50 ${
+      className={`shell-sidebar fixed left-0 top-0 h-screen bg-[var(--glass-bg)] border-r border-[var(--glass-border)] transition-all duration-300 flex flex-col z-50 ${
         isCollapsed ? 'w-20' : 'w-64'
       }`}
       style={{ marginTop: '60px', height: 'calc(100vh - 60px)' }}
     >
       {/* Nav items */}
-      <nav className="flex-1 overflow-y-auto p-4 space-y-2">
+      <nav className="flex-1 overflow-y-auto p-4 space-y-2" aria-label="Primary">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon
-          const isActive = activeId === item.id
+          const active = isActive(item.href)
           return (
             <button
-              key={item.id}
-              onClick={() => { onNavClick?.(item.id); if (item.id === 'mission-control') router.push('/mission-control'); if (item.id === 'agents') router.push('/agent-fleet'); if (item.id === 'strategies') router.push('/strategies'); if (item.id === 'backtests') router.push('/backtests'); if (item.id === 'orders') router.push('/orders'); if (item.id === 'analysis') router.push('/analysis'); if (item.id === 'audit') router.push('/audit'); if (item.id === 'settings') router.push('/settings'); if (item.id === 'overview') router.push('/'); }}
+              key={item.href}
+              onClick={() => router.push(item.href)}
+              aria-current={active ? 'page' : undefined}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-                isActive
+                active
                   ? 'bg-[var(--current-accent)]/20 text-[var(--current-accent)] border border-[var(--current-accent)]/50'
                   : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
               }`}
@@ -76,9 +71,10 @@ export function Sidebar({
 
       {/* Collapse toggle */}
       <button
-        onClick={handleToggle}
+        onClick={() => onCollapsedChange?.(!isCollapsed)}
         className="mx-4 mb-4 flex items-center justify-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground rounded-lg border border-[var(--glass-border)] hover:bg-white/5 transition-all duration-200"
         title={isCollapsed ? 'Expand' : 'Collapse'}
+        aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         <ChevronRight
           className={`w-4 h-4 transition-transform duration-200 ${

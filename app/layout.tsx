@@ -2,6 +2,8 @@ import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
 import { AuthProvider } from '@/components/auth/auth-provider'
+import { PreferencesProvider } from '@/components/providers/preferences-provider'
+import { CommandPalette } from '@/components/shell/command-palette'
 
 export const metadata: Metadata = {
   title: 'TradingOS 2.0',
@@ -45,9 +47,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+        <PreferencesProvider>
+          <AuthProvider>
+            {children}
+            <CommandPalette />
+          </AuthProvider>
+        </PreferencesProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>

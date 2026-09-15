@@ -300,19 +300,40 @@
     --current-accent: var(--accent-contrast);
   }
 
-  /* Reduced motion */
+  /* Motion control — decorative animation is disabled while state-communicating
+     motion (marked .motion-essential) is preserved. The sign-off countdown ring
+     is JS-driven (setInterval + conic-gradient) so it keeps ticking regardless. */
+
+  /* OS-level reduced motion: auto-activates, independent of the manual toggle.
+     Also mirrored via [data-reduced-motion='true'] set from the preferences store. */
   @media (prefers-reduced-motion: reduce) {
-    * {
-      @apply !animate-none !transition-none;
+    *:not(.motion-essential):not(.motion-essential *) {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
     }
   }
-
-  /* Power save mode */
-  [data-power-save='true'] {
-    --animation-duration: 0ms;
+  [data-reduced-motion='true'] *:not(.motion-essential):not(.motion-essential *) {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
   }
-  [data-power-save='true'] * {
-    @apply !animate-none;
+
+  /* Power save mode: drop ambient loops + particle flourishes, keep transitions
+     responsive so the UI still feels reactive to input. */
+  [data-power-save='true'] *:not(.motion-essential):not(.motion-essential *) {
+    animation: none !important;
+  }
+  [data-power-save='true'] .auth-mesh,
+  [data-power-save='true'] .bar,
+  [data-power-save='true'] .orbit-ring-one,
+  [data-power-save='true'] .orbit-ring-two,
+  [data-power-save='true'] .orbit-core,
+  [data-power-save='true'] .orbit-node,
+  [data-power-save='true'] .status-dot {
+    animation: none !important;
   }
 
   .fleet-page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
@@ -456,5 +477,49 @@
   .set-risk-list{display:flex;flex-direction:column;gap:.7rem}.set-risk-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;border:1px solid rgba(148,163,184,.14);border-radius:.7rem;background:rgba(2,8,23,.4);padding:.9rem 1rem;transition:.2s}.set-risk-awaiting{border-color:rgba(251,191,36,.3);background:rgba(120,53,15,.12)}.set-risk-confirmed{border-color:rgba(52,211,153,.28);background:rgba(6,78,59,.14)}.set-risk-meta{display:flex;flex-direction:column;gap:.2rem}.set-risk-label{color:#94a3b8;font:.55rem 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase}.set-risk-meta strong{color:#f8fafc;font:600 1.4rem 'JetBrains Mono',monospace}.set-risk-meta strong em{margin-left:.15rem;color:#64748b;font-size:.85rem;font-style:normal}.set-risk-stage{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}.set-risk-stage input{width:140px;border:1px solid rgba(148,163,184,.16);border-radius:.5rem;background:rgba(2,8,23,.6);padding:.55rem .65rem;color:#e2e8f0;font:.72rem 'JetBrains Mono',monospace;outline:0}.set-risk-stage input:focus{border-color:rgba(34,211,238,.55)}.set-risk-await,.set-risk-confirmed{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap}.set-await-badge{display:inline-flex;align-items:center;gap:.35rem;border:1px solid rgba(251,191,36,.32);border-radius:999px;background:rgba(120,53,15,.24);padding:.32rem .6rem;color:#fcd34d;font:600 .58rem 'JetBrains Mono',monospace}.set-confirmed-badge{display:inline-flex;align-items:center;gap:.35rem;border:1px solid rgba(52,211,153,.32);border-radius:999px;background:rgba(6,78,59,.28);padding:.32rem .6rem;color:#6ee7b7;font:600 .58rem 'JetBrains Mono',monospace}.set-await-detail{color:#e2e8f0;font-size:.66rem}.set-await-note{color:#94a3b8;font-size:.6rem}
   @media (max-width:1000px){.set-shell{grid-template-columns:1fr}.set-subnav{position:static;flex-direction:row;overflow-x:auto;padding-bottom:.35rem}.set-subnav button{min-width:190px;flex-shrink:0}.set-subnav-caret{display:none}.set-skill-grid,.set-cred-grid,.set-channel-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media (max-width:640px){.set-form-grid,.set-binding-row,.set-skill-grid,.set-cred-grid,.set-channel-grid{grid-template-columns:1fr}}
+
+  /* ── Responsive shell ─────────────────────────────────────────── */
+  .shell-main { margin-left: 16rem; padding-top: 60px; transition: margin-left .3s ease; }
+  .shell-main[data-collapsed='true'] { margin-left: 5rem; }
+  .shell-main-inner { padding: 1.5rem; }
+  .mobile-tabbar { display: none; }
+  @media (max-width: 900px) {
+    .shell-sidebar { display: none !important; }
+    .shell-main, .shell-main[data-collapsed='true'] { margin-left: 0; }
+    .shell-main-inner { padding: 1rem; padding-bottom: 5.5rem; }
+    /* Bottom tab bar for primary destinations */
+    .mobile-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 55; display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--glass-border); background: color-mix(in srgb, var(--background) 92%, transparent); backdrop-filter: blur(18px); padding: .3rem .25rem calc(.3rem + env(safe-area-inset-bottom)); }
+    .mobile-tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .18rem; min-height: 52px; border-radius: .55rem; padding: .35rem .2rem; color: #64748b; font-size: .56rem; font-weight: 600; }
+    .mobile-tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mobile-tab-active { color: var(--current-accent); background: color-mix(in srgb, var(--current-accent) 12%, transparent); }
+  }
+  .mobile-drawer-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; background: rgba(2,6,15,.6); backdrop-filter: blur(4px); }
+  .mobile-drawer { width: 100%; max-height: 78vh; overflow-y: auto; border-top-left-radius: 1.1rem; border-top-right-radius: 1.1rem; border-top: 1px solid var(--glass-border); background: linear-gradient(180deg, rgba(12,22,40,.98), rgba(5,10,22,.99)); padding: 1rem 1rem calc(1.25rem + env(safe-area-inset-bottom)); box-shadow: 0 -20px 60px rgba(0,0,0,.5); }
+  .mobile-drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .85rem; }
+  .mobile-drawer-list { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  .mobile-drawer-item { display: flex; align-items: center; gap: .6rem; min-height: 48px; border: 1px solid var(--glass-border); border-radius: .65rem; background: rgba(2,8,23,.4); padding: .65rem .7rem; color: #cbd5e1; font-size: .72rem; font-weight: 500; text-align: left; }
+  .mobile-drawer-item-active { border-color: color-mix(in srgb, var(--current-accent) 55%, transparent); background: color-mix(in srgb, var(--current-accent) 15%, transparent); color: var(--current-accent); }
+
+  /* Tables never force the page to scroll horizontally — they scroll within their own container. */
+  .orders-table, .analysis-table, .audit-table, .option-chain-table, .backtest-table { min-width: max-content; }
+  .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* ── Command palette (⌘K) ─────────────────────────────────────── */
+  .cmdk-overlay { position: fixed; inset: 0; z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 12vh 1rem 1rem; background: rgba(2,6,15,.62); backdrop-filter: blur(6px); }
+  .cmdk-panel { width: min(100%, 620px); overflow: hidden; border: 1px solid rgba(103,232,249,.22); border-radius: 1rem; background: linear-gradient(160deg, rgba(12,24,44,.98), rgba(6,12,26,.99)); box-shadow: 0 30px 90px rgba(0,0,0,.55); }
+  .cmdk-search { display: flex; align-items: center; gap: .6rem; border-bottom: 1px solid rgba(255,255,255,.08); padding: .9rem 1rem; }
+  .cmdk-input { flex: 1; min-width: 0; border: 0; background: transparent; color: #f8fafc; font-size: .9rem; outline: 0; }
+  .cmdk-input::placeholder { color: rgba(148,163,184,.5); }
+  .cmdk-kbd { border: 1px solid rgba(148,163,184,.28); border-radius: .35rem; padding: .1rem .35rem; color: #94a3b8; font: .58rem 'JetBrains Mono', monospace; }
+  .cmdk-list { max-height: 52vh; overflow-y: auto; padding: .5rem; }
+  .cmdk-empty { padding: 1.5rem; text-align: center; color: #64748b; font-size: .78rem; }
+  .cmdk-group { margin-bottom: .35rem; }
+  .cmdk-group-label { padding: .5rem .65rem .3rem; color: #64748b; font: 600 .54rem 'JetBrains Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .cmdk-item { display: flex; align-items: center; gap: .65rem; width: 100%; border-radius: .55rem; padding: .6rem .65rem; color: #cbd5e1; font-size: .78rem; text-align: left; }
+  .cmdk-item-active { background: color-mix(in srgb, var(--current-accent) 14%, transparent); color: #f8fafc; }
+  .cmdk-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmdk-item-hint { flex-shrink: 0; color: #64748b; font: .6rem 'JetBrains Mono', monospace; }
+  .cmdk-footer { display: flex; gap: 1rem; border-top: 1px solid rgba(255,255,255,.08); padding: .6rem 1rem; color: #64748b; font-size: .58rem; }
+  .cmdk-footer span { display: inline-flex; align-items: center; gap: .3rem; }
 }
 
