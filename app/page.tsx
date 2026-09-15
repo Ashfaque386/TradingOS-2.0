@@ -14,16 +14,17 @@ export default function Home() {
   return (
     <ShellLayout>
       <div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
-        <section className="hero-grid relative overflow-hidden rounded-2xl border border-cyan-300/15 px-6 py-6 sm:px-8">
-          <div className="relative z-10 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+        <section className="hero-grid relative min-h-[300px] overflow-hidden rounded-2xl border border-cyan-300/15 px-6 py-7 sm:px-8">
+          <div className="hero-orbit" aria-hidden="true"><span className="orbit-ring orbit-ring-one" /><span className="orbit-ring orbit-ring-two" /><span className="orbit-core"><Bot className="size-7 text-cyan-100" /></span><span className="orbit-node orbit-node-one">ALPHA</span><span className="orbit-node orbit-node-two">RISK</span><span className="orbit-node orbit-node-three">FLOW</span></div>
+          <div className="relative z-10 flex max-w-2xl flex-col justify-between gap-6">
             <div>
-              <p className="eyebrow">TRADINGOS // INTELLIGENCE LAYER 02</p>
-              <h1 className="mt-3 max-w-2xl text-4xl font-semibold tracking-[-0.04em] text-foreground sm:text-5xl">Good morning, <span className="text-cyan-300">Trader.</span></h1>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Your autonomous trading network is online. Monitor agents, validate strategies, and move with signal-level clarity.</p>
+              <p className="eyebrow">TRADINGOS // NEURAL COMMAND DECK</p>
+              <h1 className="mt-3 max-w-2xl text-4xl font-semibold tracking-[-0.05em] text-foreground sm:text-5xl">Your market, <span className="text-cyan-300">augmented.</span></h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">A living intelligence layer for your portfolio. Agents are scanning, reasoning, and routing signals while you stay in control.</p>
             </div>
-            <div className="flex items-center gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-xs text-emerald-200 shadow-[0_0_30px_rgba(52,211,153,0.08)]">
-              <span className="size-2 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_12px_#6ee7b7]" />
-              <span><strong className="block font-medium text-emerald-100">All systems nominal</strong><span className="text-emerald-200/60">NSE / BSE · 09:42:18 IST</span></span>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <div className="flex items-center gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-emerald-200 shadow-[0_0_30px_rgba(52,211,153,0.08)]"><span className="size-2 animate-pulse rounded-full bg-emerald-300 shadow-[0_0_12px_#6ee7b7]" /><span><strong className="block font-medium text-emerald-100">Neural mesh online</strong><span className="text-emerald-200/60">NSE / BSE · 09:42:18 IST</span></span></div>
+              <span className="chip">24 AGENTS SYNCED</span><span className="chip">LATENCY 18MS</span>
             </div>
           </div>
           <div className="scanline" aria-hidden="true" />
