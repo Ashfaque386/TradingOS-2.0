@@ -1,65 +1,78 @@
 # Windows-native equivalent of scripts/docker-up.js — for machines without
 # Node/pnpm installed. Wraps `docker compose up`: if API_HOST_PORT (default
-# 8000) or FRONTEND_HOST_PORT (default 3000) is already taken by something
-# else on this machine, walks forward to the next free port instead of
-# failing with "port is already allocated". Pure PowerShell + .NET, no
-# extra tooling required.
+# 8000) or FRONTEND_HOST_PORT (default 3000) is already taken, bumps to the
+# next port and retries automatically. Pure PowerShell, no extra tooling.
+#
+# This retries against docker compose's *actual* failure rather than
+# pre-checking port availability with a TCP bind test: on Docker Desktop /
+# WSL2, a port can be reserved in Docker's own network layer without
+# showing up as "in use" to a normal Windows socket bind, so a pre-check
+# can wrongly report a busy port as free (confirmed live). Retrying on the
+# real error from `docker compose up` is the only reliable source of truth.
 #
 # Usage (from the repo root):
 #   .\scripts\docker-up.ps1 -d --build
 # or, if PowerShell's execution policy blocks running scripts:
 #   .\scripts\docker-up.cmd -d --build
 
-function Test-PortFree {
-    param([int]$Port)
-    try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
-        $listener.Start()
-        $listener.Stop()
-        return $true
-    } catch {
-        return $false
-    }
+function Invoke-DockerComposeUp {
+    param([int]$ApiPort, [int]$FrontendPort, [string[]]$ExtraArgs)
+
+    $env:API_HOST_PORT = "$ApiPort"
+    $env:FRONTEND_HOST_PORT = "$FrontendPort"
+
+    $allArgs = @('compose', 'up') + $ExtraArgs
+    $output = & docker @allArgs 2>&1 | Out-String
+    Write-Host $output
+    return @{ Code = $LASTEXITCODE; Output = $output }
 }
 
-function Find-FreePort {
-    param(
-        [int]$StartPort,
-        [System.Collections.Generic.HashSet[int]]$Taken,
-        [int]$MaxAttempts = 50
-    )
-    $port = $StartPort
-    for ($i = 0; $i -lt $MaxAttempts; $i++) {
-        if (-not $Taken.Contains($port) -and (Test-PortFree -Port $port)) {
-            return $port
+function Remove-ComposeContainer {
+    param([string]$Service)
+    & docker compose rm -f $Service 2>&1 | Out-Null
+}
+
+$apiPort = 8000
+if ($env:API_HOST_PORT) { $apiPort = [int]$env:API_HOST_PORT }
+
+$frontendPort = 3000
+if ($env:FRONTEND_HOST_PORT) { $frontendPort = [int]$env:FRONTEND_HOST_PORT }
+
+$extraArgs = $args
+$maxAttempts = 20
+
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    Write-Host "[docker:up] Attempt ${attempt}: backend=$apiPort frontend=$frontendPort"
+    $result = Invoke-DockerComposeUp -ApiPort $apiPort -FrontendPort $frontendPort -ExtraArgs $extraArgs
+
+    if ($result.Code -eq 0) {
+        Write-Host "[docker:up] Backend:  http://localhost:$apiPort"
+        Write-Host "[docker:up] Frontend: http://localhost:$frontendPort"
+        exit 0
+    }
+
+    if ($result.Output -match 'Bind for [\d\.]+:(\d+) failed: port is already allocated') {
+        $conflictPort = [int]$Matches[1]
+        $isFrontend = $result.Output -match 'TradingOS-2\.0-Frontend'
+        $isBackend = $result.Output -match 'TradingOS-2\.0-Backend'
+
+        if ($isFrontend -or $conflictPort -eq $frontendPort) {
+            $frontendPort++
+            Write-Host "[docker:up] Port busy - bumping frontend to $frontendPort and retrying..."
+            Remove-ComposeContainer -Service 'frontend'
+        } elseif ($isBackend -or $conflictPort -eq $apiPort) {
+            $apiPort++
+            Write-Host "[docker:up] Port busy - bumping backend to $apiPort and retrying..."
+            Remove-ComposeContainer -Service 'backend'
+        } else {
+            Write-Host "[docker:up] Port conflict on $conflictPort but could not tell which service - aborting."
+            exit $result.Code
         }
-        $port++
+    } else {
+        Write-Host "[docker:up] docker compose up failed for a reason other than a port conflict - not retrying."
+        exit $result.Code
     }
-    throw "No free port found starting at $StartPort after $MaxAttempts attempts"
 }
 
-$apiBase = 8000
-if ($env:API_HOST_PORT) { $apiBase = [int]$env:API_HOST_PORT }
-
-$frontendBase = 3000
-if ($env:FRONTEND_HOST_PORT) { $frontendBase = [int]$env:FRONTEND_HOST_PORT }
-
-$taken = [System.Collections.Generic.HashSet[int]]::new()
-$apiPort = Find-FreePort -StartPort $apiBase -Taken $taken
-[void]$taken.Add($apiPort)
-$frontendPort = Find-FreePort -StartPort $frontendBase -Taken $taken
-
-if ($apiPort -ne $apiBase) {
-    Write-Host "[docker:up] Port $apiBase is busy - backend will use $apiPort instead."
-}
-if ($frontendPort -ne $frontendBase) {
-    Write-Host "[docker:up] Port $frontendBase is busy - frontend will use $frontendPort instead."
-}
-Write-Host "[docker:up] Backend:  http://localhost:$apiPort"
-Write-Host "[docker:up] Frontend: http://localhost:$frontendPort"
-
-$env:API_HOST_PORT = "$apiPort"
-$env:FRONTEND_HOST_PORT = "$frontendPort"
-
-docker compose up @args
-exit $LASTEXITCODE
+Write-Host "[docker:up] Still failing after $maxAttempts attempts."
+exit 1
