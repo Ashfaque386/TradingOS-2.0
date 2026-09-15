@@ -15,27 +15,18 @@
 # publish (confirmed live), so every "success" is double-checked with
 # `docker port <container> <port>` before being declared real.
 #
-# Output is captured via file redirection (`*>`), not a pipeline (`2>&1 |
-# ...`): piping a native command's stderr through the PowerShell pipeline
-# wraps each line in a NativeCommandError object (visible as garbled
-# "docker.exe : ... NativeCommandError" noise, confirmed live), which can
-# corrupt the exact text this script matches against. File redirection
-# captures the raw text untouched.
-#
-# Even with file redirection, an $ErrorActionPreference of 'Stop' (or, on
-# PowerShell 7.3+, $PSNativeCommandUseErrorActionPreference) makes
-# PowerShell intercept a native command's stderr writes as terminating
-# errors and display them via its own NativeCommandError formatting
-# *instead of* letting them flow into the redirect target — confirmed
-# live: Docker BuildKit's normal (non-error) progress output goes to
-# stderr, and with a strict $ErrorActionPreference the real "Bind for ...
-# failed" error text never made it into the captured file at all, so it
-# was never detected. Both preferences are reset below so this script's
-# behavior does not depend on whatever the caller's profile/session set.
-$ErrorActionPreference = 'Continue'
-if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
-    $PSNativeCommandUseErrorActionPreference = $false
-}
+# Output capture uses Start-Process with -RedirectStandardOutput /
+# -RedirectStandardError (.NET Process class redirection), not any of
+# PowerShell's own native-command redirection operators (`2>&1 | ...`,
+# `*> file`). Every one of those was tried, live, against this exact
+# operator's environment, and every one of them let PowerShell intercept
+# and garble/drop native stderr text (rendered as "docker.exe : ...
+# NativeCommandError" noise, with the real "Bind for ... failed" error
+# sometimes never reaching the captured text at all) regardless of
+# $ErrorActionPreference. Start-Process's redirection happens entirely in
+# .NET, outside PowerShell's native-command pipeline, so it is not subject
+# to any of that — this is not a preference to tune, it's a different
+# mechanism. Do not go back to `&`/pipe-based capture for this script.
 #
 # Usage (from the repo root):
 #   .\scripts\docker-up.ps1 -d --build
@@ -47,35 +38,48 @@ $BackendContainerPort = 8000
 $FrontendContainer = 'TradingOS-2.0-Frontend'
 $FrontendContainerPort = 3000
 
+function Invoke-DockerCommand {
+    param([string[]]$DockerArgs)
+
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath 'docker' -ArgumentList $DockerArgs -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+        $stdoutText = Get-Content -Path $stdoutFile -Raw -ErrorAction SilentlyContinue
+        $stderrText = Get-Content -Path $stderrFile -Raw -ErrorAction SilentlyContinue
+        if (-not $stdoutText) { $stdoutText = '' }
+        if (-not $stderrText) { $stderrText = '' }
+        return @{ Code = $proc.ExitCode; StdOut = $stdoutText; StdErr = $stderrText; Output = "$stdoutText`n$stderrText" }
+    } finally {
+        Remove-Item -Path $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-DockerComposeUp {
     param([int]$ApiPort, [int]$FrontendPort, [string[]]$ExtraArgs)
 
     $env:API_HOST_PORT = "$ApiPort"
     $env:FRONTEND_HOST_PORT = "$FrontendPort"
 
-    $allArgs = @('compose', 'up') + $ExtraArgs
-    $tempFile = [System.IO.Path]::GetTempFileName()
-    try {
-        & docker @allArgs *> $tempFile
-        $code = $LASTEXITCODE
-        $output = Get-Content -Path $tempFile -Raw -ErrorAction SilentlyContinue
-        if (-not $output) { $output = '' }
-    } finally {
-        Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
-    }
-    Write-Host $output
-    return @{ Code = $code; Output = $output }
+    $result = Invoke-DockerCommand -DockerArgs (@('compose', 'up') + $ExtraArgs)
+    Write-Host $result.Output
+    return $result
 }
 
 function Test-PortPublished {
     param([string]$ContainerName, [int]$ContainerPort)
-    $portOutput = & docker port $ContainerName $ContainerPort 2>$null
-    return [bool]$portOutput
+    # stdout only: a published port always prints its mapping to stdout,
+    # while an unpublished one can write an error message to stderr (Docker
+    # version-dependent) -- checking combined output would wrongly read
+    # that stderr text as "published".
+    $result = Invoke-DockerCommand -DockerArgs @('port', $ContainerName, "$ContainerPort")
+    return [bool]($result.StdOut.Trim())
 }
 
 function Remove-ComposeContainer {
     param([string]$Service)
-    & docker compose rm -f $Service *> $null
+    Invoke-DockerCommand -DockerArgs @('compose', 'rm', '-f', $Service) | Out-Null
 }
 
 $apiPort = 8000
@@ -131,7 +135,9 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             exit $result.Code
         }
     } else {
-        Write-Host "[docker:up] docker compose up failed for a reason other than a port conflict - not retrying."
+        Write-Host "[docker:up] docker compose up failed for a reason other than a port conflict (exit $($result.Code)) - not retrying."
+        Write-Host "[docker:up] Captured output was $($result.Output.Length) chars; last 1000 shown below for diagnosis:"
+        Write-Host $result.Output.Substring([Math]::Max(0, $result.Output.Length - 1000))
         exit $result.Code
     }
 }
