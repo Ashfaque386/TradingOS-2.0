@@ -381,3 +381,42 @@ class RunDailySignalRequest(BaseModel):
 
 class ProcessTickRequest(BaseModel):
     tick_price: float = Field(gt=0)
+
+
+class WriteBrokerCredentialsRequest(BaseModel):
+    """Write-only by design (Build Spec §20): there is no corresponding
+    response schema that echoes any of these fields back -- see
+    BrokerCredentialStatusResponse below, which only ever reports whether
+    a broker is configured, never the values themselves."""
+
+    api_key: str = Field(min_length=1)
+    api_secret: str | None = None
+    access_token: str | None = None
+
+
+class BrokerCredentialStatusResponse(BaseModel):
+    broker: str
+    configured: bool
+
+
+class ShadowModeCheckRequest(BaseModel):
+    broker: str = Field(min_length=1)
+    symbol: str = Field(min_length=1, max_length=32)
+    side: Literal["buy", "sell"]
+    quantity: int = Field(gt=0)
+    order_type: Literal["market", "limit"] = "market"
+    price: float | None = Field(default=None, gt=0)
+    product: str = "MIS"
+
+
+class ShadowModeRunResponse(BaseModel):
+    id: uuid.UUID
+    broker_name: str
+    has_sandbox: bool
+    confidence: str
+    symbol: str
+    side: str
+    quantity: int
+    order_payload: dict
+    broker_response: dict | None
+    created_at: str

@@ -7,10 +7,14 @@ outside market hours the job is a fast no-op, not skipped or cancelled, so
 "runs continuously during market hours" is literally true even when
 there's nothing to do at 2am.
 
-A mock tick-publish job stands in for Phase 8's real broker-quote poller
-(`src.engine.paper_trading.tick_feed.MockTickSource`) -- also market-
-hours-gated, since a mock feed advancing prices outside real trading
-hours would be dishonest simulation, not extra test coverage.
+The tick-publish job's behavior depends entirely on which `TickSource` it
+is constructed with (`src.brokers.tick_source.build_tick_source`, Build
+Spec §13): a `BrokerQuoteTickSource` polling real broker quotes when
+credentials are configured, or the Phase 7 `MockTickSource` fallback
+otherwise -- this job itself has no opinion on which. It is
+market-hours-gated either way, since a mock feed advancing prices (or a
+real feed polling a broker) outside real trading hours would be
+dishonest simulation or wasted API calls, not extra test coverage.
 
 No job here, or anywhere in `src.orchestration.paper_trading`, ever waits
 on a human: the daily job persists signals straight away, and the drain
@@ -30,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.engine.paper_trading.order_book import OrderBookProvider
 from src.engine.paper_trading.price_data import PriceDataProvider
-from src.engine.paper_trading.tick_feed import TickSource, publish_mock_ticks_once, read_new_ticks
+from src.engine.paper_trading.tick_feed import TickSource, publish_ticks_once, read_new_ticks
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.orchestration.paper_trading import process_tick, run_daily_signal_generation
@@ -40,10 +44,10 @@ logger = structlog.get_logger(__name__)
 DAILY_SIGNAL_HOUR_IST = 8  # before the 09:15 IST market open
 DAILY_SIGNAL_MINUTE_IST = 0
 TICK_DRAIN_INTERVAL_SECONDS = 5
-MOCK_TICK_PUBLISH_INTERVAL_SECONDS = 3
+TICK_PUBLISH_INTERVAL_SECONDS = 3
 
 DAILY_SIGNAL_JOB_ID = "paper_trading_daily_signal"
-MOCK_TICK_PUBLISH_JOB_ID = "paper_trading_mock_tick_publish"
+TICK_PUBLISH_JOB_ID = "paper_trading_tick_publish"
 TICK_DRAIN_JOB_ID = "paper_trading_tick_drain"
 
 
@@ -71,14 +75,14 @@ async def run_daily_signal_job(
         logger.info("paper_trading.daily_signals_generated", count=len(signals))
 
 
-async def run_mock_tick_publish_job(
+async def run_tick_publish_job(
     session_factory: async_sessionmaker[AsyncSession], redis: Redis, tick_source: TickSource
 ) -> None:
     if not is_market_open_ist():
         return
     symbols = await _active_symbols(session_factory)
     if symbols:
-        await publish_mock_ticks_once(redis, tick_source, symbols)
+        await publish_ticks_once(redis, tick_source, symbols)
 
 
 async def run_tick_drain_job(
@@ -143,11 +147,11 @@ def start_paper_trading_scheduler(
         replace_existing=True,
     )
     scheduler.add_job(
-        run_mock_tick_publish_job,
+        run_tick_publish_job,
         "interval",
-        seconds=MOCK_TICK_PUBLISH_INTERVAL_SECONDS,
+        seconds=TICK_PUBLISH_INTERVAL_SECONDS,
         args=[session_factory, redis, tick_source],
-        id=MOCK_TICK_PUBLISH_JOB_ID,
+        id=TICK_PUBLISH_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(
