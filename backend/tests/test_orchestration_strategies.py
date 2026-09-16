@@ -6,14 +6,20 @@ approvals mechanism, wired to its concrete case).
 
 import uuid
 
+import pandas as pd
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from src.engine.risk.correlation_constraint import make_fake_nifty_benchmark
 from src.engine.sandbox.process_runtime import RestrictedProcessSandboxRuntime
+from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
+from src.models.strategy_version import StrategyVersion
 from src.orchestration.approvals import create_approval_request, decide_approval_request
 from src.orchestration.strategies import (
     PROMOTION_TRANSITION_TYPE,
+    CorrelationConstraintBreachedError,
     create_strategy,
     create_version_with_validation,
     promote_to_paper_trading,
@@ -231,3 +237,55 @@ async def test_strategy_versions_are_scoped_per_strategy(db_session_factory):
 
     assert v1.version_number == 1
     assert v2.version_number == 1  # independent per-strategy numbering
+
+
+async def test_promotion_blocked_by_correlation_constraint_even_when_approved(db_session_factory):
+    """Build Spec §8's correlation constraint (src.engine.risk.
+    correlation_constraint) is layered on promote_to_paper_trading ahead of
+    the approval-gated transition: a strategy whose latest completed
+    backtest is correlated with the Nifty 50 benchmark beyond the
+    threshold is refused even with a fully approved promotion request.
+    """
+    strategy_id = await _make_backtesting_strategy(db_session_factory)
+
+    idx = pd.bdate_range("2024-01-01", periods=30)
+    bench = make_fake_nifty_benchmark(idx, seed=0)
+    correlated_returns = bench.returns * 0.95 + 0.0001
+
+    async with db_session_factory() as db:
+        version_result = await db.execute(
+            select(StrategyVersion.id).where(StrategyVersion.strategy_id == strategy_id)
+        )
+        version_id = version_result.scalar_one()
+        db.add(
+            BacktestRun(
+                strategy_version_id=version_id,
+                symbol="DEMO",
+                start_date=idx[0].date(),
+                end_date=idx[-1].date(),
+                status=BacktestStatus.COMPLETED,
+                daily_returns=[
+                    [ts.isoformat(), float(v)]
+                    for ts, v in zip(idx, correlated_returns, strict=True)
+                ],
+            )
+        )
+        await db.commit()
+
+        request = await create_approval_request(
+            db,
+            subject_type="strategy",
+            subject_id=str(strategy_id),
+            transition_type=PROMOTION_TRANSITION_TYPE,
+        )
+
+    async with db_session_factory() as db:
+        await decide_approval_request(db, request.id, approve=True, decided_by="risk-manager-1")
+
+    async with db_session_factory() as db:
+        with pytest.raises(CorrelationConstraintBreachedError):
+            await promote_to_paper_trading(db, strategy_id)
+
+    async with db_session_factory() as db:
+        strategy = await db.get(Strategy, strategy_id)
+        assert strategy.status == StrategyStatus.BACKTESTING.value

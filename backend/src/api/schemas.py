@@ -233,3 +233,83 @@ class OptimizationRunResponse(BaseModel):
     best_params: dict | None
     best_value: float | None
     param_importance: dict | None
+
+
+KillSwitchMode = Literal["live", "paper"]
+
+
+class KillSwitchStateResponse(BaseModel):
+    mode: str
+    tripped: bool
+    trip_reason: str | None
+    last_drawdown_pct: float | None
+    threshold_pct: float
+
+
+class CheckDrawdownRequest(BaseModel):
+    current_equity: float = Field(gt=0)
+    peak_equity: float = Field(gt=0)
+    threshold_pct: float | None = Field(default=None, gt=0)
+
+
+class ResetKillSwitchRequest(BaseModel):
+    reason: str | None = None
+
+
+class StageRiskLimitChangeRequest(BaseModel):
+    limit_name: str = Field(min_length=1, max_length=64)
+    proposed_value: float
+    reason: str | None = None
+
+
+class RiskLimitChangeResponse(BaseModel):
+    id: uuid.UUID
+    limit_name: str
+    proposed_value: float
+    status: str
+    staged_by: str
+    confirmed_by: str | None
+    applied_by: str | None
+
+
+class RiskLimitResponse(BaseModel):
+    name: str
+    value: float
+
+
+class GoLiveReadinessRequest(BaseModel):
+    num_trades: int = Field(ge=0)
+    calendar_days_running: int = Field(ge=0)
+    clean_shadow_mode_streak_days: int = Field(ge=0)
+    live_win_rate: float | None = Field(default=None, ge=0, le=1)
+    backtest_win_rate: float | None = Field(default=None, ge=0, le=1)
+    min_trades: int = Field(default=30, gt=0)
+    min_calendar_days: int = Field(default=21, gt=0)
+    min_clean_shadow_days: int = Field(default=10, gt=0)
+    max_win_rate_divergence_pp: float = Field(default=20.0, gt=0)
+
+
+class GoLiveReadinessResponse(BaseModel):
+    eligible: bool
+    checks: dict[str, bool]
+    reasons: list[str]
+
+
+class OrderIntentRequest(BaseModel):
+    mode: KillSwitchMode
+    symbol: str = Field(min_length=1, max_length=32)
+    side: Literal["buy", "sell"]
+    quantity: int = Field(gt=0)
+    proposed_price: float = Field(gt=0)
+    reference_price: float = Field(gt=0)
+    proposed_position_value: float = Field(gt=0)
+    portfolio_value: float = Field(gt=0)
+
+
+class OrderIntentResponse(BaseModel):
+    mode: str
+    symbol: str
+    side: str
+    quantity: int
+    price: float
+    created_at: str

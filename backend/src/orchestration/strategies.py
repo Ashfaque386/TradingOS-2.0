@@ -16,11 +16,26 @@ mechanism, built exactly for this concrete case) rather than a plain
 UPDATE. That's what makes it provably unbypassable (see
 tests/test_orchestration_strategies.py) -- every other status write in
 this module is a plain, sequential, non-gated pipeline advance.
+
+Build Spec §8's correlation constraint is layered on top of that same
+`promote_to_paper_trading` entrypoint: if the strategy's most recent
+COMPLETED backtest (Phase 5) has daily returns on record, they're checked
+against a Nifty 50 benchmark (src.engine.risk.correlation_constraint)
+*before* conditional_transition is even attempted -- a breach never
+touches the approval-gated transition at all. A strategy with no completed
+backtest returns yet has nothing to evaluate (never fabricated), so the
+check is a no-op for it, same as Phase 4's own tests that promote a
+strategy with no Phase 5 backtest ever attached. The exact same
+`evaluate_correlation_constraint` function is also called from
+src.orchestration.risk_gate's per-tick order-intent gate -- deliberately
+one function, two call sites, not two implementations that could drift
+apart (Build Spec §8 flags this as a gap a prior build left open).
 """
 
 import uuid
 from pathlib import Path
 
+import pandas as pd
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,14 +46,39 @@ from src.engine.options_grounding import (
     ground_option_legs,
     naked_options_scan,
 )
+from src.engine.risk.correlation_constraint import (
+    DEFAULT_CORRELATION_THRESHOLD,
+    NiftyBenchmarkProvider,
+    evaluate_correlation_constraint,
+    make_fake_nifty_benchmark,
+)
 from src.engine.sandbox.factory import SandboxRuntime, get_default_sandbox_runtime
 from src.engine.sandbox.types import SandboxLimits
 from src.engine.validation import validate_strategy_code
+from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
 from src.models.strategy_version import StrategyVersion
 from src.orchestration.transitions import ApprovalGate, conditional_transition
 
 PROMOTION_TRANSITION_TYPE = "backtesting_to_papertrading"
+
+
+class CorrelationConstraintBreachedError(Exception):
+    """Raised by promote_to_paper_trading when the strategy's backtest
+    returns are correlated with the Nifty 50 benchmark beyond the
+    constraint threshold -- promotion is refused before the approval-gated
+    transition is even attempted."""
+
+    def __init__(self, strategy_id: uuid.UUID, correlation: float, threshold: float):
+        self.strategy_id = strategy_id
+        self.correlation = correlation
+        self.threshold = threshold
+        super().__init__(
+            f"strategy {strategy_id} backtest returns are correlated {correlation:.4f} "
+            f"with the Nifty 50 benchmark, exceeding the {threshold:.4f} constraint -- "
+            "promotion refused"
+        )
+
 
 _FALLBACK_CODE_TEMPLATE = '''\
 def run_backtest(data, config):
@@ -265,7 +305,44 @@ async def run_strategy_pipeline(
     return strategy, version
 
 
-async def promote_to_paper_trading(db: AsyncSession, strategy_id: uuid.UUID) -> bool:
+async def _latest_completed_backtest_returns(
+    db: AsyncSession, strategy_id: uuid.UUID
+) -> pd.Series | None:
+    version_result = await db.execute(
+        select(StrategyVersion.id)
+        .where(StrategyVersion.strategy_id == strategy_id)
+        .order_by(StrategyVersion.version_number.desc())
+        .limit(1)
+    )
+    version_id = version_result.scalar_one_or_none()
+    if version_id is None:
+        return None
+
+    run_result = await db.execute(
+        select(BacktestRun)
+        .where(
+            BacktestRun.strategy_version_id == version_id,
+            BacktestRun.status == BacktestStatus.COMPLETED,
+        )
+        .order_by(BacktestRun.created_at.desc())
+        .limit(1)
+    )
+    run = run_result.scalar_one_or_none()
+    if run is None or not run.daily_returns:
+        return None
+
+    index = pd.DatetimeIndex([pd.Timestamp(ts) for ts, _ in run.daily_returns])
+    values = [value for _, value in run.daily_returns]
+    return pd.Series(values, index=index)
+
+
+async def promote_to_paper_trading(
+    db: AsyncSession,
+    strategy_id: uuid.UUID,
+    *,
+    benchmark_provider: NiftyBenchmarkProvider | None = None,
+    correlation_threshold: float = DEFAULT_CORRELATION_THRESHOLD,
+) -> bool:
     """Backtesting -> PaperTrading, gated by Phase 2's generic approvals
     mechanism (src.orchestration.transitions.conditional_transition +
     ApprovalGate) -- the concrete case that primitive was built for. No
@@ -273,7 +350,24 @@ async def promote_to_paper_trading(db: AsyncSession, strategy_id: uuid.UUID) -> 
     way; see tests/test_orchestration_strategies.py for the unbypassability
     proof (a second, independently-written caller of conditional_transition
     with the same gate is blocked identically).
+
+    Layered on top: Build Spec §8's correlation constraint (module
+    docstring). `benchmark_provider` defaults to a deterministic seeded
+    fake Nifty 50 series (the real index feed is a Phase 10 concern) so the
+    check is genuinely active by default, not opt-in -- pass a real
+    provider once Phase 10 ships one.
     """
+    returns = await _latest_completed_backtest_returns(db, strategy_id)
+    if returns is not None:
+        provider = benchmark_provider or make_fake_nifty_benchmark(returns.index, seed=0)
+        result = evaluate_correlation_constraint(
+            returns, provider.daily_returns(), threshold=correlation_threshold
+        )
+        if result.breached:
+            raise CorrelationConstraintBreachedError(
+                strategy_id, result.correlation, correlation_threshold
+            )
+
     return await conditional_transition(
         db,
         table=Strategy.__table__,

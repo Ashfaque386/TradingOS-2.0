@@ -16,6 +16,7 @@ from src.models.audit_log import AuditLog
 from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.base import Base
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
+from src.models.kill_switch_state import KillSwitchState
 from src.models.optimization_run import OptimizationRun
 from src.models.organization_run import (
     NON_TERMINAL_STATUSES,
@@ -32,6 +33,7 @@ from src.models.organizational_plan import OrganizationalPlan, PlanStatus
 from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.models.refresh_token import RefreshToken
 from src.models.result_artefact import ResultArtefact
+from src.models.risk_limit import RiskLimit, RiskLimitChangeRequest, RiskLimitChangeStatus
 from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
 from src.models.strategy_suggestion import StrategySuggestion, SuggestionStatus
 from src.models.strategy_version import StrategyVersion
@@ -57,6 +59,7 @@ __all__ = [
     "HeartbeatLog",
     "HeartbeatStatus",
     "InstrumentClass",
+    "KillSwitchState",
     "OptimizationRun",
     "OrganizationRun",
     "OrganizationalDecision",
@@ -67,6 +70,9 @@ __all__ = [
     "PromptVersionStatus",
     "RefreshToken",
     "ResultArtefact",
+    "RiskLimit",
+    "RiskLimitChangeRequest",
+    "RiskLimitChangeStatus",
     "RunSource",
     "RunStatus",
     "RunType",
