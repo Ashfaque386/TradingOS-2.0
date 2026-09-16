@@ -15,6 +15,7 @@ from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
 from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.base import Base
+from src.models.daily_signal import DailySignal
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
 from src.models.kill_switch_state import KillSwitchState
 from src.models.optimization_run import OptimizationRun
@@ -30,6 +31,9 @@ from src.models.organization_run import (
 from src.models.organizational_decision import OrganizationalDecision
 from src.models.organizational_event import OrganizationalEvent
 from src.models.organizational_plan import OrganizationalPlan, PlanStatus
+from src.models.paper_fill import PaperFill
+from src.models.paper_position import PaperPosition
+from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.models.refresh_token import RefreshToken
 from src.models.result_artefact import ResultArtefact
@@ -55,6 +59,7 @@ __all__ = [
     "BacktestStatus",
     "Base",
     "ConfigVersionStatus",
+    "DailySignal",
     "FailureClass",
     "HeartbeatLog",
     "HeartbeatStatus",
@@ -65,6 +70,9 @@ __all__ = [
     "OrganizationalDecision",
     "OrganizationalEvent",
     "OrganizationalPlan",
+    "PaperFill",
+    "PaperPosition",
+    "PaperTradingSubscription",
     "PlanStatus",
     "PromptVersion",
     "PromptVersionStatus",

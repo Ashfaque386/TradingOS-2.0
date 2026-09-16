@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
     BacktestRunResponse,
-    BuiltinStrategy,
     CompareRunsRequest,
     ComparisonResponse,
     MonteCarloRequest,
@@ -24,6 +23,7 @@ from src.api.schemas import (
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.engine.backtest.freshness import FakeDataLakeFreshness
+from src.engine.backtest.signals import generate_builtin_signals
 from src.models.backtest_run import BacktestRun
 from src.models.user import User
 from src.orchestration import backtests as backtests_orch
@@ -55,15 +55,6 @@ def _bars_to_df(bars: list[OHLCVBar]) -> pd.DataFrame:
     ).sort_index()
 
 
-def _signals_for_builtin(
-    prices: pd.DataFrame, strategy: BuiltinStrategy, sma_window: int
-) -> pd.Series:
-    if strategy == "always_long":
-        return pd.Series(1, index=prices.index)
-    sma = prices["close"].rolling(sma_window, min_periods=1).mean()
-    return (prices["close"] > sma).astype(int)
-
-
 def _run_response(run: BacktestRun) -> BacktestRunResponse:
     return BacktestRunResponse(
         id=run.id,
@@ -84,7 +75,7 @@ async def run_backtest_endpoint(
     current_user: User = Depends(require_role),
 ) -> BacktestRunResponse:
     prices = _bars_to_df(body.bars)
-    signals = _signals_for_builtin(prices, body.strategy, body.sma_window)
+    signals = generate_builtin_signals(prices, body.strategy, body.sma_window)
 
     # Dev/test data-lake stand-in (the real one ships in Phase 10): the
     # bars just submitted are what's "available", so the freshness gate
@@ -130,7 +121,7 @@ async def walk_forward_endpoint(
     prices = _bars_to_df(body.bars)
 
     def strategy_fn(_train: pd.DataFrame, test: pd.DataFrame) -> pd.Series:
-        return _signals_for_builtin(test, body.strategy, body.sma_window)
+        return generate_builtin_signals(test, body.strategy, body.sma_window)
 
     try:
         run = await backtests_orch.run_walk_forward_for_run(
