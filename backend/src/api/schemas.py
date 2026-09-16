@@ -1,4 +1,6 @@
 import uuid
+from datetime import date as date_type
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -147,3 +149,87 @@ class ApprovalRequestResponse(BaseModel):
     status: str
     requested_by: str | None
     decided_by: str | None
+
+
+# --- Backtesting & Optimization (Build Spec §10) ---------------------------
+#
+# Strategy/signal logic accepted over HTTP is limited to a small fixed set
+# of built-in generators (BuiltinStrategy) -- the API never accepts a
+# callable or expression from the request body, the same "no arbitrary
+# code over this surface" posture Phase 4's sandbox exists for elsewhere.
+
+BuiltinStrategy = Literal["always_long", "sma_crossover"]
+
+
+class OHLCVBar(BaseModel):
+    date: date_type
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class RunBacktestRequest(BaseModel):
+    strategy_version_id: uuid.UUID
+    symbol: str = Field(min_length=1, max_length=32)
+    bars: list[OHLCVBar] = Field(min_length=2)
+    strategy: BuiltinStrategy = "sma_crossover"
+    sma_window: int = Field(default=15, gt=0)
+    as_of: date_type
+    is_delivery: bool = True
+    initial_capital: float = Field(default=100_000.0, gt=0)
+
+
+class BacktestRunResponse(BaseModel):
+    id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    symbol: str
+    status: str
+    refusal_reason: str | None
+    metrics: dict | None
+    walk_forward_result: dict | None
+    monte_carlo_result: dict | None
+
+
+class WalkForwardRequest(BaseModel):
+    bars: list[OHLCVBar] = Field(min_length=2)
+    train_bars: int = Field(gt=0)
+    test_bars: int = Field(gt=0)
+    step_bars: int | None = Field(default=None, gt=0)
+    strategy: BuiltinStrategy = "sma_crossover"
+    sma_window: int = Field(default=15, gt=0)
+
+
+class MonteCarloRequest(BaseModel):
+    n_paths: int = Field(default=10_000, gt=0)
+    seed: int | None = None
+
+
+class CompareRunsRequest(BaseModel):
+    run_ids: list[uuid.UUID] = Field(min_length=2)
+
+
+class ComparisonResponse(BaseModel):
+    run_ids: list[str]
+    # Keyed "<run_id_a>|<run_id_b>" (sorted) -> correlation, or null when
+    # fewer than 10 overlapping days (src.engine.backtest.comparison).
+    correlations: dict[str, float | None]
+
+
+class OptimizeRequest(BaseModel):
+    strategy_version_id: uuid.UUID
+    bars: list[OHLCVBar] = Field(min_length=2)
+    n_trials: int = Field(default=30, gt=0, le=200)
+    objective_metric: Literal["sharpe", "total_return", "cagr"] = "sharpe"
+    sma_window_min: int = Field(default=5, gt=0)
+    sma_window_max: int = Field(default=50, gt=0)
+    seed: int | None = None
+
+
+class OptimizationRunResponse(BaseModel):
+    id: uuid.UUID
+    n_trials: int
+    best_params: dict | None
+    best_value: float | None
+    param_importance: dict | None

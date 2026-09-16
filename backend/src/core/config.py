@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     sandbox_cpu_seconds: int = 10
     sandbox_memory_bytes: int = 512 * 1024 * 1024
 
+    # Temporal (src/engine/optimization/temporal_workflows.py, Build Spec
+    # §10 Monte Carlo distribution). Defaults to localhost for local
+    # `uvicorn` dev, same convention as database_url/redis_url above;
+    # docker-compose.yml overrides this to the `temporal` service's
+    # in-network hostname for the container.
+    temporal_address: str = "localhost:7233"
+
 
 @lru_cache
 def get_settings() -> Settings:
