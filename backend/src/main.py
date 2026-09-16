@@ -10,12 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.agents.scheduler import start_heartbeat_loop
 from src.api.router import api_router
 from src.api.routes.health import router as health_router
+from src.brokers.tick_source import build_tick_source
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
-from src.engine.paper_trading.tick_feed import MockTickSource
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
@@ -76,16 +76,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     # Autonomous Paper Trading Engine (Build Spec §11) -- the honest-stub
     # providers below (mock daily prices, mock L2 depth, a reference-table
-    # regulatory data source, a mock tick source) are the same Phase
-    # 8/10 stand-ins used throughout src.engine.paper_trading; swapping
-    # in real ones later is a change here only, not at any call site.
+    # regulatory data source) are the same Phase 10 stand-ins used
+    # throughout src.engine.paper_trading; swapping in real ones later is
+    # a change here only, not at any call site. The tick source is no
+    # longer a permanent mock as of Phase 8: build_tick_source() polls
+    # real broker quotes when credentials are configured in the secrets
+    # store, and falls back to the Phase 7 mock feed otherwise (which is
+    # what this sandbox, with no live broker credentials, always
+    # resolves to).
     paper_trading_scheduler = start_paper_trading_scheduler(
         AsyncSessionLocal,
         redis=redis,
         price_provider=FakeDailyPriceProvider(),
         order_book_provider=MockOrderBookProvider(),
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
-        tick_source=MockTickSource(),
+        tick_source=build_tick_source(),
     )
 
     yield

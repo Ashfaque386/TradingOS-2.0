@@ -34,6 +34,12 @@ services:
       # boot (idempotent — safe to leave set across restarts).
       DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
+      # Broker credentials store (Build Spec §3, §20). Unset by default --
+      # broker-credentials writes and Shadow Mode checks 503 until this is
+      # set; the paper trading engine itself runs fine without it (mock
+      # tick feed fallback, src.brokers.tick_source.build_tick_source).
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      SECRETS_STORE_PATH: /app/secrets/broker_credentials.enc
     ports:
       # API_HOST_PORT always publishes — it's the only way to reach the app.
       - "${API_HOST_PORT:-8000}:8000"

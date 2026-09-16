@@ -5,8 +5,8 @@ see every tick.
 
 from src.engine.paper_trading.tick_feed import (
     MockTickSource,
-    publish_mock_ticks_once,
     publish_tick,
+    publish_ticks_once,
     read_new_ticks,
     tick_stream_key,
 )
@@ -17,7 +17,7 @@ async def test_publish_then_read_from_scratch(redis_client):
     await redis_client.delete(tick_stream_key(symbol))
 
     source = MockTickSource()
-    published = await publish_mock_ticks_once(redis_client, source, [symbol])
+    published = await publish_ticks_once(redis_client, source, [symbol])
 
     ticks, cursor = await read_new_ticks(redis_client, symbol)
     assert len(ticks) == 1
@@ -32,7 +32,7 @@ async def test_reading_again_with_the_same_cursor_returns_nothing_new(redis_clie
     await redis_client.delete(tick_stream_key(symbol))
 
     source = MockTickSource()
-    await publish_mock_ticks_once(redis_client, source, [symbol])
+    await publish_ticks_once(redis_client, source, [symbol])
     _first_ticks, cursor = await read_new_ticks(redis_client, symbol)
 
     ticks_again, cursor_again = await read_new_ticks(redis_client, symbol, last_id=cursor)
@@ -51,7 +51,7 @@ async def test_a_consumer_that_falls_behind_still_sees_every_tick(redis_client):
     source = MockTickSource()
     published = []
     for _ in range(5):
-        published += await publish_mock_ticks_once(redis_client, source, [symbol])
+        published += await publish_ticks_once(redis_client, source, [symbol])
 
     ticks, _cursor = await read_new_ticks(redis_client, symbol)
     assert len(ticks) == 5

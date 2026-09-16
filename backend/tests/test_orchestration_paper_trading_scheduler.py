@@ -60,16 +60,12 @@ async def test_mock_tick_publish_job_is_gated_by_market_hours(
     await redis_client.delete(tick_stream_key("SCHEDSTOCK"))
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: False)
-    await scheduler_module.run_mock_tick_publish_job(
-        db_session_factory, redis_client, MockTickSource()
-    )
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
     length = await redis_client.xlen(tick_stream_key("SCHEDSTOCK"))
     assert length == 0, "closed-market gating must prevent any tick publish"
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
-    await scheduler_module.run_mock_tick_publish_job(
-        db_session_factory, redis_client, MockTickSource()
-    )
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
     length_after = await redis_client.xlen(tick_stream_key("SCHEDSTOCK"))
     assert length_after == 1
 
@@ -88,9 +84,7 @@ async def test_tick_drain_job_processes_ticks_and_advances_the_cursor(
         )
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
-    await scheduler_module.run_mock_tick_publish_job(
-        db_session_factory, redis_client, MockTickSource()
-    )
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
 
     await scheduler_module.run_tick_drain_job(
         db_session_factory,
@@ -143,7 +137,7 @@ async def test_start_paper_trading_scheduler_registers_and_runs_all_jobs(
         job_ids = {job.id for job in scheduler.get_jobs()}
         assert job_ids == {
             scheduler_module.DAILY_SIGNAL_JOB_ID,
-            scheduler_module.MOCK_TICK_PUBLISH_JOB_ID,
+            scheduler_module.TICK_PUBLISH_JOB_ID,
             scheduler_module.TICK_DRAIN_JOB_ID,
         }
 

@@ -51,6 +51,18 @@ class Settings(BaseSettings):
     # in-network hostname for the container.
     temporal_address: str = "localhost:7233"
 
+    # Phase 8 (Build Spec §3, §13, §20): encrypted local broker-credentials
+    # store -- Vault is intentionally dropped for 2.0's self-hosted,
+    # single-operator scale (see the Build Spec's Technology Stack table).
+    # secrets_encryption_key must be a urlsafe-base64 32-byte Fernet key
+    # (cryptography.fernet.Fernet.generate_key()); left unset by default
+    # so a missing key fails loudly the first time the store is actually
+    # used (src.security.secrets_store.get_secrets_store), not silently
+    # at import time. Relative to CWD, same convention as
+    # agent_gateway_config_path/data_lake_path above.
+    secrets_store_path: str = "secrets/broker_credentials.enc"
+    secrets_encryption_key: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

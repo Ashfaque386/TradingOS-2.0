@@ -13,11 +13,16 @@ consumer fan-out to justify that extra complexity; the caller
 (`src.orchestration.paper_trading`) is responsible for persisting the
 returned cursor between calls.
 
-`TickSource` is the interface a real broker-quote poller (Phase 8) will
-implement; `MockTickSource` is a deterministic, per-symbol-seeded
-synthetic random-walk feed used until then -- the same honest-stub
-posture as every other not-yet-built external integration in this
-codebase.
+`TickSource` is the interface a real broker-quote poller implements
+(Phase 8: src.brokers.tick_source.BrokerQuoteTickSource, which polls
+`BrokerAdapter.get_quote`); `MockTickSource` is a deterministic,
+per-symbol-seeded synthetic random-walk feed used as the fallback when no
+broker credentials are configured -- same honest-stub posture as every
+other not-yet-built (or not-yet-credentialed) external integration in
+this codebase. `next_tick` is `async` specifically so a real
+network-polling implementation can await an HTTP call -- MockTickSource's
+own body does no I/O and stays `async` only to satisfy the same Protocol
+shape.
 """
 
 import time
@@ -72,22 +77,24 @@ async def read_new_ticks(
 
 
 class TickSource(Protocol):
-    def next_tick(self, symbol: str) -> Tick: ...
+    async def next_tick(self, symbol: str) -> Tick: ...
 
 
 @dataclass
 class MockTickSource:
     """Deterministic-ish synthetic random-walk generator, one RNG per
     symbol so repeated runs against the same symbol set behave the same.
-    Not a real broker feed -- Phase 8's broker-quote poller implements the
-    same `TickSource` shape against a real endpoint."""
+    Not a real broker feed -- src.brokers.tick_source.BrokerQuoteTickSource
+    implements the same `TickSource` shape against a real endpoint, and is
+    what src.brokers.tick_source.build_tick_source() returns instead of
+    this class once broker credentials are configured."""
 
     default_base_price: float = 100.0
     tick_vol: float = 0.0015
     _rng_by_symbol: dict[str, np.random.Generator] = field(default_factory=dict, repr=False)
     _last_price_by_symbol: dict[str, float] = field(default_factory=dict, repr=False)
 
-    def next_tick(self, symbol: str) -> Tick:
+    async def next_tick(self, symbol: str) -> Tick:
         # zlib.crc32, not Python's builtin hash(): str hashing is salted
         # per-process by default, which would make this "deterministic"
         # feed give a different sequence on every process restart.
@@ -101,15 +108,13 @@ class MockTickSource:
         return Tick(symbol=symbol, price=new_price, timestamp_ms=int(time.time() * 1000))
 
 
-async def publish_mock_ticks_once(
-    redis: Redis, source: TickSource, symbols: list[str]
-) -> list[Tick]:
+async def publish_ticks_once(redis: Redis, source: TickSource, symbols: list[str]) -> list[Tick]:
     """Publishes one tick per symbol -- the body of the APScheduler
-    interval job that stands in for a real broker-quote poller until
-    Phase 8."""
+    interval job driving whichever `TickSource` it was constructed with
+    (real broker-quote polling or this module's mock fallback)."""
     ticks = []
     for symbol in symbols:
-        tick = source.next_tick(symbol)
+        tick = await source.next_tick(symbol)
         await publish_tick(redis, tick)
         ticks.append(tick)
     return ticks

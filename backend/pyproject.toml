@@ -43,6 +43,16 @@ dependencies = [
     # image -- this package bundles it so "Asia/Kolkata" resolves the same
     # everywhere regardless of OS tzdata.
     "tzdata>=2024.2",
+    # Phase 8 (Build Spec §13): real httpx-calling broker adapters
+    # (Zerodha Kite Connect, Upstox) -- moved out of dev-only now that
+    # it's exercised by non-test code, not just FastAPI's TestClient.
+    "httpx>=0.27,<0.28",
+    # Phase 8 (Build Spec §3, §20): the encrypted local secrets store for
+    # broker credentials. Already pulled in transitively by
+    # python-jose[cryptography] above, but pinned explicitly now that
+    # src/security/secrets_store.py imports cryptography.fernet directly
+    # rather than relying on another package's transitive dependency.
+    "cryptography>=43,<44",
 ]
 
 [project.scripts]
@@ -52,7 +62,6 @@ tradingos-cli = "src.gateway.cli:cli"
 dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<0.25",
-    "httpx>=0.27,<0.28",
 ]
 
 [build-system]
