@@ -30,6 +30,19 @@ strategy with no Phase 5 backtest ever attached. The exact same
 src.orchestration.risk_gate's per-tick order-intent gate -- deliberately
 one function, two call sites, not two implementations that could drift
 apart (Build Spec §8 flags this as a gap a prior build left open).
+
+PaperTrading -> LiveEligible (Build Spec §12.1/§12.2) is the second and
+last approval-gated transition in this module, added in Phase 9:
+`approve_strategy_for_live_eligibility` mirrors `promote_to_paper_trading`
+exactly -- a domain-specific gate (here, Phase 6's Go-Live Readiness Gate,
+re-evaluated fresh against caller-supplied metrics, never trusted from an
+earlier call) checked *before* the same `conditional_transition` +
+`ApprovalGate` primitive, never a separate bespoke check. This is the
+"one-time-per-strategy human sign-off" Build Spec §12.1 requires before
+`src.orchestration.live_trading.LiveExecutionPipeline` will generate a
+single order intent for the strategy -- necessary but never sufficient:
+every individual intent still needs its own per-intent approval on top of
+this one-time strategy-level sign-off (Build Spec §12.2).
 """
 
 import uuid
@@ -52,6 +65,7 @@ from src.engine.risk.correlation_constraint import (
     evaluate_correlation_constraint,
     make_fake_nifty_benchmark,
 )
+from src.engine.risk.go_live_gate import GoLiveReadinessInput, evaluate_go_live_readiness
 from src.engine.sandbox.factory import SandboxRuntime, get_default_sandbox_runtime
 from src.engine.sandbox.types import SandboxLimits
 from src.engine.validation import validate_strategy_code
@@ -61,6 +75,7 @@ from src.models.strategy_version import StrategyVersion
 from src.orchestration.transitions import ApprovalGate, conditional_transition
 
 PROMOTION_TRANSITION_TYPE = "backtesting_to_papertrading"
+LIVE_ELIGIBILITY_TRANSITION_TYPE = "papertrading_to_liveeligible"
 
 
 class CorrelationConstraintBreachedError(Exception):
@@ -77,6 +92,23 @@ class CorrelationConstraintBreachedError(Exception):
             f"strategy {strategy_id} backtest returns are correlated {correlation:.4f} "
             f"with the Nifty 50 benchmark, exceeding the {threshold:.4f} constraint -- "
             "promotion refused"
+        )
+
+
+class GoLiveGateNotPassedError(Exception):
+    """Raised by approve_strategy_for_live_eligibility when the supplied
+    readiness metrics don't satisfy ALL four Go-Live Readiness Gate
+    conditions (Build Spec §8/§12) -- sign-off is refused before the
+    approval-gated transition is even attempted, the same "domain gate
+    before the generic transition primitive" shape as
+    CorrelationConstraintBreachedError above."""
+
+    def __init__(self, strategy_id: uuid.UUID, reasons: list[str]):
+        self.strategy_id = strategy_id
+        self.reasons = reasons
+        super().__init__(
+            f"strategy {strategy_id} does not pass the Go-Live Readiness Gate: "
+            + "; ".join(reasons)
         )
 
 
@@ -380,5 +412,50 @@ async def promote_to_paper_trading(
             subject_type="strategy",
             subject_id=str(strategy_id),
             transition_type=PROMOTION_TRANSITION_TYPE,
+        ),
+    )
+
+
+async def approve_strategy_for_live_eligibility(
+    db: AsyncSession,
+    strategy_id: uuid.UUID,
+    *,
+    readiness_input: GoLiveReadinessInput,
+) -> bool:
+    """PaperTrading -> LiveEligible (Build Spec §12.1's "one-time-per-
+    strategy human sign-off"). Two gates, both required, neither
+    sufficient alone:
+
+    1. The Go-Live Readiness Gate (src.engine.risk.go_live_gate,
+       Phase 6) -- re-evaluated fresh against `readiness_input` every
+       call, never a cached "it passed once" flag, so a strategy that
+       regresses (e.g. a live/backtest win-rate divergence that widens)
+       cannot ride an earlier pass.
+    2. An already-approved ApprovalRequest for this exact transition
+       (Phase 2's generic mechanism, via conditional_transition's own
+       `approval=` check) -- the actual human sign-off action.
+
+    Once this returns True, `src.orchestration.live_trading`'s
+    LiveExecutionPipeline is permitted to generate order intents for this
+    strategy -- but per Build Spec §12.2, that is necessary, never
+    sufficient: every individual intent it generates still needs its own
+    separate per-intent approval before anything reaches a broker.
+    """
+    result = evaluate_go_live_readiness(readiness_input)
+    if not result.eligible:
+        raise GoLiveGateNotPassedError(strategy_id, result.reasons)
+
+    return await conditional_transition(
+        db,
+        table=Strategy.__table__,
+        id_column=Strategy.id,
+        row_id=strategy_id,
+        status_column=Strategy.status,
+        from_status=StrategyStatus.PAPER_TRADING.value,
+        to_status=StrategyStatus.LIVE_ELIGIBLE.value,
+        approval=ApprovalGate(
+            subject_type="strategy",
+            subject_id=str(strategy_id),
+            transition_type=LIVE_ELIGIBILITY_TRANSITION_TYPE,
         ),
     )

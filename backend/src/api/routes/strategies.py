@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.schemas import (
     ApprovalRequestResponse,
     CreateStrategyRequest,
+    GoLiveReadinessRequest,
     StrategyResponse,
     StrategyVersionResponse,
     SubmitSuggestionRequest,
@@ -21,6 +22,7 @@ from src.api.schemas import (
 )
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.engine.risk.go_live_gate import GoLiveReadinessInput
 from src.models.strategy import Strategy
 from src.models.strategy_suggestion import StrategySuggestion
 from src.models.strategy_version import StrategyVersion
@@ -29,14 +31,21 @@ from src.orchestration import strategies as strategies_orch
 from src.orchestration import strategy_suggestions as suggestions_orch
 from src.orchestration.approvals import create_approval_request
 from src.orchestration.strategies import (
+    LIVE_ELIGIBILITY_TRANSITION_TYPE,
     PROMOTION_TRANSITION_TYPE,
     CorrelationConstraintBreachedError,
+    GoLiveGateNotPassedError,
 )
 from src.orchestration.transitions import ApprovalRequiredError
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
+# Live-eligibility sign-off is a real-money gate, not an ordinary pipeline
+# promotion -- same stricter pair kill-switch reset and dual-control
+# risk-limit changes use (src/api/routes/kill_switch.py,
+# src/api/routes/risk_limits.py), not the broader _OPERATOR_ROLES above.
+_LIVE_SIGNOFF_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.RISK_MANAGER]
 
 register_policy("POST", "/api/v1/strategies", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/strategies/{strategy_id}", roles=list(Role))
@@ -53,6 +62,12 @@ register_policy(
 )
 register_policy("POST", "/api/v1/strategies/{strategy_id}/request-promotion", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/strategies/{strategy_id}/promote", roles=_OPERATOR_ROLES)
+register_policy(
+    "POST", "/api/v1/strategies/{strategy_id}/request-live-eligibility", roles=_LIVE_SIGNOFF_ROLES
+)
+register_policy(
+    "POST", "/api/v1/strategies/{strategy_id}/approve-live-eligibility", roles=_LIVE_SIGNOFF_ROLES
+)
 
 
 async def _load_strategy_response(db: AsyncSession, strategy_id: uuid.UUID) -> StrategyResponse:
@@ -177,5 +192,54 @@ async def promote_strategy_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Strategy is not in Backtesting status (or does not exist)",
+        )
+    return await _load_strategy_response(db, strategy_id)
+
+
+@router.post("/{strategy_id}/request-live-eligibility", status_code=status.HTTP_201_CREATED)
+async def request_live_eligibility_endpoint(
+    strategy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> ApprovalRequestResponse:
+    request = await create_approval_request(
+        db,
+        subject_type="strategy",
+        subject_id=str(strategy_id),
+        transition_type=LIVE_ELIGIBILITY_TRANSITION_TYPE,
+        requested_by=str(current_user.id),
+    )
+    return ApprovalRequestResponse.model_validate(request)
+
+
+@router.post("/{strategy_id}/approve-live-eligibility")
+async def approve_live_eligibility_endpoint(
+    strategy_id: uuid.UUID,
+    body: GoLiveReadinessRequest,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> StrategyResponse:
+    try:
+        applied = await strategies_orch.approve_strategy_for_live_eligibility(
+            db,
+            strategy_id,
+            readiness_input=GoLiveReadinessInput(
+                num_trades=body.num_trades,
+                calendar_days_running=body.calendar_days_running,
+                clean_shadow_mode_streak_days=body.clean_shadow_mode_streak_days,
+                live_win_rate=body.live_win_rate,
+                backtest_win_rate=body.backtest_win_rate,
+            ),
+        )
+    except ApprovalRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except GoLiveGateNotPassedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    if not applied:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Strategy is not in PaperTrading status (or does not exist)",
         )
     return await _load_strategy_response(db, strategy_id)

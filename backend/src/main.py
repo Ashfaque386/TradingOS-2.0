@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.agents.scheduler import start_heartbeat_loop
 from src.api.router import api_router
 from src.api.routes.health import router as health_router
+from src.brokers.factory import build_configured_adapter
 from src.brokers.tick_source import build_tick_source
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
@@ -21,6 +22,7 @@ from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
 from src.observability.logging import configure_logging
+from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
 from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
 from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
@@ -93,6 +95,23 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tick_source=build_tick_source(),
     )
 
+    # Human-Gated LiveExecutionPipeline (Build Spec §12) -- always
+    # started, regardless of whether a broker is configured: intent
+    # GENERATION and the expiry sweep are useful (and safe) with no
+    # broker at all, they just can never reach submission
+    # (src.orchestration.live_trading.approve_live_order_intent raises
+    # NoBrokerConfiguredError). `build_configured_adapter(sandbox=False)`
+    # is the same credential-lookup path build_tick_source() uses,
+    # always pointed at production -- live trading must never share a
+    # code path with Shadow Mode's dedicated sandbox-pointed adapter.
+    live_trading_scheduler = start_live_trading_scheduler(
+        AsyncSessionLocal,
+        redis=redis,
+        price_provider=FakeDailyPriceProvider(),
+        regulatory_provider=ReferenceTableRegulatoryDataProvider(),
+        adapter=build_configured_adapter(sandbox=False),
+    )
+
     yield
 
     stall_sweep_task.cancel()
@@ -100,6 +119,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     for task in recovery_tasks:
         task.cancel()
     paper_trading_scheduler.shutdown(wait=False)
+    live_trading_scheduler.shutdown(wait=False)
     watcher.stop()
 
 

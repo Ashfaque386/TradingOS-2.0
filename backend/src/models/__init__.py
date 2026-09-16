@@ -18,7 +18,12 @@ from src.models.base import Base
 from src.models.daily_signal import DailySignal
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
 from src.models.kill_switch_state import KillSwitchState
+from src.models.live_batch_authorization import LiveBatchAuthorization
+from src.models.live_order_intent import LiveOrderIntent
+from src.models.live_position import LivePosition
+from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.optimization_run import OptimizationRun
+from src.models.order import Order
 from src.models.organization_run import (
     NON_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
@@ -44,6 +49,7 @@ from src.models.strategy_suggestion import StrategySuggestion, SuggestionStatus
 from src.models.strategy_version import StrategyVersion
 from src.models.task import Task, TaskStatus
 from src.models.task_dependency import TaskDependency
+from src.models.trade import Trade
 from src.models.user import User
 
 __all__ = [
@@ -66,7 +72,12 @@ __all__ = [
     "HeartbeatStatus",
     "InstrumentClass",
     "KillSwitchState",
+    "LiveBatchAuthorization",
+    "LiveOrderIntent",
+    "LivePosition",
+    "LiveTradingSubscription",
     "OptimizationRun",
+    "Order",
     "OrganizationRun",
     "OrganizationalDecision",
     "OrganizationalEvent",
@@ -95,5 +106,6 @@ __all__ = [
     "Task",
     "TaskDependency",
     "TaskStatus",
+    "Trade",
     "User",
 ]

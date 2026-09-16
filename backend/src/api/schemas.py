@@ -1,5 +1,6 @@
 import uuid
 from datetime import date as date_type
+from datetime import datetime as datetime_type
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -420,3 +421,104 @@ class ShadowModeRunResponse(BaseModel):
     order_payload: dict
     broker_response: dict | None
     created_at: str
+
+
+# --- Live Trading (Build Spec §12) ------------------------------------------
+
+
+class EnrollLiveTradingRequest(BaseModel):
+    strategy_id: uuid.UUID
+    symbol: str = Field(min_length=1, max_length=32)
+    broker_name: str = Field(min_length=1, max_length=32)
+    builtin_strategy: EngineBuiltinStrategy = "sma_crossover"
+    sma_window: int = Field(default=15, gt=0)
+    initial_capital: float = Field(default=100_000.0, gt=0)
+    stop_loss_pct: float = Field(default=3.0, gt=0)
+    position_size_pct: float = Field(default=5.0, gt=0, le=100)
+    intent_expiry_seconds: int = Field(default=90, gt=0, le=300)
+
+
+class LiveTradingSubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    strategy_id: uuid.UUID
+    symbol: str
+    broker_name: str
+    builtin_strategy: str
+    sma_window: int
+    initial_capital: float
+    stop_loss_pct: float
+    position_size_pct: float
+    intent_expiry_seconds: int
+    is_active: bool
+
+
+class GenerateLiveOrderIntentRequest(BaseModel):
+    tick_price: float = Field(gt=0)
+
+
+class LiveOrderIntentResponse(BaseModel):
+    id: uuid.UUID
+    strategy_id: uuid.UUID
+    symbol: str
+    side: str
+    quantity: int
+    intent_type: str
+    generated_at: str
+    expires_at: str
+    status: str
+    approved_by: str | None
+    approved_at: str | None
+    resulting_order_id: uuid.UUID | None
+    batch_authorization_id: uuid.UUID | None
+
+
+class CreateBatchAuthorizationRequest(BaseModel):
+    strategy_id: uuid.UUID
+    max_intents: int = Field(gt=0)
+    max_notional_per_intent: float = Field(gt=0)
+    window_start: datetime_type
+    window_end: datetime_type
+
+
+class LiveBatchAuthorizationResponse(BaseModel):
+    id: uuid.UUID
+    strategy_id: uuid.UUID
+    authorized_by: str
+    max_intents: int
+    max_notional_per_intent: float
+    intents_used: int
+    window_start: str
+    window_end: str
+
+
+class LivePositionResponse(BaseModel):
+    strategy_id: uuid.UUID
+    symbol: str
+    quantity: int
+    avg_cost: float
+    realized_pnl: float
+
+
+class OrderResponse(BaseModel):
+    id: uuid.UUID
+    live_order_intent_id: uuid.UUID
+    strategy_id: uuid.UUID
+    symbol: str
+    side: str
+    quantity: int
+    broker_name: str
+    broker_order_id: str | None
+    status: str
+    failure_reason: str | None
+    submitted_at: str
+
+
+class TradeResponse(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    symbol: str
+    side: str
+    quantity: int
+    price: float
+    status: str
+    executed_at: str
