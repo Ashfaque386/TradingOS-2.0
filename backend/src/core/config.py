@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     deepseek_api_key: str | None = None
     ollama_base_url: str = "http://localhost:11434"
 
+    # Strategy sandbox (src/engine/sandbox/, Build Spec §9). The data lake
+    # itself ships in Phase 10 (src/data/) -- this is only the read-only
+    # mount point the sandbox restricts a strategy's file reads to; it may
+    # not contain real market data yet. Relative to CWD, same convention as
+    # agent_gateway_config_path above.
+    data_lake_path: str = "data_lake"
+    sandbox_warm_pool_size: int = 2
+    sandbox_default_timeout_seconds: int = 30
+    sandbox_cpu_seconds: int = 10
+    sandbox_memory_bytes: int = 512 * 1024 * 1024
+
 
 @lru_cache
 def get_settings() -> Settings:

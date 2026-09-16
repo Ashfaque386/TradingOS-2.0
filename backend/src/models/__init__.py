@@ -30,6 +30,9 @@ from src.models.organizational_plan import OrganizationalPlan, PlanStatus
 from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.models.refresh_token import RefreshToken
 from src.models.result_artefact import ResultArtefact
+from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
+from src.models.strategy_suggestion import StrategySuggestion, SuggestionStatus
+from src.models.strategy_version import StrategyVersion
 from src.models.task import Task, TaskStatus
 from src.models.task_dependency import TaskDependency
 from src.models.user import User
@@ -49,6 +52,7 @@ __all__ = [
     "FailureClass",
     "HeartbeatLog",
     "HeartbeatStatus",
+    "InstrumentClass",
     "OrganizationRun",
     "OrganizationalDecision",
     "OrganizationalEvent",
@@ -61,6 +65,11 @@ __all__ = [
     "RunSource",
     "RunStatus",
     "RunType",
+    "Strategy",
+    "StrategyStatus",
+    "StrategySuggestion",
+    "StrategyVersion",
+    "SuggestionStatus",
     "Task",
     "TaskDependency",
     "TaskStatus",
