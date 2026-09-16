@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from src.core.roles import Role
+from src.engine.backtest.signals import BuiltinStrategy as EngineBuiltinStrategy
 from src.models.organization_run import FailureClass, RunSource, RunStatus, RunType
 from src.models.task import TaskStatus
 
@@ -157,8 +158,10 @@ class ApprovalRequestResponse(BaseModel):
 # of built-in generators (BuiltinStrategy) -- the API never accepts a
 # callable or expression from the request body, the same "no arbitrary
 # code over this surface" posture Phase 4's sandbox exists for elsewhere.
+# The canonical type lives in src.engine.backtest.signals (shared with
+# Phase 7's daily signal layer); re-exported here for the HTTP schemas.
 
-BuiltinStrategy = Literal["always_long", "sma_crossover"]
+BuiltinStrategy = EngineBuiltinStrategy
 
 
 class OHLCVBar(BaseModel):
@@ -313,3 +316,68 @@ class OrderIntentResponse(BaseModel):
     quantity: int
     price: float
     created_at: str
+
+
+# --- Paper Trading Engine (Build Spec §11) ----------------------------------
+
+
+class EnrollPaperTradingRequest(BaseModel):
+    strategy_version_id: uuid.UUID
+    symbol: str = Field(min_length=1, max_length=32)
+    builtin_strategy: EngineBuiltinStrategy = "sma_crossover"
+    sma_window: int = Field(default=15, gt=0)
+    initial_capital: float = Field(default=100_000.0, gt=0)
+    stop_loss_pct: float = Field(default=3.0, gt=0)
+    position_size_pct: float = Field(default=5.0, gt=0, le=100)
+
+
+class PaperTradingSubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    symbol: str
+    builtin_strategy: str
+    sma_window: int
+    initial_capital: float
+    stop_loss_pct: float
+    position_size_pct: float
+    is_active: bool
+
+
+class PaperPositionResponse(BaseModel):
+    subscription_id: uuid.UUID
+    symbol: str
+    quantity: int
+    avg_cost: float
+    realized_pnl: float
+
+
+class PaperFillResponse(BaseModel):
+    id: uuid.UUID
+    subscription_id: uuid.UUID
+    symbol: str
+    side: str
+    order_group_id: uuid.UUID
+    leg_index: int
+    requested_quantity: int
+    filled_quantity: int
+    avg_fill_price: float | None
+    fully_filled: bool
+    realized_pnl: float
+    created_at: str
+
+
+class DailySignalResponse(BaseModel):
+    id: uuid.UUID
+    subscription_id: uuid.UUID
+    symbol: str
+    signal_type: str
+    reference_price: float
+    consumed: bool
+
+
+class RunDailySignalRequest(BaseModel):
+    as_of: date_type | None = None
+
+
+class ProcessTickRequest(BaseModel):
+    tick_price: float = Field(gt=0)

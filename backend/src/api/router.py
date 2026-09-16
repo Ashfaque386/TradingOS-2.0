@@ -8,6 +8,7 @@ from src.api.routes import (
     backtests,
     kill_switch,
     orchestration,
+    paper_trading,
     risk,
     risk_limits,
     strategies,
@@ -24,3 +25,4 @@ api_router.include_router(backtests.router)
 api_router.include_router(kill_switch.router)
 api_router.include_router(risk_limits.router)
 api_router.include_router(risk.router)
+api_router.include_router(paper_trading.router)

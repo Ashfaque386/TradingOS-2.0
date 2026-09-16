@@ -13,10 +13,15 @@ from src.api.routes.health import router as health_router
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
+from src.engine.paper_trading.order_book import MockOrderBookProvider
+from src.engine.paper_trading.price_data import FakeDailyPriceProvider
+from src.engine.paper_trading.tick_feed import MockTickSource
+from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
 from src.observability.logging import configure_logging
+from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
 from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
 
@@ -69,12 +74,27 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     stall_sweep_task = start_stall_sweep_loop(AsyncSessionLocal, redis)
     heartbeat_task = start_heartbeat_loop(AsyncSessionLocal)
 
+    # Autonomous Paper Trading Engine (Build Spec §11) -- the honest-stub
+    # providers below (mock daily prices, mock L2 depth, a reference-table
+    # regulatory data source, a mock tick source) are the same Phase
+    # 8/10 stand-ins used throughout src.engine.paper_trading; swapping
+    # in real ones later is a change here only, not at any call site.
+    paper_trading_scheduler = start_paper_trading_scheduler(
+        AsyncSessionLocal,
+        redis=redis,
+        price_provider=FakeDailyPriceProvider(),
+        order_book_provider=MockOrderBookProvider(),
+        regulatory_provider=ReferenceTableRegulatoryDataProvider(),
+        tick_source=MockTickSource(),
+    )
+
     yield
 
     stall_sweep_task.cancel()
     heartbeat_task.cancel()
     for task in recovery_tasks:
         task.cancel()
+    paper_trading_scheduler.shutdown(wait=False)
     watcher.stop()
 
 
