@@ -28,7 +28,10 @@ from src.models.user import User
 from src.orchestration import strategies as strategies_orch
 from src.orchestration import strategy_suggestions as suggestions_orch
 from src.orchestration.approvals import create_approval_request
-from src.orchestration.strategies import PROMOTION_TRANSITION_TYPE
+from src.orchestration.strategies import (
+    PROMOTION_TRANSITION_TYPE,
+    CorrelationConstraintBreachedError,
+)
 from src.orchestration.transitions import ApprovalRequiredError
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
@@ -167,6 +170,8 @@ async def promote_strategy_endpoint(
     try:
         applied = await strategies_orch.promote_to_paper_trading(db, strategy_id)
     except ApprovalRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except CorrelationConstraintBreachedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not applied:
         raise HTTPException(
