@@ -13,8 +13,10 @@ from src.models.agent_identity import AgentIdentity
 from src.models.agent_to_agent_policy import AgentToAgentPolicy
 from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
+from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.base import Base
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
+from src.models.optimization_run import OptimizationRun
 from src.models.organization_run import (
     NON_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
@@ -47,12 +49,15 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalStatus",
     "AuditLog",
+    "BacktestRun",
+    "BacktestStatus",
     "Base",
     "ConfigVersionStatus",
     "FailureClass",
     "HeartbeatLog",
     "HeartbeatStatus",
     "InstrumentClass",
+    "OptimizationRun",
     "OrganizationRun",
     "OrganizationalDecision",
     "OrganizationalEvent",

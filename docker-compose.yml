@@ -10,6 +10,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      temporal:
+        condition: service_healthy
     environment:
       ENV: ${ENV:-development}
       POSTGRES_USER: ${POSTGRES_USER:-tradingos}
@@ -21,10 +23,11 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       AGENT_GATEWAY_CONFIG_PATH: /app/config/tradingos.config.json
-      # redis is its own container/image (no Postgres+API-style coupling
-      # reason applies to it) — reached over the Docker network by service
-      # name, not localhost.
+      # redis/temporal are their own containers/images (no Postgres+API-style
+      # coupling reason applies to either) — reached over the Docker network
+      # by service name, not localhost.
       REDIS_URL: redis://redis:6379/0
+      TEMPORAL_ADDRESS: temporal:7233
       # Opt-in: unset by default, so a stock deployment never gets a
       # hardcoded credential baked in. Set both in .env to have the
       # container ensure this SystemAdministrator user exists on every
@@ -81,6 +84,31 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  temporal:
+    # Single-node dev server (Build Spec §10: Monte Carlo "distributed via
+    # Temporal") -- the official `temporal server start-dev` quick-start
+    # pattern: one self-contained process, no separate persistence backend
+    # to stand up. NOT verified by actually pulling/running this image in
+    # this project's own dev sandbox: the image layer download was
+    # blocked by that environment's egress policy on the image CDN
+    # (confirmed live, not assumed) -- same "real config, honestly
+    # unexercised without reachable infra" posture as
+    # src/engine/optimization/temporal_workflows.py. Verify this service
+    # comes up cleanly the first time you `docker compose up` it for real.
+    image: temporalio/temporal:latest
+    container_name: TradingOS-2.0-Temporal
+    restart: unless-stopped
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    # Not published to the host: only the backend/workers talk to it, over
+    # the internal Docker network — same "don't publish unless something
+    # outside the container needs it" rule as Postgres/Redis.
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
 volumes:
   tradingos-2.0_pgdata:
