@@ -8,6 +8,7 @@ from src.api.routes import (
     backtests,
     broker_credentials,
     kill_switch,
+    live_trading,
     orchestration,
     paper_trading,
     risk,
@@ -30,3 +31,4 @@ api_router.include_router(risk.router)
 api_router.include_router(paper_trading.router)
 api_router.include_router(broker_credentials.router)
 api_router.include_router(shadow_mode.router)
+api_router.include_router(live_trading.router)
