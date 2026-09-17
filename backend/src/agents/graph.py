@@ -21,6 +21,7 @@ cheap/small dev model wired up locally via Ollama), the same code path
 serves the real completion instead.
 """
 
+import time
 from collections.abc import Awaitable, Callable
 
 import structlog
@@ -31,6 +32,7 @@ from src.agents.roster import PIPELINE_NODE_AGENTS
 from src.agents.state import TradingOSGraphState
 from src.agents.tools.code_lint import code_format_lint
 from src.gateway.roster import ROSTER_IDS
+from src.observability.metrics import agent_node_duration_seconds
 
 logger = structlog.get_logger(__name__)
 
@@ -209,8 +211,16 @@ def build_graph(enabled_agents: frozenset[str] | None = None, *, router: LlmRout
         if agent_id in enabled_agents:
             real_fn = NODE_FUNCTIONS[node_name]
 
-            async def node(state: TradingOSGraphState, _fn: NodeFn = real_fn) -> dict:
-                return await _fn(state, bound_router)
+            async def node(
+                state: TradingOSGraphState, _fn: NodeFn = real_fn, _name: str = node_name
+            ) -> dict:
+                started = time.perf_counter()
+                try:
+                    return await _fn(state, bound_router)
+                finally:
+                    agent_node_duration_seconds.labels(node=_name).observe(
+                        time.perf_counter() - started
+                    )
         else:
             node = _make_skip_node(node_name, agent_id)
         graph.add_node(node_name, node)

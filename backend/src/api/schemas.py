@@ -593,3 +593,31 @@ class RunBhavcopyFallbackRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     day: date_type
     segment: Literal["equity", "fo"] = "equity"
+
+
+# --- Phase 11: Audit & Observability (Build Spec §19) -----------------------
+
+
+class AuditLogEntryResponse(BaseModel):
+    id: uuid.UUID
+    sequence: int
+    previous_hash: str
+    hash: str
+    actor: str
+    action: str
+    entity_type: str | None
+    entity_id: str | None
+    details: dict | None
+    correlation_id: str | None
+    created_at: str
+
+
+class AuditChainVerifyResponse(BaseModel):
+    diverged: bool
+    archive_internally_valid: bool
+    live_db_matches_archive: bool
+    first_diverged_sequence: int | None
+    reason: str | None
+    entries_checked_in_db_chain: int
+    db_chain_valid: bool
+    db_chain_reason: str | None

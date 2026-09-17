@@ -57,6 +57,8 @@ dependencies = [
     # writes/reads Parquet itself (COPY ... (FORMAT PARQUET) / read_parquet)
     # so no separate pyarrow dependency is needed just for storage.
     "duckdb>=1.1,<2.0",
+    # Phase 11 (Build Spec §19): Prometheus metrics (src/observability/metrics.py).
+    "prometheus-client>=0.20,<0.21",
 ]
 
 [project.scripts]

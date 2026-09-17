@@ -117,6 +117,68 @@ services:
       retries: 6
       start_period: 30s
 
+  prometheus:
+    # Scrapes the backend's GET /metrics (Build Spec §19, item 4) — real
+    # config, same "not verified end-to-end in this sandbox" posture as
+    # `temporal` above: Docker Hub pulls are blocked by this environment's
+    # egress policy, confirmed live via the identical `docker pull`
+    # failure pattern seen on `temporalio/temporal:latest` in Phase 5.
+    # Please confirm `docker compose up` once in a normal environment.
+    image: prom/prometheus:latest
+    container_name: TradingOS-2.0-Prometheus
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - tradingos-2.0_prometheus_data:/prometheus
+    ports:
+      # Published by default (unlike Postgres/Redis/Temporal): an operator
+      # needs to reach Prometheus's own UI (rule/alert status) directly,
+      # the same "something outside the container needs it" reasoning
+      # that already applies to the API and frontend ports.
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  grafana:
+    # Dashboard + alert visualization (Build Spec §19, item 5). Same
+    # unverified-in-this-sandbox posture as `prometheus`/`temporal` above.
+    image: grafana/grafana:latest
+    container_name: TradingOS-2.0-Grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Forces a password change on first real login rather than shipping
+      # a permanently-valid default credential — same "no baked-in
+      # credential by default" posture as DEFAULT_ADMIN_EMAIL/PASSWORD.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards/json:ro
+      - tradingos-2.0_grafana_data:/var/lib/grafana
+    ports:
+      # Default 3001, not 3000 — 3000 is already the frontend's default
+      # (FRONTEND_HOST_PORT), and this repo's own `docker-up.js`/`.ps1`
+      # port-conflict story (see docs/CLAUDE.md's Phase 1 entry) is exactly
+      # what picking a colliding default here would reintroduce.
+      - "${GRAFANA_HOST_PORT:-3001}:3000"
+
 volumes:
   tradingos-2.0_pgdata:
     name: tradingos-2.0_pgdata
+  tradingos-2.0_prometheus_data:
+    name: tradingos-2.0_prometheus_data
+  tradingos-2.0_grafana_data:
+    name: tradingos-2.0_grafana_data

@@ -36,6 +36,7 @@ from src.data.providers import MarketDataProvider
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.paper_trading_subscription import PaperTradingSubscription
+from src.observability.correlation import with_job_correlation_id
 from src.orchestration import market_data as market_data_orch
 
 logger = structlog.get_logger(__name__)
@@ -167,14 +168,14 @@ def start_market_data_scheduler(
     scheduler = AsyncIOScheduler(timezone=IST)
 
     scheduler.add_job(
-        run_incremental_daily_job,
+        with_job_correlation_id(INCREMENTAL_DAILY_JOB_ID, run_incremental_daily_job),
         CronTrigger(hour=INCREMENTAL_DAILY_HOUR_IST, minute=0, timezone=IST),
         args=[session_factory, provider, root],
         id=INCREMENTAL_DAILY_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(
-        run_corporate_actions_job,
+        with_job_correlation_id(CORPORATE_ACTIONS_JOB_ID, run_corporate_actions_job),
         CronTrigger(
             hour=CORPORATE_ACTIONS_HOUR_IST, minute=CORPORATE_ACTIONS_MINUTE_IST, timezone=IST
         ),
@@ -183,7 +184,7 @@ def start_market_data_scheduler(
         replace_existing=True,
     )
     scheduler.add_job(
-        run_instrument_master_job,
+        with_job_correlation_id(INSTRUMENT_MASTER_JOB_ID, run_instrument_master_job),
         CronTrigger(
             hour=INSTRUMENT_MASTER_HOUR_IST, minute=INSTRUMENT_MASTER_MINUTE_IST, timezone=IST
         ),
@@ -192,7 +193,7 @@ def start_market_data_scheduler(
         replace_existing=True,
     )
     scheduler.add_job(
-        run_intraday_ingestion_job,
+        with_job_correlation_id(INTRADAY_INGESTION_JOB_ID, run_intraday_ingestion_job),
         "interval",
         seconds=INTRADAY_INGESTION_INTERVAL_SECONDS,
         args=[session_factory, provider, root],
@@ -200,14 +201,14 @@ def start_market_data_scheduler(
         replace_existing=True,
     )
     scheduler.add_job(
-        run_catalog_refresh_job,
+        with_job_correlation_id(CATALOG_REFRESH_JOB_ID, run_catalog_refresh_job),
         CronTrigger(hour=CATALOG_REFRESH_HOUR_IST, minute=0, timezone=IST),
         args=[session_factory, root],
         id=CATALOG_REFRESH_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(
-        run_backup_job,
+        with_job_correlation_id(BACKUP_JOB_ID, run_backup_job),
         CronTrigger(hour=BACKUP_HOUR_IST, minute=BACKUP_MINUTE_IST, timezone=IST),
         args=[session_factory, root, backup_root],
         id=BACKUP_JOB_ID,

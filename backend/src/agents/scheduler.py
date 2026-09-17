@@ -13,6 +13,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.agents.heartbeat import eligible_agents, run_heartbeat
+from src.observability.correlation import bind_job_correlation_id
 
 logger = structlog.get_logger(__name__)
 
@@ -36,9 +37,10 @@ def start_heartbeat_loop(
     async def _loop() -> None:
         while True:
             await asyncio.sleep(interval_seconds)
-            try:
-                await run_heartbeat_sweep_once(session_factory)
-            except Exception:  # noqa: BLE001 - a sweep failure must never kill the loop
-                logger.exception("agents.heartbeat.sweep_failed")
+            async with bind_job_correlation_id("heartbeat_sweep"):
+                try:
+                    await run_heartbeat_sweep_once(session_factory)
+                except Exception:  # noqa: BLE001 - a sweep failure must never kill the loop
+                    logger.exception("agents.heartbeat.sweep_failed")
 
     return asyncio.create_task(_loop())

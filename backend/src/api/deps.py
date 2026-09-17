@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,7 @@ _credentials_error = HTTPException(
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -35,5 +36,10 @@ async def get_current_user(
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None or not user.is_active:
         raise _credentials_error
+
+    # Stashed for src.observability.audit_middleware.AuditLoggingMiddleware,
+    # which runs as pure ASGI middleware outside FastAPI's dependency graph
+    # and so has no other way to learn who made this request.
+    request.state.current_user = user
 
     return user

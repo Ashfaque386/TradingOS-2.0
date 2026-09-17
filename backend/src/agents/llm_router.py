@@ -27,6 +27,7 @@ import structlog
 from src.core.config import get_settings
 from src.gateway.schema import LlmProvider
 from src.gateway.state import get_state
+from src.observability.metrics import llm_token_usage_total
 
 logger = structlog.get_logger(__name__)
 
@@ -39,8 +40,26 @@ class LlmProviderError(Exception):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class LlmCompletionPayload:
+    """What a single provider call actually returned -- the completion
+    text plus real usage counts when the provider's own response includes
+    them (Anthropic/OpenAI/DeepSeek/Ollama all report usage natively;
+    Gemini's `usageMetadata` is likewise parsed where present). Neither
+    token count is ever guessed or estimated when a provider's response
+    doesn't carry them -- `None` means "not reported", not "zero", the
+    same honesty this codebase applies to every other metric that can be
+    genuinely undefined (see e.g. `src.engine.backtest.comparison`'s null
+    correlation rule).
+    """
+
+    text: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
 class LlmProviderClient(Protocol):
-    async def complete(self, *, model: str, prompt: str) -> str: ...
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +67,7 @@ class AnthropicClient:
     api_key: str | None
     base_url: str = "https://api.anthropic.com/v1/messages"
 
-    async def complete(self, *, model: str, prompt: str) -> str:
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
         if not self.api_key:
             raise LlmProviderError("anthropic: no API key configured")
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -69,9 +88,15 @@ class AnthropicClient:
             raise LlmProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
         try:
-            return data["content"][0]["text"]
+            text = data["content"][0]["text"]
         except (KeyError, IndexError) as exc:
             raise LlmProviderError(f"anthropic: unexpected response shape: {data!r}") from exc
+        usage = data.get("usage") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("input_tokens"),
+            completion_tokens=usage.get("output_tokens"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +109,7 @@ class OpenAiCompatibleClient:
     base_url: str
     provider_name: str
 
-    async def complete(self, *, model: str, prompt: str) -> str:
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
         if not self.api_key:
             raise LlmProviderError(f"{self.provider_name}: no API key configured")
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -99,11 +124,17 @@ class OpenAiCompatibleClient:
             )
         data = resp.json()
         try:
-            return data["choices"][0]["message"]["content"]
+            text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise LlmProviderError(
                 f"{self.provider_name}: unexpected response shape: {data!r}"
             ) from exc
+        usage = data.get("usage") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +142,7 @@ class GeminiClient:
     api_key: str | None
     base_url: str = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    async def complete(self, *, model: str, prompt: str) -> str:
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
         if not self.api_key:
             raise LlmProviderError("gemini: no API key configured")
         url = f"{self.base_url}/{model}:generateContent"
@@ -125,16 +156,22 @@ class GeminiClient:
             raise LlmProviderError(f"gemini: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
         try:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError) as exc:
             raise LlmProviderError(f"gemini: unexpected response shape: {data!r}") from exc
+        usage = data.get("usageMetadata") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("promptTokenCount"),
+            completion_tokens=usage.get("candidatesTokenCount"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class OllamaClient:
     base_url: str
 
-    async def complete(self, *, model: str, prompt: str) -> str:
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self.base_url}/api/generate",
@@ -144,9 +181,14 @@ class OllamaClient:
             raise LlmProviderError(f"ollama: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
         try:
-            return data["response"]
+            text = data["response"]
         except KeyError as exc:
             raise LlmProviderError(f"ollama: unexpected response shape: {data!r}") from exc
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=data.get("prompt_eval_count"),
+            completion_tokens=data.get("eval_count"),
+        )
 
 
 def default_clients() -> dict[LlmProvider, LlmProviderClient]:
@@ -183,6 +225,8 @@ class LlmCompletionResult:
     text: str
     used_fallback: bool
     failed_providers: tuple[LlmProvider, ...]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 class LlmRouterExhaustedError(Exception):
@@ -230,7 +274,7 @@ class LlmRouter:
                 errors.append((provider, "no client configured for this provider"))
                 continue
             try:
-                text = await client.complete(model=model, prompt=prompt)
+                payload = await client.complete(model=model, prompt=prompt)
             except Exception as exc:  # noqa: BLE001 - any provider failure triggers fallback
                 self._health[provider].last_failure_at = time.time()
                 errors.append((provider, str(exc)))
@@ -252,11 +296,21 @@ class LlmRouter:
                     agent_id=agent_id,
                     failed_providers=[p.value for p, _ in errors],
                 )
+            if payload.prompt_tokens is not None:
+                llm_token_usage_total.labels(provider=provider.value, token_type="prompt").inc(
+                    payload.prompt_tokens
+                )
+            if payload.completion_tokens is not None:
+                llm_token_usage_total.labels(provider=provider.value, token_type="completion").inc(
+                    payload.completion_tokens
+                )
             return LlmCompletionResult(
                 provider=provider,
-                text=text,
+                text=payload.text,
                 used_fallback=used_fallback,
                 failed_providers=tuple(p for p, _ in errors),
+                prompt_tokens=payload.prompt_tokens,
+                completion_tokens=payload.completion_tokens,
             )
 
         raise LlmRouterExhaustedError(agent_id, errors)

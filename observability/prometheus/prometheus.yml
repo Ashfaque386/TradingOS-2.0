@@ -1,0 +1,37 @@
+# Prometheus scrape config (Build Spec §19, item 4/5). One job, one
+# target: the backend's own GET /metrics (src/api/routes/health.py,
+# src.observability.metrics.render_latest_metrics) -- reached by the
+# `backend` Docker Compose service name over the internal network, the
+# same way every other cross-service call in this stack already resolves
+# (redis, temporal). Not published to the host, matching this repo's
+# "no host port unless something outside the container needs it" rule
+# (docs/CLAUDE.md, Phase 0/2 entries) -- Grafana is the one thing that
+# needs a host port, and it reaches Prometheus over this same network.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+scrape_configs:
+  - job_name: tradingos-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+        labels:
+          service: tradingos-backend
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+      # No Alertmanager service in this stack (by design, per the
+      # solo-operator scale this codebase has picked consistently --
+      # same call as skipping Vault/Kubernetes/a separate object-store
+      # service elsewhere): alert *rules* below are real and evaluated,
+      # their firing state is visible in Prometheus's own UI/API
+      # (http://localhost:9090/alerts) and in the Grafana dashboard's
+      # alert panel, but nothing routes them to email/Slack/PagerDuty
+      # yet. Add an alertmanager static_config target here (and an
+      # `alertmanager` compose service) if/when that's wanted.

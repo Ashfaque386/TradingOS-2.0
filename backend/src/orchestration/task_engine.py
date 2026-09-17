@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.models.organization_run import FailureClass, OrganizationRun, RunStatus
 from src.models.result_artefact import ResultArtefact
 from src.models.task import Task, TaskStatus
+from src.observability.correlation import bind_job_correlation_id
 from src.orchestration import dependencies, events
 from src.orchestration.capabilities import (
     REGISTRY,
@@ -357,10 +358,11 @@ def start_stall_sweep_loop(
     async def _loop() -> None:
         while True:
             await asyncio.sleep(STALL_SWEEP_INTERVAL_SECONDS)
-            try:
-                async with session_factory() as db:
-                    await run_stall_sweep_once(db, redis)
-            except Exception:  # noqa: BLE001 - a sweep failure must never kill the loop
-                logger.exception("orchestration.stall_sweep_failed")
+            async with bind_job_correlation_id("stall_sweep"):
+                try:
+                    async with session_factory() as db:
+                        await run_stall_sweep_once(db, redis)
+                except Exception:  # noqa: BLE001 - a sweep failure must never kill the loop
+                    logger.exception("orchestration.stall_sweep_failed")
 
     return asyncio.create_task(_loop())

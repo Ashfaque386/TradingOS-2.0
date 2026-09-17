@@ -49,9 +49,15 @@ async def db_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]
     # on get_session_factory rather than a single get_db session. Override
     # it the same way, to the same isolated per-test engine.
     app.dependency_overrides[db_module.get_session_factory] = lambda: session_factory
+    # src.observability.audit_middleware.AuditLoggingMiddleware is pure
+    # ASGI middleware, outside the dependency-injection graph entirely, so
+    # dependency_overrides can't reach it — it reads app.state directly.
+    previous_session_factory = app.state.db_session_factory
+    app.state.db_session_factory = session_factory
     yield session_factory
     app.dependency_overrides.pop(db_module.get_db, None)
     app.dependency_overrides.pop(db_module.get_session_factory, None)
+    app.state.db_session_factory = previous_session_factory
     await engine.dispose()
 
 

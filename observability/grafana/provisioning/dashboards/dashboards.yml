@@ -1,0 +1,16 @@
+# Auto-loads every dashboard JSON in ../../dashboards/ on Grafana boot --
+# no manual import needed, and re-syncs on file change (updatable: false
+# means "don't let the UI edit-and-save silently diverge from the file on
+# disk," not "can't be edited" -- edit the JSON file and it reloads).
+apiVersion: 1
+
+providers:
+  - name: tradingos
+    orgId: 1
+    folder: TradingOS
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

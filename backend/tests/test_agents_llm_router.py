@@ -8,7 +8,12 @@ clients are never exercised here.
 
 import pytest
 
-from src.agents.llm_router import LlmProviderError, LlmRouter, LlmRouterExhaustedError
+from src.agents.llm_router import (
+    LlmCompletionPayload,
+    LlmProviderError,
+    LlmRouter,
+    LlmRouterExhaustedError,
+)
 from src.gateway.apply import apply_config_text
 from src.gateway.schema import LlmProvider
 
@@ -29,16 +34,28 @@ def _config_with_order(*providers: str) -> str:
 
 
 class _AlwaysFails:
-    async def complete(self, *, model: str, prompt: str) -> str:
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
         raise LlmProviderError("simulated provider failure")
 
 
 class _AlwaysSucceeds:
-    def __init__(self, text: str = "canned completion") -> None:
+    def __init__(
+        self,
+        text: str = "canned completion",
+        *,
+        prompt_tokens: int = 10,
+        completion_tokens: int = 5,
+    ) -> None:
         self.text = text
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
 
-    async def complete(self, *, model: str, prompt: str) -> str:
-        return self.text
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        return LlmCompletionPayload(
+            text=self.text,
+            prompt_tokens=self.prompt_tokens,
+            completion_tokens=self.completion_tokens,
+        )
 
 
 async def test_router_falls_back_to_next_provider_on_failure(db_session_factory):

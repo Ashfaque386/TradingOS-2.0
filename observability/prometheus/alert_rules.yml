@@ -1,0 +1,67 @@
+# Prometheus alert rules (Build Spec §19, item 5: "at least the
+# market-hours-downtime alert rule"). Three rules, each tied to a real
+# metric this build actually emits (src/observability/metrics.py) -- no
+# rule here references a metric that doesn't exist yet.
+#
+# **market-hours-downtime is the load-bearing one.** PromQL has no
+# built-in "is NSE open right now" function, so this rule approximates
+# NSE's 09:15-15:30 IST, Mon-Fri window as 03:45-10:00 UTC / weekday
+# (day_of_week(): 0=Sunday ... 6=Saturday, so 1-5 is Mon-Fri) using the
+# `hour()`/`minute()`/`day_of_week()` PromQL time functions. This is an
+# honest approximation, not a real NSE trading-day calendar the way
+# src/data/nse_calendar.py is for ingestion scheduling -- it will
+# false-negative (not fire) during market hours on an NSE holiday the
+# backend happens to be down for, and false-positive-eligible (evaluate,
+# but not fire, since `up` would still be 1) outside real trading hours.
+# A tighter version could join against `tradingos_trading_holiday` (this
+# build's own real holiday gauge) to suppress firing on a known holiday --
+# left as a documented follow-up rather than built now, since Alertmanager
+# routing doesn't exist yet either (see prometheus.yml) and a from-Grafana
+# demo of the rule firing/clearing is this phase's actual acceptance bar.
+groups:
+  - name: tradingos-availability
+    rules:
+      - alert: MarketHoursBackendDown
+        expr: |
+          up{job="tradingos-backend"} == 0
+          and on() (hour(vector(time())) >= 3 and hour(vector(time())) < 10)
+          and on() (day_of_week(vector(time())) >= 1 and day_of_week(vector(time())) <= 5)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TradingOS backend is unreachable during NSE market hours"
+          description: >-
+            The /metrics scrape target has been down for at least 1 minute
+            during the approximate NSE trading window (09:15-15:30 IST,
+            Mon-Fri). No orders, signals, or risk-gate checks can run while
+            the backend is down -- page immediately.
+
+  - name: tradingos-latency-budgets
+    rules:
+      - alert: OrderDispatchLatencyBudgetBreached
+        expr: increase(tradingos_order_dispatch_budget_breached_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Order dispatch exceeded its documented latency budget"
+          description: >-
+            At least one order dispatch in the last 10 minutes took longer
+            than settings.order_dispatch_latency_budget_ms
+            (src/brokers/resilient.py). Check broker connectivity and the
+            circuit breaker state.
+
+      - alert: WebSocketLatencyElevated
+        expr: |
+          histogram_quantile(0.95, sum(rate(tradingos_ws_latency_seconds_bucket[5m])) by (le)) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 WS/tick-relay latency above the latency-guard threshold"
+          description: >-
+            p95 of tradingos_ws_latency_seconds has been above 100ms (the
+            same default threshold src.engine.risk.latency_guard.
+            WebSocketLatencyGuard pauses on) for 5 minutes straight --
+            confirm whether the guard is actively pausing tick processing.
