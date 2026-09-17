@@ -22,7 +22,7 @@ from src.api.schemas import (
 )
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
-from src.engine.backtest.freshness import FakeDataLakeFreshness
+from src.data.freshness_snapshot import DataLakeFreshnessSnapshot, load_freshness_snapshot
 from src.engine.backtest.signals import generate_builtin_signals
 from src.models.backtest_run import BacktestRun
 from src.models.user import User
@@ -77,12 +77,17 @@ async def run_backtest_endpoint(
     prices = _bars_to_df(body.bars)
     signals = generate_builtin_signals(prices, body.strategy, body.sma_window)
 
-    # Dev/test data-lake stand-in (the real one ships in Phase 10): the
-    # bars just submitted are what's "available", so the freshness gate
-    # genuinely exercises against real submitted dates rather than being
-    # trivially always-fresh or always-stale.
-    available = frozenset(b.date for b in body.bars)
-    data_lake = FakeDataLakeFreshness(available_dates={body.symbol: available})
+    # Phase 10: the freshness gate now checks the real ingested data lake
+    # (src.data.freshness_snapshot), not a Fake stand-in -- unioned with
+    # whatever dates this call's own `body.bars` cover, so a caller who
+    # submits explicit bars (the dev/test path every prior phase's tests
+    # use) keeps working exactly as before, while a symbol the real
+    # pipeline has ingested is now genuinely recognized as fresh even if
+    # this call's bars don't happen to include the required date.
+    lake_snapshot = await load_freshness_snapshot(db, [body.symbol])
+    submitted_dates = frozenset(b.date for b in body.bars)
+    combined_dates = lake_snapshot.available_dates.get(body.symbol, frozenset()) | submitted_dates
+    data_lake = DataLakeFreshnessSnapshot(available_dates={body.symbol: combined_dates})
 
     run = await backtests_orch.run_backtest(
         db,

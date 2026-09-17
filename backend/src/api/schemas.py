@@ -522,3 +522,74 @@ class TradeResponse(BaseModel):
     price: float
     status: str
     executed_at: str
+
+
+# --- Phase 10: Market Data & Data Lake (Build Spec §14) ---------------------
+
+
+class MarketPulseResponse(BaseModel):
+    as_of: str
+    india_vix: float
+    sector_indices_change_pct: dict[str, float]
+    global_indices_change_pct: dict[str, float]
+
+
+class FreshnessRecordResponse(BaseModel):
+    symbol: str
+    data_type: str
+    data_date: date_type
+    row_count: int
+    ingested_at: str
+
+
+class InstrumentResponse(BaseModel):
+    symbol: str
+    exchange: str
+    instrument_type: str
+    isin: str | None
+    lot_size: int
+    tick_size: float
+    underlying_symbol: str | None
+    expiry_date: date_type | None
+    strike_price: float | None
+    option_type: str | None
+    is_active: bool
+    last_synced_at: str
+
+
+class MarketDataProvenanceResponse(BaseModel):
+    id: uuid.UUID
+    pipeline: str
+    source: str
+    status: str
+    symbols_processed: int
+    rows_ingested: int
+    error_message: str | None
+    details: dict | None
+    started_at: str
+    completed_at: str
+
+
+class RunDailyIngestionRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    as_of: date_type | None = None
+
+
+class RunIntradayIngestionRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    day: date_type | None = None
+
+
+class RunCorporateActionsIngestionRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    since: date_type | None = None
+
+
+class RunInstrumentMasterSyncRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+
+
+class RunBhavcopyFallbackRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    day: date_type
+    segment: Literal["equity", "fo"] = "equity"

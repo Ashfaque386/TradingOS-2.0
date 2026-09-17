@@ -33,12 +33,22 @@ class Settings(BaseSettings):
     deepseek_api_key: str | None = None
     ollama_base_url: str = "http://localhost:11434"
 
-    # Strategy sandbox (src/engine/sandbox/, Build Spec §9). The data lake
-    # itself ships in Phase 10 (src/data/) -- this is only the read-only
-    # mount point the sandbox restricts a strategy's file reads to; it may
-    # not contain real market data yet. Relative to CWD, same convention as
+    # Strategy sandbox (src/engine/sandbox/, Build Spec §9) AND, as of
+    # Phase 10, the real DuckDB + Parquet data lake root (src/data/lake.py)
+    # -- the same directory, on purpose: a sandboxed strategy's read-only
+    # data mount now genuinely sees real ingested market data instead of an
+    # empty directory. Relative to CWD, same convention as
     # agent_gateway_config_path above.
     data_lake_path: str = "data_lake"
+    # Phase 10: nightly backup destination (src/data/backup.py) -- must be a
+    # different directory than data_lake_path so a backup is a real, separate
+    # copy rather than a no-op self-copy.
+    data_lake_backup_path: str = "data_lake_backups"
+    # Phase 10 (src/data/nse_calendar.py): movable/lunisolar NSE holiday
+    # reference file. Relative to CWD, same convention as
+    # agent_gateway_config_path -- local `uvicorn` dev from backend/ needs
+    # this overridden to "../config/nse_holidays.json" same as that setting.
+    nse_holidays_path: str = "config/nse_holidays.json"
     sandbox_warm_pool_size: int = 2
     sandbox_default_timeout_seconds: int = 30
     sandbox_cpu_seconds: int = 10

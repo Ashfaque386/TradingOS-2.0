@@ -1,34 +1,32 @@
 """Data-freshness gate (Build Spec §10): refuses to backtest if the data
 lake lacks the prior trading day's data.
 
-The real data lake (`src/data/`) doesn't ship until Phase 10 -- this gate
-is written against the `DataLakeFreshnessCheck` protocol below, and
-`FakeDataLakeFreshness` is a deterministic, dependency-free stand-in for
-it (same honest-stub posture as every other not-yet-built external
-integration in this codebase). Swapping in the real Phase 10 lookup later
-is a one-line change at each call site (pass a different implementation
-of the protocol), not a rewrite of this gate's logic.
-
-"Prior trading day" here means the most recent Monday-Friday date before
-`as_of`, skipping weekends only -- **not** a full NSE holiday calendar,
-which is itself a Phase 10 data concern. This is a documented
-approximation: a backtest requested the day after an NSE holiday will
-incorrectly demand data for that holiday. Replace `previous_trading_day`
-with a real exchange calendar lookup once Phase 10 provides one before
-treating this gate as authoritative for anything beyond development and
-testing.
+**Phase 10 wiring**: `previous_trading_day` now delegates to the real NSE
+holiday calendar (`src.data.nse_calendar.previous_nse_trading_day`) instead
+of the old weekend-only approximation -- the Phase 5 gap this module's
+docstring used to document by name is closed. The gate itself
+(`check_data_freshness`) is unchanged: it still takes any
+`DataLakeFreshnessCheck` implementation, protocol-swap style. What changed
+is which implementation production code actually constructs --
+`src.api.routes.backtests` now builds a real
+`src.data.freshness_snapshot.DataLakeFreshnessSnapshot` from the ingested
+data lake instead of `FakeDataLakeFreshness`. `FakeDataLakeFreshness`
+itself stays right here, unchanged -- it remains a legitimate, fast,
+dependency-free fixture for tests, exactly like every other Fake-prefixed
+stand-in elsewhere in this codebase (e.g. Phase 6's
+`FakeNiftyBenchmarkProvider`); only *production* code stopped constructing
+one.
 """
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Protocol
+
+from src.data.nse_calendar import previous_nse_trading_day
 
 
 def previous_trading_day(as_of: date) -> date:
-    day = as_of - timedelta(days=1)
-    while day.weekday() >= 5:  # 5=Saturday, 6=Sunday
-        day -= timedelta(days=1)
-    return day
+    return previous_nse_trading_day(as_of)
 
 
 class DataLakeFreshnessCheck(Protocol):

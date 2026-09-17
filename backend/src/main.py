@@ -15,6 +15,8 @@ from src.brokers.tick_source import build_tick_source
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
+from src.data.price_provider import DataLakePriceProvider
+from src.data.providers import FakeMarketDataProvider
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
@@ -23,6 +25,7 @@ from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
 from src.observability.logging import configure_logging
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
+from src.orchestration.market_data_scheduler import start_market_data_scheduler
 from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
 from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
@@ -76,12 +79,28 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     stall_sweep_task = start_stall_sweep_loop(AsyncSessionLocal, redis)
     heartbeat_task = start_heartbeat_loop(AsyncSessionLocal)
 
-    # Autonomous Paper Trading Engine (Build Spec §11) -- the honest-stub
-    # providers below (mock daily prices, mock L2 depth, a reference-table
-    # regulatory data source) are the same Phase 10 stand-ins used
-    # throughout src.engine.paper_trading; swapping in real ones later is
-    # a change here only, not at any call site. The tick source is no
-    # longer a permanent mock as of Phase 8: build_tick_source() polls
+    # Market Data & Data Lake (Build Spec §14) -- started before paper/live
+    # trading below since both now read from the real ingested lake
+    # (data_lake_price_provider), falling back per-symbol to the same
+    # synthetic FakeDailyPriceProvider used pre-Phase-10 for any symbol
+    # not yet ingested.
+    data_lake_root = Path(settings.data_lake_path)
+    market_data_scheduler = start_market_data_scheduler(
+        AsyncSessionLocal,
+        provider=FakeMarketDataProvider(),
+        root=data_lake_root,
+        backup_root=Path(settings.data_lake_backup_path),
+    )
+    data_lake_price_provider = DataLakePriceProvider(
+        root=data_lake_root, fallback=FakeDailyPriceProvider()
+    )
+
+    # Autonomous Paper Trading Engine (Build Spec §11) -- the mock L2 depth
+    # and reference-table regulatory data source remain the same Phase 10
+    # stand-ins used throughout src.engine.paper_trading; daily prices as
+    # of this phase come from the real data lake
+    # (data_lake_price_provider), not a permanent fake. The tick source is
+    # no longer a permanent mock as of Phase 8: build_tick_source() polls
     # real broker quotes when credentials are configured in the secrets
     # store, and falls back to the Phase 7 mock feed otherwise (which is
     # what this sandbox, with no live broker credentials, always
@@ -89,7 +108,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     paper_trading_scheduler = start_paper_trading_scheduler(
         AsyncSessionLocal,
         redis=redis,
-        price_provider=FakeDailyPriceProvider(),
+        price_provider=data_lake_price_provider,
         order_book_provider=MockOrderBookProvider(),
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
         tick_source=build_tick_source(),
@@ -107,7 +126,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     live_trading_scheduler = start_live_trading_scheduler(
         AsyncSessionLocal,
         redis=redis,
-        price_provider=FakeDailyPriceProvider(),
+        price_provider=data_lake_price_provider,
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
         adapter=build_configured_adapter(sandbox=False),
     )
@@ -118,6 +137,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     heartbeat_task.cancel()
     for task in recovery_tasks:
         task.cancel()
+    market_data_scheduler.shutdown(wait=False)
     paper_trading_scheduler.shutdown(wait=False)
     live_trading_scheduler.shutdown(wait=False)
     watcher.stop()
