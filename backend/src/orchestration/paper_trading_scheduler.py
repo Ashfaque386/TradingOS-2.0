@@ -23,6 +23,8 @@ automatic checks. That is what "never requires a human click for a paper
 order" means operationally.
 """
 
+import time
+
 import pandas as pd
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,10 +38,19 @@ from src.engine.paper_trading.order_book import OrderBookProvider
 from src.engine.paper_trading.price_data import PriceDataProvider
 from src.engine.paper_trading.tick_feed import TickSource, publish_ticks_once, read_new_ticks
 from src.engine.risk.compliance import RegulatoryDataProvider
+from src.engine.risk.latency_guard import WebSocketLatencyGuard
 from src.models.paper_trading_subscription import PaperTradingSubscription
+from src.observability.correlation import with_job_correlation_id
+from src.observability.metrics import ws_latency_seconds
 from src.orchestration.paper_trading import process_tick, run_daily_signal_generation
 
 logger = structlog.get_logger(__name__)
+
+# Module-level: one guard shared across every drain-job tick, matching
+# Build Spec §8's own framing of a single tick-relay health signal, not a
+# per-symbol one -- Phase 6 built this class but never actually wired it
+# to a real tick stream; this is that wiring, finally landing.
+_latency_guard = WebSocketLatencyGuard()
 
 DAILY_SIGNAL_HOUR_IST = 8  # before the 09:15 IST market open
 DAILY_SIGNAL_MINUTE_IST = 0
@@ -105,6 +116,18 @@ async def run_tick_drain_job(
             redis, subscription.symbol, last_id=subscription.tick_cursor
         )
         for tick in ticks:
+            latency_ms = max(0.0, time.time() * 1000 - tick.timestamp_ms)
+            ws_latency_seconds.observe(latency_ms / 1000.0)
+            observation = _latency_guard.observe(latency_ms)
+            if observation.paused:
+                logger.warning(
+                    "paper_trading.tick_processing_paused_high_latency",
+                    subscription_id=str(subscription.id),
+                    latency_ms=latency_ms,
+                    threshold_ms=observation.threshold_ms,
+                )
+                continue
+
             async with session_factory() as db:
                 try:
                     await process_tick(
@@ -140,14 +163,14 @@ def start_paper_trading_scheduler(
     scheduler = AsyncIOScheduler(timezone=IST)
 
     scheduler.add_job(
-        run_daily_signal_job,
+        with_job_correlation_id(DAILY_SIGNAL_JOB_ID, run_daily_signal_job),
         CronTrigger(hour=DAILY_SIGNAL_HOUR_IST, minute=DAILY_SIGNAL_MINUTE_IST, timezone=IST),
         args=[session_factory, price_provider],
         id=DAILY_SIGNAL_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(
-        run_tick_publish_job,
+        with_job_correlation_id(TICK_PUBLISH_JOB_ID, run_tick_publish_job),
         "interval",
         seconds=TICK_PUBLISH_INTERVAL_SECONDS,
         args=[session_factory, redis, tick_source],
@@ -155,7 +178,7 @@ def start_paper_trading_scheduler(
         replace_existing=True,
     )
     scheduler.add_job(
-        run_tick_drain_job,
+        with_job_correlation_id(TICK_DRAIN_JOB_ID, run_tick_drain_job),
         "interval",
         seconds=TICK_DRAIN_INTERVAL_SECONDS,
         args=[session_factory, redis, order_book_provider, regulatory_provider],

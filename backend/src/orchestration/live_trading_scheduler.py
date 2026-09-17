@@ -36,6 +36,7 @@ from src.engine.paper_trading.tick_feed import read_new_ticks
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.live_trading_subscription import LiveTradingSubscription
+from src.observability.correlation import with_job_correlation_id
 from src.orchestration.live_trading import (
     expire_stale_intents,
     generate_live_order_intent,
@@ -138,14 +139,14 @@ def start_live_trading_scheduler(
     scheduler = AsyncIOScheduler(timezone=IST)
 
     scheduler.add_job(
-        run_live_daily_signal_job,
+        with_job_correlation_id(DAILY_SIGNAL_JOB_ID, run_live_daily_signal_job),
         CronTrigger(hour=DAILY_SIGNAL_HOUR_IST, minute=DAILY_SIGNAL_MINUTE_IST, timezone=IST),
         args=[session_factory, price_provider],
         id=DAILY_SIGNAL_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(
-        run_intent_generation_job,
+        with_job_correlation_id(INTENT_GENERATION_JOB_ID, run_intent_generation_job),
         "interval",
         seconds=INTENT_GENERATION_INTERVAL_SECONDS,
         args=[session_factory, redis],
@@ -154,7 +155,7 @@ def start_live_trading_scheduler(
         replace_existing=True,
     )
     scheduler.add_job(
-        run_expiry_sweep_job,
+        with_job_correlation_id(EXPIRY_SWEEP_JOB_ID, run_expiry_sweep_job),
         "interval",
         seconds=EXPIRY_SWEEP_INTERVAL_SECONDS,
         args=[session_factory],

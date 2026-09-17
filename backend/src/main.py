@@ -23,7 +23,11 @@ from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
+from src.observability.audit_middleware import AuditLoggingMiddleware
+from src.observability.correlation import CorrelationIdMiddleware
 from src.observability.logging import configure_logging
+from src.observability.metrics import trading_holiday_gauge_updater
+from src.orchestration.audit_scheduler import start_audit_scheduler
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
 from src.orchestration.market_data_scheduler import start_market_data_scheduler
 from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
@@ -131,19 +135,34 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         adapter=build_configured_adapter(sandbox=False),
     )
 
+    # Audit archive + chain-divergence verification (Build Spec §19).
+    audit_scheduler = start_audit_scheduler(
+        AsyncSessionLocal, archive_root=Path(settings.audit_archive_path)
+    )
+    trading_holiday_task = trading_holiday_gauge_updater()
+
     yield
 
     stall_sweep_task.cancel()
     heartbeat_task.cancel()
+    trading_holiday_task.cancel()
     for task in recovery_tasks:
         task.cancel()
     market_data_scheduler.shutdown(wait=False)
     paper_trading_scheduler.shutdown(wait=False)
     live_trading_scheduler.shutdown(wait=False)
+    audit_scheduler.shutdown(wait=False)
     watcher.stop()
 
 
 app = FastAPI(title="TradingOS 2.0 API", version="0.1.0", lifespan=lifespan)
+
+# Read by src.observability.audit_middleware.AuditLoggingMiddleware, which
+# runs as pure ASGI middleware outside FastAPI's dependency-injection graph
+# and so can't use Depends(get_session_factory)/dependency_overrides the
+# way route handlers do; tests override this attribute directly instead
+# (see tests/conftest.py's db_session_factory fixture).
+app.state.db_session_factory = AsyncSessionLocal
 
 app.add_middleware(
     CORSMiddleware,
@@ -152,6 +171,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Middleware wraps in reverse registration order -- CorrelationIdMiddleware
+# (added last) is outermost, so a correlation ID is bound before anything
+# else runs; AuditLoggingMiddleware (added just before it) sees that same
+# ID via write_audit_entry's automatic contextvar pickup.
+app.add_middleware(AuditLoggingMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(health_router)
 app.include_router(api_router)

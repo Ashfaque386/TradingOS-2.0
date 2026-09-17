@@ -70,6 +70,7 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.audit.service import write_audit_entry
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderSide, OrderType
 from src.engine.backtest.engine import run_vectorized_backtest
 from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signals
@@ -79,7 +80,6 @@ from src.engine.paper_trading.price_data import PriceDataProvider
 from src.engine.paper_trading.stop_loss import check_universal_stop_loss
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
-from src.models.audit_log import AuditLog
 from src.models.live_batch_authorization import LiveBatchAuthorization
 from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
@@ -321,19 +321,18 @@ async def create_batch_authorization(
         window_end=window_end,
     )
     db.add(authorization)
-    db.add(
-        AuditLog(
-            actor=authorized_by,
-            action="live_batch_authorization.created",
-            entity_type="strategy",
-            entity_id=str(strategy_id),
-            details={
-                "max_intents": max_intents,
-                "max_notional_per_intent": max_notional_per_intent,
-                "window_start": window_start.isoformat(),
-                "window_end": window_end.isoformat(),
-            },
-        )
+    await write_audit_entry(
+        db,
+        actor=authorized_by,
+        action="live_batch_authorization.created",
+        entity_type="strategy",
+        entity_id=str(strategy_id),
+        details={
+            "max_intents": max_intents,
+            "max_notional_per_intent": max_notional_per_intent,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+        },
     )
     await db.commit()
     await db.refresh(authorization)
@@ -450,14 +449,13 @@ async def _fail_intent(
     db: AsyncSession, intent: LiveOrderIntent, *, reason: str
 ) -> LiveOrderIntent:
     intent.status = "failed"
-    db.add(
-        AuditLog(
-            actor=intent.approved_by or "system",
-            action="live_order_intent.submission_failed",
-            entity_type="live_order_intent",
-            entity_id=str(intent.id),
-            details={"reason": reason},
-        )
+    await write_audit_entry(
+        db,
+        actor=intent.approved_by or "system",
+        action="live_order_intent.submission_failed",
+        entity_type="live_order_intent",
+        entity_id=str(intent.id),
+        details={"reason": reason},
     )
     await db.commit()
     await db.refresh(intent)
@@ -564,21 +562,20 @@ async def _submit_intent_to_broker(
     intent.status = "submitted"
     intent.resulting_order_id = order.id
 
-    db.add(
-        AuditLog(
-            actor=intent.approved_by or "system",
-            action="live_order_intent.submitted",
-            entity_type="live_order_intent",
-            entity_id=str(intent.id),
-            details={
-                "symbol": intent.symbol,
-                "side": intent.side,
-                "quantity": intent.quantity,
-                "broker_name": adapter.broker_name,
-                "broker_order_id": result.broker_order_id,
-                "reference_price": reference_price,
-            },
-        )
+    await write_audit_entry(
+        db,
+        actor=intent.approved_by or "system",
+        action="live_order_intent.submitted",
+        entity_type="live_order_intent",
+        entity_id=str(intent.id),
+        details={
+            "symbol": intent.symbol,
+            "side": intent.side,
+            "quantity": intent.quantity,
+            "broker_name": adapter.broker_name,
+            "broker_order_id": result.broker_order_id,
+            "reference_price": reference_price,
+        },
     )
 
     await db.commit()
@@ -653,14 +650,13 @@ async def reject_live_order_intent(
         raise IntentNotPendingError(intent_id, intent.status)
 
     intent.status = "rejected"
-    db.add(
-        AuditLog(
-            actor=rejected_by,
-            action="live_order_intent.rejected",
-            entity_type="live_order_intent",
-            entity_id=str(intent.id),
-            details={"symbol": intent.symbol, "side": intent.side, "quantity": intent.quantity},
-        )
+    await write_audit_entry(
+        db,
+        actor=rejected_by,
+        action="live_order_intent.rejected",
+        entity_type="live_order_intent",
+        entity_id=str(intent.id),
+        details={"symbol": intent.symbol, "side": intent.side, "quantity": intent.quantity},
     )
     await db.commit()
     await db.refresh(intent)

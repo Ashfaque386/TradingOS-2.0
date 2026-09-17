@@ -15,6 +15,8 @@ open/cooldown/half-open state machine, only adapts the richer Phase 8
 `send_order`) onto that one breaker's generic `call(fn)`.
 """
 
+import time
+
 from src.brokers.base import (
     BrokerAdapter,
     BrokerOrder,
@@ -25,7 +27,12 @@ from src.brokers.base import (
     OptionChainEntry,
     OrderRequest,
 )
+from src.core.config import get_settings
 from src.engine.risk.circuit_breaker import BrokerCircuitBreaker
+from src.observability.metrics import (
+    order_dispatch_budget_breached_total,
+    order_dispatch_latency_seconds,
+)
 
 
 class ResilientBrokerAdapter:
@@ -49,7 +56,17 @@ class ResilientBrokerAdapter:
         return self._adapter.build_order_payload(order)
 
     async def place_order(self, order: OrderRequest) -> BrokerOrderResult:
-        return await self._breaker.call(lambda: self._adapter.place_order(order))
+        started = time.perf_counter()
+        try:
+            return await self._breaker.call(lambda: self._adapter.place_order(order))
+        finally:
+            elapsed_seconds = time.perf_counter() - started
+            order_dispatch_latency_seconds.labels(broker=self._adapter.broker_name).observe(
+                elapsed_seconds
+            )
+            budget_ms = get_settings().order_dispatch_latency_budget_ms
+            if elapsed_seconds * 1000 > budget_ms:
+                order_dispatch_budget_breached_total.labels(broker=self._adapter.broker_name).inc()
 
     async def modify_order(
         self, broker_order_id: str, *, price: float | None = None, quantity: int | None = None

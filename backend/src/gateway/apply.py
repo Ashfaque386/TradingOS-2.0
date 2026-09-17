@@ -11,6 +11,7 @@ from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.audit.service import write_audit_entry
 from src.gateway.loader import (
     ConfigLoadError,
     compute_effective_agents,
@@ -24,7 +25,6 @@ from src.models.agent_binding import AgentBinding
 from src.models.agent_config_version import AgentConfigVersion, ConfigVersionStatus
 from src.models.agent_identity import AgentIdentity
 from src.models.agent_to_agent_policy import AgentToAgentPolicy
-from src.models.audit_log import AuditLog
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,14 +88,12 @@ async def _record_active(
     await _sync_agent_bindings(session, config)
     await _sync_agent_to_agent_policy(session, config)
 
-    session.add(
-        AuditLog(
-            actor=source,
-            action="agent_gateway.config_applied",
-            entity_type="agent_config_version",
-            entity_id=str(version.id),
-            details=None,
-        )
+    await write_audit_entry(
+        session,
+        actor=source,
+        action="agent_gateway.config_applied",
+        entity_type="agent_config_version",
+        entity_id=str(version.id),
     )
     await session.commit()
 
@@ -116,14 +114,13 @@ async def _record_rejected(
     session.add(version)
     await session.flush()
 
-    session.add(
-        AuditLog(
-            actor=source,
-            action="agent_gateway.config_rejected",
-            entity_type="agent_config_version",
-            entity_id=str(version.id),
-            details={"errors": errors},
-        )
+    await write_audit_entry(
+        session,
+        actor=source,
+        action="agent_gateway.config_rejected",
+        entity_type="agent_config_version",
+        entity_id=str(version.id),
+        details={"errors": errors},
     )
     await session.commit()
 

@@ -73,6 +73,19 @@ class Settings(BaseSettings):
     secrets_store_path: str = "secrets/broker_credentials.enc"
     secrets_encryption_key: str | None = None
 
+    # Phase 11 (Build Spec §19): WORM-style local append-only audit
+    # archive (src/audit/archive.py) -- see that module's docstring for
+    # why this is a local file store rather than MinIO. Relative to CWD,
+    # same convention as data_lake_path above.
+    audit_archive_path: str = "audit_archive"
+    # Order-dispatch latency budget (tick -> broker handoff), Build Spec
+    # §16's "measured against a documented budget" -- the spec names the
+    # requirement but not a number; 500ms is this build's own documented
+    # choice (an HTTP round-trip to a broker API, not a co-located
+    # exchange connection, so sub-100ms isn't realistic) and is what
+    # src.observability.metrics compares every real dispatch against.
+    order_dispatch_latency_budget_ms: float = 500.0
+
 
 @lru_cache
 def get_settings() -> Settings:

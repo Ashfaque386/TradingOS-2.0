@@ -106,3 +106,60 @@ async def test_build_order_payload_bypasses_the_breaker_entirely():
 
     assert adapter.breaker.state == CircuitState.CLOSED
     assert adapter.breaker.consecutive_failures == 0
+
+
+def _histogram_sample_count(histogram, **labels) -> float:
+    """These metrics are process-global singletons (src/observability/
+    metrics.py's module-level objects), shared across the whole test
+    session -- `collect()` returns samples for every label combination any
+    test has ever recorded, so a before/after comparison must match on the
+    exact label set, not just take the first `_count` sample it finds.
+    """
+    for sample in histogram.collect()[0].samples:
+        if sample.name.endswith("_count") and sample.labels == labels:
+            return sample.value
+    return 0.0
+
+
+async def test_place_order_records_the_order_dispatch_latency_metric():
+    """Phase 11 (Build Spec §19): every order dispatch is observed against
+    the tradingos_order_dispatch_latency_seconds histogram, labeled by
+    broker -- the metric fires even on a successful call, not just a
+    failure."""
+    from src.observability.metrics import order_dispatch_latency_seconds
+
+    clock = _FakeClock()
+    adapter = _make_resilient_adapter([200], clock)
+
+    before = _histogram_sample_count(order_dispatch_latency_seconds, broker="zerodha")
+    await adapter.place_order(_ORDER)
+    after = _histogram_sample_count(order_dispatch_latency_seconds, broker="zerodha")
+
+    assert after == before + 1
+
+
+async def test_place_order_increments_budget_breach_counter_when_over_budget(monkeypatch):
+    """A dispatch that exceeds settings.order_dispatch_latency_budget_ms
+    increments the breach counter; a real, non-fabricated comparison
+    against the documented budget, not just a latency observation."""
+    from src.brokers import resilient as resilient_module
+    from src.core.config import get_settings
+    from src.observability import metrics as metrics_module
+
+    class _TinyBudgetSettings:
+        order_dispatch_latency_budget_ms = -1.0  # guaranteed to be exceeded by any real call
+
+    monkeypatch.setattr(resilient_module, "get_settings", lambda: _TinyBudgetSettings())
+
+    clock = _FakeClock()
+    adapter = _make_resilient_adapter([200], clock)
+    counter_child = metrics_module.order_dispatch_budget_breached_total.labels(broker="zerodha")
+
+    before = counter_child._value.get()
+    await adapter.place_order(_ORDER)
+    after = counter_child._value.get()
+
+    assert after == before + 1
+    # get_settings itself is untouched -- only this module's imported
+    # reference was monkeypatched.
+    assert get_settings().order_dispatch_latency_budget_ms > 0

@@ -1,0 +1,14 @@
+# Auto-provisions the Prometheus datasource on Grafana boot -- no manual
+# "Add data source" click needed. Reaches Prometheus by its Compose
+# service name over the internal network, same as prometheus.yml reaches
+# the backend.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

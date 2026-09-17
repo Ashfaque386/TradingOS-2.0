@@ -4,6 +4,7 @@ from src.api.routes import (
     admin,
     agents,
     approvals,
+    audit,
     auth,
     backtests,
     broker_credentials,
@@ -34,3 +35,4 @@ api_router.include_router(broker_credentials.router)
 api_router.include_router(shadow_mode.router)
 api_router.include_router(live_trading.router)
 api_router.include_router(market_data.router)
+api_router.include_router(audit.router)

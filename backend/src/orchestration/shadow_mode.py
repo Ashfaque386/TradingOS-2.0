@@ -24,8 +24,8 @@ responsibility, not something this function silently fixes up.
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.audit.service import write_audit_entry
 from src.brokers.base import BrokerAdapter, OrderRequest
-from src.models.audit_log import AuditLog
 from src.models.shadow_mode_run import ShadowModeConfidence, ShadowModeRun
 
 
@@ -58,28 +58,27 @@ async def run_shadow_order_check(
     )
     db.add(run)
 
-    db.add(
-        AuditLog(
-            actor="system",
-            action="shadow_mode.dry_run",
-            entity_type="broker_adapter",
-            entity_id=adapter.broker_name,
-            details={
-                "confidence": confidence,
-                "has_sandbox": adapter.has_sandbox,
-                "symbol": order.symbol,
-                "side": order.side.value,
-                "quantity": order.quantity,
-                "note": (
-                    "genuine sandbox dry run against the broker's real sandbox environment"
-                    if adapter.has_sandbox
-                    else (
-                        "local payload construction only -- this broker has "
-                        "no sandbox; nothing was sent over the network"
-                    )
-                ),
-            },
-        )
+    await write_audit_entry(
+        db,
+        actor="system",
+        action="shadow_mode.dry_run",
+        entity_type="broker_adapter",
+        entity_id=adapter.broker_name,
+        details={
+            "confidence": confidence,
+            "has_sandbox": adapter.has_sandbox,
+            "symbol": order.symbol,
+            "side": order.side.value,
+            "quantity": order.quantity,
+            "note": (
+                "genuine sandbox dry run against the broker's real sandbox environment"
+                if adapter.has_sandbox
+                else (
+                    "local payload construction only -- this broker has "
+                    "no sandbox; nothing was sent over the network"
+                )
+            ),
+        },
     )
 
     await db.commit()
