@@ -164,9 +164,15 @@ services:
       # credential by default" posture as DEFAULT_ADMIN_EMAIL/PASSWORD.
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
+      # The dashboard JSON lives under provisioning/dashboards/json/ on
+      # the host (not a separate top-level observability/grafana/dashboards/
+      # directory) so this is a single bind mount, not two nested ones —
+      # a bind mount targeting a path *inside* another read-only bind
+      # mount fails to create its mountpoint on Docker Desktop for
+      # Windows ("read-only file system"), even though it can work on
+      # native Linux Docker. One mount avoids the nesting entirely.
       - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards/json:ro
       - tradingos-2.0_grafana_data:/var/lib/grafana
     ports:
       # Default 3001, not 3000 — 3000 is already the frontend's default

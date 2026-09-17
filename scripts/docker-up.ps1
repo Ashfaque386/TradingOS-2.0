@@ -117,10 +117,21 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         continue
     }
 
-    if ($result.Output -match 'Bind for [\d\.]+:(\d+) failed: port is already allocated') {
+    # Only the specific line naming the failing endpoint may be checked for
+    # which service it is -- `docker compose up`'s surrounding output lists
+    # *every* service's container transitioning through
+    # Creating/Starting/Started (including "TradingOS-2.0-Frontend") even
+    # on a completely unrelated conflict (e.g. Prometheus/Grafana), so
+    # matching against the whole captured $result.Output previously
+    # misattributed any non-backend/non-frontend port conflict to the
+    # frontend and only ever bumped FrontendPort, silently never fixing
+    # the real conflict.
+    $conflictLine = ($result.Output -split "`n") | Where-Object { $_ -match 'port is already allocated' } | Select-Object -First 1
+
+    if ($conflictLine -and $conflictLine -match 'Bind for [\d\.]+:(\d+) failed: port is already allocated') {
         $conflictPort = [int]$Matches[1]
-        $isFrontend = $result.Output -match 'TradingOS-2\.0-Frontend'
-        $isBackend = $result.Output -match 'TradingOS-2\.0-Backend'
+        $isFrontend = $conflictLine -match 'TradingOS-2\.0-Frontend'
+        $isBackend = $conflictLine -match 'TradingOS-2\.0-Backend'
 
         if ($isFrontend -or $conflictPort -eq $frontendPort) {
             $frontendPort++
