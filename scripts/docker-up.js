@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Cross-platform wrapper around `docker compose up`: if API_HOST_PORT
-// (default 8000) or FRONTEND_HOST_PORT (default 3000) is already taken,
-// automatically bumps to the next port and retries -- no manual
-// intervention needed. Run as `pnpm docker:up` (extra args, e.g. `-d`,
-// are passed through to `docker compose up`).
+// Cross-platform wrapper around `docker compose up`: if any of this
+// stack's four published host ports (backend/frontend/prometheus/grafana)
+// is already taken by something else on the machine, automatically bumps
+// that one port and retries -- no manual intervention needed. Run as
+// `pnpm docker:up` (extra args, e.g. `-d`, are passed through to
+// `docker compose up`).
 //
 // This retries against docker compose's *actual* failure rather than
 // pre-checking port availability with a plain TCP bind test: on Windows
@@ -20,17 +21,49 @@
 
 const { spawn } = require('child_process')
 
-const CONTAINERS = {
-  backend: { name: 'TradingOS-2.0-Backend', containerPort: 8000 },
-  frontend: { name: 'TradingOS-2.0-Frontend', containerPort: 3000 },
-}
+// One entry per service this stack publishes a host port for. `envVar` is
+// what docker-compose.yml's `${...}` substitution reads; `composeService`
+// is the service name `docker compose rm -f <name>` takes.
+const SERVICES = [
+  {
+    key: 'backend',
+    containerName: 'TradingOS-2.0-Backend',
+    containerPort: 8000,
+    envVar: 'API_HOST_PORT',
+    composeService: 'backend',
+    defaultPort: 8000,
+  },
+  {
+    key: 'frontend',
+    containerName: 'TradingOS-2.0-Frontend',
+    containerPort: 3000,
+    envVar: 'FRONTEND_HOST_PORT',
+    composeService: 'frontend',
+    defaultPort: 3000,
+  },
+  {
+    key: 'prometheus',
+    containerName: 'TradingOS-2.0-Prometheus',
+    containerPort: 9090,
+    envVar: 'PROMETHEUS_HOST_PORT',
+    composeService: 'prometheus',
+    defaultPort: 9090,
+  },
+  {
+    key: 'grafana',
+    containerName: 'TradingOS-2.0-Grafana',
+    containerPort: 3000,
+    envVar: 'GRAFANA_HOST_PORT',
+    composeService: 'grafana',
+    defaultPort: 3001,
+  },
+]
 
-function runDockerComposeUp(apiPort, frontendPort, extraArgs) {
+function runDockerComposeUp(ports, extraArgs) {
   return new Promise((resolve) => {
-    const env = {
-      ...process.env,
-      API_HOST_PORT: String(apiPort),
-      FRONTEND_HOST_PORT: String(frontendPort),
+    const env = { ...process.env }
+    for (const service of SERVICES) {
+      env[service.envVar] = String(ports[service.key])
     }
     const child = spawn('docker', ['compose', 'up', ...extraArgs], {
       env,
@@ -71,27 +104,24 @@ function parsePortConflict(output) {
   // Only the specific line naming the failing endpoint may be checked for
   // which service it is — `docker compose up`'s surrounding output lists
   // *every* service's container transitioning through
-  // Creating/Starting/Started (including "TradingOS-2.0-Frontend") on a
-  // completely unrelated conflict (e.g. Prometheus/Grafana), so matching
+  // Creating/Starting/Started (including every container name this stack
+  // has) regardless of which one's port actually conflicted, so matching
   // against the whole captured blob previously misattributed any
-  // non-backend/non-frontend port conflict to the frontend and only ever
-  // bumped FRONTEND_HOST_PORT, silently never fixing the real conflict.
-  const conflictLine = output
-    .split('\n')
-    .find((line) => /port is already allocated/.test(line))
+  // conflict to whichever service happened to be mentioned first (nearly
+  // always the frontend) and only ever bumped that one port, silently
+  // never fixing the real conflict.
+  const conflictLine = output.split('\n').find((line) => /port is already allocated/.test(line))
   if (!conflictLine) return null
   const match = conflictLine.match(/Bind for [\d.]+:(\d+) failed: port is already allocated/)
   if (!match) return null
-  return {
-    port: Number(match[1]),
-    isFrontend: /TradingOS-2\.0-Frontend/i.test(conflictLine),
-    isBackend: /TradingOS-2\.0-Backend/i.test(conflictLine),
-  }
+  const port = Number(match[1])
+  const service = SERVICES.find((s) => new RegExp(s.containerName.replace(/\./g, '\\.'), 'i').test(conflictLine))
+  return { port, serviceKey: service ? service.key : null }
 }
 
-function removeContainer(service) {
+function removeContainer(composeService) {
   return new Promise((resolve) => {
-    const child = spawn('docker', ['compose', 'rm', '-f', service], {
+    const child = spawn('docker', ['compose', 'rm', '-f', composeService], {
       env: process.env,
       shell: process.platform === 'win32',
       stdio: 'ignore',
@@ -102,36 +132,38 @@ function removeContainer(service) {
 }
 
 async function main() {
-  let apiPort = Number(process.env.API_HOST_PORT) || 8000
-  let frontendPort = Number(process.env.FRONTEND_HOST_PORT) || 3000
+  const ports = {}
+  for (const service of SERVICES) {
+    ports[service.key] = Number(process.env[service.envVar]) || service.defaultPort
+  }
   const extraArgs = process.argv.slice(2)
   const maxAttempts = 20
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    console.log(`[docker:up] Attempt ${attempt}: backend=${apiPort} frontend=${frontendPort}`)
-    const { code, output } = await runDockerComposeUp(apiPort, frontendPort, extraArgs)
+    console.log(
+      `[docker:up] Attempt ${attempt}: ${SERVICES.map((s) => `${s.key}=${ports[s.key]}`).join(' ')}`
+    )
+    const { code, output } = await runDockerComposeUp(ports, extraArgs)
 
     if (code === 0) {
-      const [backendOk, frontendOk] = await Promise.all([
-        isPortPublished(CONTAINERS.backend.name, CONTAINERS.backend.containerPort),
-        isPortPublished(CONTAINERS.frontend.name, CONTAINERS.frontend.containerPort),
-      ])
+      const publishedChecks = await Promise.all(
+        SERVICES.map((s) => isPortPublished(s.containerName, s.containerPort))
+      )
+      const notPublished = SERVICES.filter((_, i) => !publishedChecks[i])
 
-      if (backendOk && frontendOk) {
-        console.log(`[docker:up] Backend:  http://localhost:${apiPort}`)
-        console.log(`[docker:up] Frontend: http://localhost:${frontendPort}`)
+      if (notPublished.length === 0) {
+        for (const service of SERVICES) {
+          console.log(`[docker:up] ${service.key}: http://localhost:${ports[service.key]}`)
+        }
         process.exit(0)
       }
 
-      if (!frontendOk) {
-        frontendPort += 1
-        console.log(`[docker:up] Frontend port didn't actually publish — bumping to ${frontendPort} and retrying...`)
-        await removeContainer('frontend')
-      } else {
-        apiPort += 1
-        console.log(`[docker:up] Backend port didn't actually publish — bumping to ${apiPort} and retrying...`)
-        await removeContainer('backend')
-      }
+      const service = notPublished[0]
+      ports[service.key] += 1
+      console.log(
+        `[docker:up] ${service.key} port didn't actually publish — bumping to ${ports[service.key]} and retrying...`
+      )
+      await removeContainer(service.composeService)
       continue
     }
 
@@ -141,14 +173,14 @@ async function main() {
       process.exit(code)
     }
 
-    if (conflict.isFrontend || conflict.port === frontendPort) {
-      frontendPort += 1
-      console.log(`[docker:up] Port busy — bumping frontend to ${frontendPort} and retrying...`)
-      await removeContainer('frontend')
-    } else if (conflict.isBackend || conflict.port === apiPort) {
-      apiPort += 1
-      console.log(`[docker:up] Port busy — bumping backend to ${apiPort} and retrying...`)
-      await removeContainer('backend')
+    const service =
+      SERVICES.find((s) => s.key === conflict.serviceKey) ??
+      SERVICES.find((s) => ports[s.key] === conflict.port)
+
+    if (service) {
+      ports[service.key] += 1
+      console.log(`[docker:up] Port busy — bumping ${service.key} to ${ports[service.key]} and retrying...`)
+      await removeContainer(service.composeService)
     } else {
       console.error(`[docker:up] Port conflict on ${conflict.port} but could not tell which service — aborting.`)
       process.exit(code)

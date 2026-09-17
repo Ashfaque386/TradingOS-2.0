@@ -1,7 +1,8 @@
 # Windows-native equivalent of scripts/docker-up.js — for machines without
-# Node/pnpm installed. Wraps `docker compose up`: if API_HOST_PORT (default
-# 8000) or FRONTEND_HOST_PORT (default 3000) is already taken, bumps to the
-# next port and retries automatically. Pure PowerShell, no extra tooling.
+# Node/pnpm installed. Wraps `docker compose up`: if any of this stack's
+# four published host ports (backend/frontend/prometheus/grafana) is
+# already taken by something else on the machine, bumps that one port and
+# retries automatically. Pure PowerShell, no extra tooling.
 #
 # This retries against docker compose's *actual* failure rather than
 # pre-checking port availability with a TCP bind test: on Docker Desktop /
@@ -33,10 +34,17 @@
 # or, if PowerShell's execution policy blocks running scripts:
 #   .\scripts\docker-up.cmd -d --build
 
-$BackendContainer = 'TradingOS-2.0-Backend'
-$BackendContainerPort = 8000
-$FrontendContainer = 'TradingOS-2.0-Frontend'
-$FrontendContainerPort = 3000
+# One entry per service this stack publishes a host port for. EnvVar is
+# what docker-compose.yml's `${...}` substitution reads; ComposeService is
+# the service name `docker compose rm -f <name>` takes. ContainerPort is
+# the port to check with `docker port` (grafana's own image always
+# listens on 3000 internally, even though its default host port is 3001).
+$Services = @(
+    @{ Key = 'backend'; ContainerName = 'TradingOS-2.0-Backend'; ContainerPort = 8000; EnvVar = 'API_HOST_PORT'; ComposeService = 'backend'; DefaultPort = 8000 },
+    @{ Key = 'frontend'; ContainerName = 'TradingOS-2.0-Frontend'; ContainerPort = 3000; EnvVar = 'FRONTEND_HOST_PORT'; ComposeService = 'frontend'; DefaultPort = 3000 },
+    @{ Key = 'prometheus'; ContainerName = 'TradingOS-2.0-Prometheus'; ContainerPort = 9090; EnvVar = 'PROMETHEUS_HOST_PORT'; ComposeService = 'prometheus'; DefaultPort = 9090 },
+    @{ Key = 'grafana'; ContainerName = 'TradingOS-2.0-Grafana'; ContainerPort = 3000; EnvVar = 'GRAFANA_HOST_PORT'; ComposeService = 'grafana'; DefaultPort = 3001 }
+)
 
 function Invoke-DockerCommand {
     param([string[]]$DockerArgs)
@@ -57,10 +65,11 @@ function Invoke-DockerCommand {
 }
 
 function Invoke-DockerComposeUp {
-    param([int]$ApiPort, [int]$FrontendPort, [string[]]$ExtraArgs)
+    param([hashtable]$Ports, [string[]]$ExtraArgs)
 
-    $env:API_HOST_PORT = "$ApiPort"
-    $env:FRONTEND_HOST_PORT = "$FrontendPort"
+    foreach ($service in $Services) {
+        [Environment]::SetEnvironmentVariable($service.EnvVar, "$($Ports[$service.Key])")
+    }
 
     $result = Invoke-DockerCommand -DockerArgs (@('compose', 'up') + $ExtraArgs)
     Write-Host $result.Output
@@ -82,65 +91,63 @@ function Remove-ComposeContainer {
     Invoke-DockerCommand -DockerArgs @('compose', 'rm', '-f', $Service) | Out-Null
 }
 
-$apiPort = 8000
-if ($env:API_HOST_PORT) { $apiPort = [int]$env:API_HOST_PORT }
-
-$frontendPort = 3000
-if ($env:FRONTEND_HOST_PORT) { $frontendPort = [int]$env:FRONTEND_HOST_PORT }
+$ports = @{}
+foreach ($service in $Services) {
+    $envValue = [Environment]::GetEnvironmentVariable($service.EnvVar)
+    if ($envValue) { $ports[$service.Key] = [int]$envValue } else { $ports[$service.Key] = $service.DefaultPort }
+}
 
 $extraArgs = $args
 $maxAttempts = 20
 
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-    Write-Host "[docker:up] Attempt ${attempt}: backend=$apiPort frontend=$frontendPort"
-    $result = Invoke-DockerComposeUp -ApiPort $apiPort -FrontendPort $frontendPort -ExtraArgs $extraArgs
+    $portSummary = ($Services | ForEach-Object { "$($_.Key)=$($ports[$_.Key])" }) -join ' '
+    Write-Host "[docker:up] Attempt ${attempt}: $portSummary"
+    $result = Invoke-DockerComposeUp -Ports $ports -ExtraArgs $extraArgs
 
     if ($result.Code -eq 0) {
-        $backendOk = Test-PortPublished -ContainerName $BackendContainer -ContainerPort $BackendContainerPort
-        $frontendOk = Test-PortPublished -ContainerName $FrontendContainer -ContainerPort $FrontendContainerPort
+        $notPublished = @()
+        foreach ($service in $Services) {
+            $ok = Test-PortPublished -ContainerName $service.ContainerName -ContainerPort $service.ContainerPort
+            if (-not $ok) { $notPublished += $service }
+        }
 
-        if ($backendOk -and $frontendOk) {
-            Write-Host "[docker:up] Backend:  http://localhost:$apiPort"
-            Write-Host "[docker:up] Frontend: http://localhost:$frontendPort"
+        if ($notPublished.Count -eq 0) {
+            foreach ($service in $Services) {
+                Write-Host "[docker:up] $($service.Key): http://localhost:$($ports[$service.Key])"
+            }
             exit 0
         }
 
-        if (-not $frontendOk) {
-            $frontendPort++
-            Write-Host "[docker:up] Frontend port didn't actually publish - bumping to $frontendPort and retrying..."
-            Remove-ComposeContainer -Service 'frontend'
-        } else {
-            $apiPort++
-            Write-Host "[docker:up] Backend port didn't actually publish - bumping to $apiPort and retrying..."
-            Remove-ComposeContainer -Service 'backend'
-        }
+        $service = $notPublished[0]
+        $ports[$service.Key]++
+        Write-Host "[docker:up] $($service.Key) port didn't actually publish - bumping to $($ports[$service.Key]) and retrying..."
+        Remove-ComposeContainer -Service $service.ComposeService
         continue
     }
 
     # Only the specific line naming the failing endpoint may be checked for
     # which service it is -- `docker compose up`'s surrounding output lists
     # *every* service's container transitioning through
-    # Creating/Starting/Started (including "TradingOS-2.0-Frontend") even
-    # on a completely unrelated conflict (e.g. Prometheus/Grafana), so
+    # Creating/Starting/Started (including every container name this
+    # stack has) regardless of which one's port actually conflicted, so
     # matching against the whole captured $result.Output previously
-    # misattributed any non-backend/non-frontend port conflict to the
-    # frontend and only ever bumped FrontendPort, silently never fixing
-    # the real conflict.
+    # misattributed any conflict to whichever service happened to be
+    # mentioned first (nearly always the frontend) and only ever bumped
+    # that one port, silently never fixing the real conflict.
     $conflictLine = ($result.Output -split "`n") | Where-Object { $_ -match 'port is already allocated' } | Select-Object -First 1
 
     if ($conflictLine -and $conflictLine -match 'Bind for [\d\.]+:(\d+) failed: port is already allocated') {
         $conflictPort = [int]$Matches[1]
-        $isFrontend = $conflictLine -match 'TradingOS-2\.0-Frontend'
-        $isBackend = $conflictLine -match 'TradingOS-2\.0-Backend'
+        $matchedService = $Services | Where-Object { $conflictLine -match [regex]::Escape($_.ContainerName) } | Select-Object -First 1
+        if (-not $matchedService) {
+            $matchedService = $Services | Where-Object { $ports[$_.Key] -eq $conflictPort } | Select-Object -First 1
+        }
 
-        if ($isFrontend -or $conflictPort -eq $frontendPort) {
-            $frontendPort++
-            Write-Host "[docker:up] Port busy - bumping frontend to $frontendPort and retrying..."
-            Remove-ComposeContainer -Service 'frontend'
-        } elseif ($isBackend -or $conflictPort -eq $apiPort) {
-            $apiPort++
-            Write-Host "[docker:up] Port busy - bumping backend to $apiPort and retrying..."
-            Remove-ComposeContainer -Service 'backend'
+        if ($matchedService) {
+            $ports[$matchedService.Key]++
+            Write-Host "[docker:up] Port busy - bumping $($matchedService.Key) to $($ports[$matchedService.Key]) and retrying..."
+            Remove-ComposeContainer -Service $matchedService.ComposeService
         } else {
             Write-Host "[docker:up] Port conflict on $conflictPort but could not tell which service - aborting."
             exit $result.Code
