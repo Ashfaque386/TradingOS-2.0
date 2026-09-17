@@ -621,3 +621,75 @@ class AuditChainVerifyResponse(BaseModel):
     entries_checked_in_db_chain: int
     db_chain_valid: bool
     db_chain_reason: str | None
+
+
+# --- Phase 12: Notifications & Omni-Channel (Build Spec §18) ----------------
+
+
+class WriteNotificationChannelRequest(BaseModel):
+    """Write-only by design (Build Spec §20), same posture as
+    WriteBrokerCredentialsRequest above -- no response schema echoes
+    bot_token/webhook_url/webhook_secret_token/public_key/signing_secret
+    back. allowed_sender_ids/alert_levels/enabled are not secrets and do
+    come back on NotificationChannelStatusResponse."""
+
+    enabled: bool = True
+    bot_token: str | None = None
+    chat_id: str | None = None
+    webhook_url: str | None = None
+    webhook_secret_token: str | None = None
+    public_key: str | None = None
+    signing_secret: str | None = None
+    allowed_sender_ids: list[str] = Field(default_factory=list)
+    alert_levels: list[str] = Field(default_factory=list)
+
+
+class NotificationChannelStatusResponse(BaseModel):
+    channel: str
+    configured: bool
+    enabled: bool
+    allowed_sender_ids: list[str]
+    alert_levels: list[str]
+
+
+# --- Phase 12: In-app chat (Build Spec §18) ---------------------------------
+
+
+class CreateChatSessionRequest(BaseModel):
+    title: str = Field(default="New chat", max_length=200)
+    model: str | None = None
+
+
+class UpdateChatSessionRequest(BaseModel):
+    title: str | None = None
+    model: str | None = None
+    clear_model: bool = False
+    pinned: bool | None = None
+
+
+class ChatSessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    title: str
+    model: str | None
+    pinned: bool
+    created_by: str
+    created_at: datetime_type
+    updated_at: datetime_type
+
+
+class ChatMessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    role: str
+    content: str
+    provider: str | None
+    aborted: bool
+    created_at: datetime_type
+
+
+class SendChatMessageRequest(BaseModel):
+    content: str = Field(min_length=1)

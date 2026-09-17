@@ -17,6 +17,8 @@ ingestion path") -- a name not in SKILLS is a SkillNotFoundError, never a
 lookup that falls through to loading something.
 """
 
+import inspect
+
 from src.agents.tools.base import SkillFn, SkillNotFoundError, SkillNotGrantedError
 from src.agents.tools.code_lint import code_format_lint
 from src.agents.tools.market_data import market_data_read
@@ -51,11 +53,14 @@ def granted_skills_for(agent_id: str) -> frozenset[str]:
     return frozenset(effective.skills)
 
 
-def execute_skill(agent_id: str, skill_name: str, params: dict | None = None) -> dict:
+async def execute_skill(agent_id: str, skill_name: str, params: dict | None = None) -> dict:
     if skill_name not in SKILLS:
         raise SkillNotFoundError(
             f"no such skill: {skill_name!r} -- only in-repo SKILLS entries can be executed"
         )
     if skill_name not in granted_skills_for(agent_id):
         raise SkillNotGrantedError(f"agent {agent_id!r} is not granted skill {skill_name!r}")
-    return SKILLS[skill_name](params or {})
+    result = SKILLS[skill_name](params or {})
+    if inspect.isawaitable(result):
+        return await result
+    return result

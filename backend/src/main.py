@@ -30,6 +30,7 @@ from src.observability.metrics import trading_holiday_gauge_updater
 from src.orchestration.audit_scheduler import start_audit_scheduler
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
 from src.orchestration.market_data_scheduler import start_market_data_scheduler
+from src.orchestration.notification_scheduler import start_notification_scheduler
 from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
 from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
@@ -141,6 +142,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     )
     trading_holiday_task = trading_holiday_gauge_updater()
 
+    # Daily summary alert (Build Spec §18) -- the one alert level with no
+    # single triggering event; kill-switch/sign-off/go-live fire
+    # synchronously from the real code paths that produce them instead.
+    notification_scheduler = start_notification_scheduler(AsyncSessionLocal)
+
     yield
 
     stall_sweep_task.cancel()
@@ -152,6 +158,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     paper_trading_scheduler.shutdown(wait=False)
     live_trading_scheduler.shutdown(wait=False)
     audit_scheduler.shutdown(wait=False)
+    notification_scheduler.shutdown(wait=False)
     watcher.stop()
 
 

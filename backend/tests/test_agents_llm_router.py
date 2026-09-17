@@ -9,6 +9,7 @@ clients are never exercised here.
 import pytest
 
 from src.agents.llm_router import (
+    AnthropicClient,
     LlmCompletionPayload,
     LlmProviderError,
     LlmRouter,
@@ -133,3 +134,113 @@ async def test_reordering_gateway_config_takes_effect_without_recreating_router(
         await apply_config_text(db, _config_with_order("openai", "anthropic"), source="t")
     result2 = await router.complete(agent_id="ceo-agent", prompt="hi")
     assert result2.provider == LlmProvider.OPENAI
+
+
+# --- Phase 12 (Build Spec §18): preferred_provider + stream_complete -------
+
+
+async def test_preferred_provider_is_tried_first_ahead_of_configured_order(db_session_factory):
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic", "openai"), source="t")
+
+    router = LlmRouter(
+        clients={
+            LlmProvider.ANTHROPIC: _AlwaysSucceeds("from anthropic"),
+            LlmProvider.OPENAI: _AlwaysSucceeds("from openai"),
+        }
+    )
+    result = await router.complete(
+        agent_id="ceo-agent", prompt="hi", preferred_provider=LlmProvider.OPENAI
+    )
+
+    assert result.provider == LlmProvider.OPENAI
+    assert result.text == "from openai"
+
+
+async def test_preferred_provider_still_falls_back_to_the_rest_of_the_chain_on_failure(
+    db_session_factory,
+):
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic", "openai"), source="t")
+
+    router = LlmRouter(
+        clients={
+            LlmProvider.ANTHROPIC: _AlwaysSucceeds("from anthropic"),
+            LlmProvider.OPENAI: _AlwaysFails(),
+        }
+    )
+    result = await router.complete(
+        agent_id="ceo-agent", prompt="hi", preferred_provider=LlmProvider.OPENAI
+    )
+
+    assert (
+        result.provider == LlmProvider.ANTHROPIC
+    ), "preferred provider failing must still fall back"
+
+
+async def test_stream_complete_yields_word_chunks_then_a_final_done_chunk(db_session_factory):
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("openai"), source="t")
+
+    router = LlmRouter(clients={LlmProvider.OPENAI: _AlwaysSucceeds("hello brave world")})
+
+    chunks = [c async for c in router.stream_complete(agent_id="ceo-agent", prompt="hi")]
+
+    assert chunks[-1].done is True
+    assert chunks[-1].provider == LlmProvider.OPENAI
+    assert "".join(c.text for c in chunks) == "hello brave world"
+    assert all(not c.done for c in chunks[:-1])
+
+
+async def test_stream_complete_falls_back_before_any_chunk_is_yielded(db_session_factory):
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic", "openai"), source="t")
+
+    router = LlmRouter(
+        clients={
+            LlmProvider.ANTHROPIC: _AlwaysFails(),
+            LlmProvider.OPENAI: _AlwaysSucceeds("fallback text"),
+        }
+    )
+
+    chunks = [c async for c in router.stream_complete(agent_id="ceo-agent", prompt="hi")]
+
+    assert chunks[-1].provider == LlmProvider.OPENAI
+    assert "".join(c.text for c in chunks) == "fallback text"
+
+
+async def test_stream_complete_exhausted_raises(db_session_factory):
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic", "openai"), source="t")
+
+    router = LlmRouter(
+        clients={LlmProvider.ANTHROPIC: _AlwaysFails(), LlmProvider.OPENAI: _AlwaysFails()}
+    )
+
+    with pytest.raises(LlmRouterExhaustedError):
+        async for _ in router.stream_complete(agent_id="ceo-agent", prompt="hi"):
+            pass
+
+
+async def test_stream_complete_real_anthropic_client_with_no_key_falls_back_before_yielding(
+    db_session_factory,
+):
+    """`_stream_anthropic` (the genuine Anthropic SSE-streaming code
+    path, not a fake) checks for an API key before opening any
+    connection -- this sandbox has no real key/egress (same posture as
+    every other real provider client in this module), so this exercises
+    that real early-exit path and confirms it falls back cleanly."""
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic", "openai"), source="t")
+
+    router = LlmRouter(
+        clients={
+            LlmProvider.ANTHROPIC: AnthropicClient(api_key=None),
+            LlmProvider.OPENAI: _AlwaysSucceeds("real fallback"),
+        }
+    )
+
+    chunks = [c async for c in router.stream_complete(agent_id="ceo-agent", prompt="hi")]
+
+    assert chunks[-1].provider == LlmProvider.OPENAI
+    assert "".join(c.text for c in chunks) == "real fallback"

@@ -72,6 +72,8 @@ from src.engine.validation import validate_strategy_code
 from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
 from src.models.strategy_version import StrategyVersion
+from src.notifications.dispatch import notify
+from src.notifications.types import AlertLevel
 from src.orchestration.transitions import ApprovalGate, conditional_transition
 
 PROMOTION_TRANSITION_TYPE = "backtesting_to_papertrading"
@@ -444,6 +446,17 @@ async def approve_strategy_for_live_eligibility(
     result = evaluate_go_live_readiness(readiness_input)
     if not result.eligible:
         raise GoLiveGateNotPassedError(strategy_id, result.reasons)
+
+    # The deterministic gate passing is itself the notable event (Build
+    # Spec §18's "go-live gate passes") -- fired here, independent of
+    # whether the separate, already-approved-ApprovalRequest check below
+    # also happens to succeed on this same call.
+    await notify(
+        AlertLevel.GO_LIVE,
+        title="Go-Live Readiness Gate passed",
+        body=f"Strategy {strategy_id} satisfied all Go-Live Readiness Gate conditions",
+        details={"strategy_id": str(strategy_id)},
+    )
 
     return await conditional_transition(
         db,

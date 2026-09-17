@@ -18,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.approval_request import ApprovalRequest, ApprovalStatus
+from src.notifications.dispatch import notify
+from src.notifications.types import AlertLevel
 
 
 async def create_approval_request(
@@ -42,6 +44,18 @@ async def create_approval_request(
     db.add(request)
     await db.commit()
     await db.refresh(request)
+
+    await notify(
+        AlertLevel.SIGN_OFF,
+        title=f"New sign-off item: {subject_type}",
+        body=reason or f"{transition_type} for {subject_type} {subject_id} needs approval",
+        details={
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "transition_type": transition_type,
+        },
+    )
+
     return request
 
 

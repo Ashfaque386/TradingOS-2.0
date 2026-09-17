@@ -36,7 +36,7 @@ async def _apply(db_session_factory) -> None:
 async def test_execute_skill_succeeds_for_a_granted_skill(db_session_factory):
     await _apply(db_session_factory)
 
-    result = execute_skill("options-strategy-agent", "option-chain-read")
+    result = await execute_skill("options-strategy-agent", "option-chain-read")
 
     assert result["legs"] == []
 
@@ -49,7 +49,7 @@ async def test_execute_skill_fails_for_ungranted_skill_even_called_directly(db_s
     # not through any API route, to prove the gate lives in execute_skill()
     # itself.
     with pytest.raises(SkillNotGrantedError):
-        execute_skill("options-strategy-agent", "notification-send")
+        await execute_skill("options-strategy-agent", "notification-send")
 
 
 async def test_execute_skill_uses_global_default_grant_when_agent_has_no_override(
@@ -59,16 +59,16 @@ async def test_execute_skill_uses_global_default_grant_when_agent_has_no_overrid
 
     # market-analyst has no entries override -- falls back to
     # agents.defaults.skills = ['market-data-read'].
-    result = execute_skill("market-analyst", "market-data-read")
+    result = await execute_skill("market-analyst", "market-data-read")
     assert "note" in result
 
     with pytest.raises(SkillNotGrantedError):
-        execute_skill("market-analyst", "option-chain-read")
+        await execute_skill("market-analyst", "option-chain-read")
 
 
-def test_execute_skill_rejects_unknown_skill_name():
+async def test_execute_skill_rejects_unknown_skill_name():
     with pytest.raises(SkillNotFoundError):
-        execute_skill("ceo-agent", "not-a-real-skill")
+        await execute_skill("ceo-agent", "not-a-real-skill")
 
 
 def test_no_dynamic_skill_loading_mechanism_exists():

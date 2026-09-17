@@ -22,6 +22,8 @@ from src.engine.risk.kill_switch import (
     evaluate_drawdown,
 )
 from src.models.kill_switch_state import KillSwitchState
+from src.notifications.dispatch import notify
+from src.notifications.types import AlertLevel
 
 __all__ = [
     "KillSwitchTrippedError",
@@ -70,7 +72,8 @@ async def check_drawdown(
     state.threshold_pct = effective_threshold
     state.updated_at = datetime.now(UTC)
 
-    if not state.tripped and evaluation.should_trip:
+    newly_tripped = not state.tripped and evaluation.should_trip
+    if newly_tripped:
         state.tripped = True
         state.tripped_at = datetime.now(UTC)
         state.trip_reason = (
@@ -79,6 +82,18 @@ async def check_drawdown(
 
     await db.commit()
     await db.refresh(state)
+
+    if newly_tripped:
+        # Best-effort, outside the transaction that just committed the
+        # trip itself -- a notification-send failure must never make the
+        # trip appear to not have happened.
+        await notify(
+            AlertLevel.KILL_SWITCH,
+            title=f"Kill switch tripped ({mode})",
+            body=state.trip_reason or "drawdown threshold breached",
+            details={"mode": mode, "threshold_pct": effective_threshold},
+        )
+
     return state
 
 

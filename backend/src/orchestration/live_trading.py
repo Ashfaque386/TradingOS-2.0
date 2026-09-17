@@ -87,6 +87,8 @@ from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.order import Order
 from src.models.strategy import Strategy, StrategyStatus
 from src.models.trade import Trade
+from src.notifications.dispatch import notify
+from src.notifications.types import AlertLevel
 from src.orchestration.kill_switch import assert_not_tripped
 from src.orchestration.risk_gate import OrderIntentRejectedError, create_order_intent
 
@@ -425,6 +427,17 @@ async def generate_live_order_intent(
     await db.refresh(intent)
 
     if batch is None:
+        # Build Spec §18's explicit "sign-off items -- including live
+        # order intents from Phase 9" -- only the genuinely-pending case;
+        # a batch-consumed intent below skips straight to approved and
+        # was never a human sign-off item in the first place.
+        await notify(
+            AlertLevel.SIGN_OFF,
+            title=f"Live order intent pending approval: {intent.symbol}",
+            body=f"{intent.side.upper()} {intent.quantity} {intent.symbol} ({intent.intent_type}), "
+            f"expires {intent.expires_at.isoformat()}",
+            details={"intent_id": str(intent.id), "strategy_id": str(strategy.id)},
+        )
         return intent
 
     if adapter is None or regulatory_provider is None:
