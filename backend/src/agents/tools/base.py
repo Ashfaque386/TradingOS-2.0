@@ -1,8 +1,13 @@
 """Shared types for the Skill Registry (Build Spec §16)."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
-SkillFn = Callable[[dict], dict]
+# Phase 12 (Build Spec §18): notification-send genuinely needs real
+# network I/O, so a skill function may now be sync (every other entry --
+# deterministic/stub, no I/O) or async (notification-send alone) --
+# src.agents.tools.registry.execute_skill awaits the result only when
+# it's awaitable, so every existing sync skill is unaffected.
+SkillFn = Callable[[dict], "dict | Awaitable[dict]"]
 
 
 class SkillError(Exception):

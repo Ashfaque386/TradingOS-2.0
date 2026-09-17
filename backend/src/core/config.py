@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     # src.observability.metrics compares every real dispatch against.
     order_dispatch_latency_budget_ms: float = 500.0
 
+    # Phase 12 (Build Spec §18): encrypted local store for notification
+    # channel config (Telegram/Discord/Slack bot tokens, webhook URLs,
+    # inbound signing secrets, verified-sender allowlists) -- same Fernet
+    # pattern and same encryption key as Phase 8's broker-credentials
+    # store, just a separate file so the two domains never share one
+    # ciphertext blob. Relative to CWD, same convention as
+    # secrets_store_path above.
+    notification_channel_store_path: str = "secrets/notification_channels.enc"
+
 
 @lru_cache
 def get_settings() -> Settings:

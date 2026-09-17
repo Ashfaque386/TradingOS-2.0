@@ -52,7 +52,7 @@ async def run_heartbeat(db: AsyncSession, agent_id: str) -> HeartbeatLog:
     details: dict = {"checked_at": time.time()}
     status = HeartbeatStatus.OK
     try:
-        details["market_data"] = execute_skill(agent_id, "market-data-read")
+        details["market_data"] = await execute_skill(agent_id, "market-data-read")
     except Exception as exc:  # noqa: BLE001 - any self-check failure IS the alert
         status = HeartbeatStatus.ALERT
         details["error"] = str(exc)

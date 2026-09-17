@@ -15,6 +15,8 @@ from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
 from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.base import Base
+from src.models.chat_message import ChatMessage, ChatMessageRole
+from src.models.chat_session import ChatSession
 from src.models.corporate_action import CorporateAction
 from src.models.daily_signal import DailySignal
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
@@ -69,6 +71,9 @@ __all__ = [
     "BacktestRun",
     "BacktestStatus",
     "Base",
+    "ChatMessage",
+    "ChatMessageRole",
+    "ChatSession",
     "ConfigVersionStatus",
     "CorporateAction",
     "DailySignal",

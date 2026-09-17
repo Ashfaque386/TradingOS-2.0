@@ -8,15 +8,18 @@ from src.api.routes import (
     auth,
     backtests,
     broker_credentials,
+    chat,
     kill_switch,
     live_trading,
     market_data,
+    notification_channels,
     orchestration,
     paper_trading,
     risk,
     risk_limits,
     shadow_mode,
     strategies,
+    webhooks,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -36,3 +39,6 @@ api_router.include_router(shadow_mode.router)
 api_router.include_router(live_trading.router)
 api_router.include_router(market_data.router)
 api_router.include_router(audit.router)
+api_router.include_router(notification_channels.router)
+api_router.include_router(webhooks.router)
+api_router.include_router(chat.router)
