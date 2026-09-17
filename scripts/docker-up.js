@@ -68,12 +68,24 @@ function isPortPublished(containerName, containerPort) {
 }
 
 function parsePortConflict(output) {
-  const match = output.match(/Bind for [\d.]+:(\d+) failed: port is already allocated/)
+  // Only the specific line naming the failing endpoint may be checked for
+  // which service it is — `docker compose up`'s surrounding output lists
+  // *every* service's container transitioning through
+  // Creating/Starting/Started (including "TradingOS-2.0-Frontend") on a
+  // completely unrelated conflict (e.g. Prometheus/Grafana), so matching
+  // against the whole captured blob previously misattributed any
+  // non-backend/non-frontend port conflict to the frontend and only ever
+  // bumped FRONTEND_HOST_PORT, silently never fixing the real conflict.
+  const conflictLine = output
+    .split('\n')
+    .find((line) => /port is already allocated/.test(line))
+  if (!conflictLine) return null
+  const match = conflictLine.match(/Bind for [\d.]+:(\d+) failed: port is already allocated/)
   if (!match) return null
   return {
     port: Number(match[1]),
-    isFrontend: /TradingOS-2\.0-Frontend/i.test(output),
-    isBackend: /TradingOS-2\.0-Backend/i.test(output),
+    isFrontend: /TradingOS-2\.0-Frontend/i.test(conflictLine),
+    isBackend: /TradingOS-2\.0-Backend/i.test(conflictLine),
   }
 }
 

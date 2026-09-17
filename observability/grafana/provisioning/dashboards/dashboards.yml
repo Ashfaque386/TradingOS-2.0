@@ -1,7 +1,9 @@
-# Auto-loads every dashboard JSON in ../../dashboards/ on Grafana boot --
-# no manual import needed, and re-syncs on file change (updatable: false
-# means "don't let the UI edit-and-save silently diverge from the file on
-# disk," not "can't be edited" -- edit the JSON file and it reloads).
+# Auto-loads every dashboard JSON in ./json/ (this directory's own json/
+# subdirectory, not a separate top-level mount -- see docker-compose.yml's
+# grafana service for why) on Grafana boot -- no manual import needed, and
+# re-syncs on file change (updatable: false means "don't let the UI
+# edit-and-save silently diverge from the file on disk," not "can't be
+# edited" -- edit the JSON file and it reloads).
 apiVersion: 1
 
 providers:
