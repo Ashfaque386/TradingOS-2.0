@@ -1,0 +1,14 @@
+{
+  "_comment": "Movable/lunisolar NSE trading holidays only (Holi, Ram Navami, Eid, Ganesh Chaturthi, Dussehra, Diwali, Guru Nanak Jayanti, Good Friday, etc.) -- fixed-date national holidays (Republic Day, Maharashtra Day, Independence Day, Gandhi Jayanti, Christmas) are generated in code (src/data/nse_calendar.py) and do not need to be listed here. This file is a best-effort reference seeded from NSE's publicly announced 2025 trading-holiday circular; it is NOT re-verified against a live NSE source by this codebase and must be reviewed/updated by an operator at least once a year against NSE's actual published circular before being treated as authoritative beyond development and testing -- see src/data/nse_calendar.py's module docstring for why exact dates are not fabricated in code for years without a verified circular.",
+  "holidays": [
+    "2025-02-26",
+    "2025-03-14",
+    "2025-03-31",
+    "2025-04-10",
+    "2025-04-18",
+    "2025-08-27",
+    "2025-10-21",
+    "2025-10-22",
+    "2025-11-05"
+  ]
+}

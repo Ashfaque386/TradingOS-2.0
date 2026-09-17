@@ -53,6 +53,10 @@ dependencies = [
     # src/security/secrets_store.py imports cryptography.fernet directly
     # rather than relying on another package's transitive dependency.
     "cryptography>=43,<44",
+    # Phase 10 (Build Spec §14): the DuckDB + Parquet data lake. DuckDB
+    # writes/reads Parquet itself (COPY ... (FORMAT PARQUET) / read_parquet)
+    # so no separate pyarrow dependency is needed just for storage.
+    "duckdb>=1.1,<2.0",
 ]
 
 [project.scripts]

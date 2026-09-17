@@ -15,13 +15,17 @@ from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
 from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.base import Base
+from src.models.corporate_action import CorporateAction
 from src.models.daily_signal import DailySignal
+from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
+from src.models.instrument import Instrument
 from src.models.kill_switch_state import KillSwitchState
 from src.models.live_batch_authorization import LiveBatchAuthorization
 from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
 from src.models.live_trading_subscription import LiveTradingSubscription
+from src.models.market_data_provenance import MarketDataProvenance
 from src.models.optimization_run import OptimizationRun
 from src.models.order import Order
 from src.models.organization_run import (
@@ -66,16 +70,20 @@ __all__ = [
     "BacktestStatus",
     "Base",
     "ConfigVersionStatus",
+    "CorporateAction",
     "DailySignal",
+    "DatasetFreshnessRecord",
     "FailureClass",
     "HeartbeatLog",
     "HeartbeatStatus",
+    "Instrument",
     "InstrumentClass",
     "KillSwitchState",
     "LiveBatchAuthorization",
     "LiveOrderIntent",
     "LivePosition",
     "LiveTradingSubscription",
+    "MarketDataProvenance",
     "OptimizationRun",
     "Order",
     "OrganizationRun",
