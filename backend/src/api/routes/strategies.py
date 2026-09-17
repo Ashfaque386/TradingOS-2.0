@@ -48,6 +48,7 @@ _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 _LIVE_SIGNOFF_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.RISK_MANAGER]
 
 register_policy("POST", "/api/v1/strategies", roles=_OPERATOR_ROLES)
+register_policy("GET", "/api/v1/strategies", roles=list(Role))
 register_policy("GET", "/api/v1/strategies/{strategy_id}", roles=list(Role))
 register_policy("POST", "/api/v1/strategies/{strategy_id}/suggestions", roles=list(Role))
 register_policy(
@@ -105,6 +106,17 @@ async def create_strategy_endpoint(
         created_by=str(current_user.id),
     )
     return await _load_strategy_response(db, strategy.id)
+
+
+@router.get("")
+async def list_strategies_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[StrategyResponse]:
+    strategy_ids = (
+        (await db.execute(select(Strategy.id).order_by(Strategy.created_at.desc()))).scalars().all()
+    )
+    return [await _load_strategy_response(db, strategy_id) for strategy_id in strategy_ids]
 
 
 @router.get("/{strategy_id}")

@@ -2,16 +2,15 @@
 
 import { FormEvent, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, ArrowRight, Check, Loader2, LockKeyhole, Mail, Shield, Sparkles, WifiOff } from 'lucide-react'
-import { ROLES, roleLabel, useAuth, type MockRole } from '@/components/auth/auth-provider'
+import { AlertCircle, ArrowRight, LockKeyhole, Loader2, Mail, Shield, Sparkles, WifiOff } from 'lucide-react'
+import { useAuth } from '@/components/auth/auth-provider'
+import { ApiError } from '@/lib/api'
 
 export default function LoginPage() {
   const router = useRouter()
-  const { isAuthenticated, signIn } = useAuth()
+  const { isAuthenticated, isLoading, signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [remember, setRemember] = useState(true)
-  const [role, setRole] = useState<MockRole>('PortfolioManager')
   const [status, setStatus] = useState<'idle' | 'loading' | 'invalid' | 'network'>('idle')
   const [powerSave, setPowerSave] = useState(false)
 
@@ -20,29 +19,26 @@ export default function LoginPage() {
   }, [])
 
   useEffect(() => {
-    if (isAuthenticated) router.replace('/')
-  }, [isAuthenticated, router])
+    if (!isLoading && isAuthenticated) router.replace('/')
+  }, [isLoading, isAuthenticated, router])
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setStatus('idle')
     if (!email || !/^\S+@\S+\.\S+$/.test(email) || !password) {
       setStatus('invalid')
       return
     }
-    if (email === 'offline@tradingos.ai') {
-      setStatus('network')
-      return
-    }
-    if (email !== 'demo@tradingos.ai' || password !== 'tradingos') {
-      setStatus('invalid')
-      return
-    }
     setStatus('loading')
-    window.setTimeout(() => {
-      signIn(role)
+    try {
+      await signIn(email, password)
       router.push('/')
-    }, 750)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setStatus('invalid')
+      } else {
+        setStatus('network')
+      }
+    }
   }
 
   return (
@@ -58,12 +54,10 @@ export default function LoginPage() {
             <form className="flex flex-col gap-5" onSubmit={handleSubmit} noValidate>
               <label className="auth-field"><span>Email address</span><div className="auth-input-wrap"><Mail className="size-4" /><input aria-label="Email address" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tradingos.ai" autoComplete="email" /></div></label>
               <label className="auth-field"><span>Password</span><div className="auth-input-wrap"><LockKeyhole className="size-4" /><input aria-label="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your access key" autoComplete="current-password" /></div></label>
-              <div className="flex items-center justify-between gap-3"><label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} className="size-3.5 accent-cyan-400" />Remember this device</label><span className="font-mono text-[10px] uppercase tracking-wider text-cyan-300/60">Session: {remember ? '30 days' : 'browser'}</span></div>
               {status === 'invalid' && <div className="auth-alert auth-alert-error" role="alert"><AlertCircle className="size-4 shrink-0" /><span>{email || password ? 'Invalid credentials. Check your email and password.' : 'Enter a valid email and password to continue.'}</span></div>}
               {status === 'network' && <div className="auth-alert auth-alert-network" role="alert"><WifiOff className="size-4 shrink-0" /><span>Connectivity error. The neural gateway is unreachable. Try again.</span></div>}
               <button type="submit" disabled={status === 'loading'} className="auth-submit">{status === 'loading' ? <><Loader2 className="size-4 animate-spin" />Authenticating signal...</> : <>Initialize session<ArrowRight className="size-4" /></>}</button>
             </form>
-            <div className="mt-7 border-t border-white/10 pt-5"><div className="flex items-center justify-between"><p className="eyebrow text-[9px]">DEVELOPER ROLE PREVIEW</p><span className="flex items-center gap-1 text-[10px] text-emerald-300"><Check className="size-3" /> mock mode</span></div><div className="mt-3 grid grid-cols-2 gap-2">{ROLES.map((item) => <button type="button" key={item} onClick={() => setRole(item)} className={`role-option ${role === item ? 'role-option-active' : ''}`}>{roleLabel(item)}</button>)}</div><p className="mt-3 text-[11px] leading-5 text-muted-foreground">Demo access: <span className="font-mono text-cyan-200">demo@tradingos.ai</span> / <span className="font-mono text-cyan-200">tradingos</span></p></div>
           </div>
         </section>
         <p className="mt-5 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/50">Encrypted session · No MFA configured · NSE / BSE intelligence fabric</p>

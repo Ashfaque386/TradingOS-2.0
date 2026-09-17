@@ -1,34 +1,82 @@
 'use client'
 
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import {
+  type CurrentUser,
+  type Role,
+  getMe,
+  isAuthenticated as hasStoredToken,
+  login as apiLogin,
+  logout as apiLogout,
+} from '@/lib/api'
 
-export const ROLES = ['SystemAdministrator', 'PortfolioManager', 'RiskManager', 'ReadOnlyAuditor'] as const
-export type MockRole = (typeof ROLES)[number]
+export const ROLES: Role[] = ['SystemAdministrator', 'PortfolioManager', 'RiskManager', 'ReadOnlyAuditor']
+
+const FALLBACK_ROLE: Role = 'ReadOnlyAuditor'
 
 type AuthContextValue = {
   isAuthenticated: boolean
-  role: MockRole
-  setRole: (role: MockRole) => void
-  signIn: (role: MockRole) => void
-  signOut: () => void
+  isLoading: boolean
+  user: CurrentUser | null
+  role: Role
+  signIn: (email: string, password: string) => Promise<void>
+  signOut: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [role, setRole] = useState<MockRole>('PortfolioManager')
+  const [user, setUser] = useState<CurrentUser | null>(null)
+  // Starts true so a page wrapped in ShellLayout doesn't flash its
+  // protected content (or bounce to /login) before a stored refresh token
+  // has had a chance to resolve into a real session.
+  const [isLoading, setIsLoading] = useState(true)
 
-  const value = useMemo(() => ({
-    isAuthenticated,
-    role,
-    setRole,
-    signIn: (nextRole: MockRole) => {
-      setRole(nextRole)
-      setIsAuthenticated(true)
-    },
-    signOut: () => setIsAuthenticated(false),
-  }), [isAuthenticated, role])
+  useEffect(() => {
+    let cancelled = false
+    async function rehydrate() {
+      if (!hasStoredToken()) {
+        setIsLoading(false)
+        return
+      }
+      try {
+        const me = await getMe()
+        if (!cancelled) setUser(me)
+      } catch {
+        // Stored access token is expired/invalid and the refresh (tried
+        // automatically inside getMe's underlying fetch) also failed --
+        // there is no valid session to rehydrate.
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    }
+    rehydrate()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const signIn = useCallback(async (email: string, password: string) => {
+    const me = await apiLogin(email, password)
+    setUser(me)
+  }, [])
+
+  const signOut = useCallback(async () => {
+    await apiLogout()
+    setUser(null)
+  }, [])
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      isAuthenticated: user !== null,
+      isLoading,
+      user,
+      role: user?.role ?? FALLBACK_ROLE,
+      signIn,
+      signOut,
+    }),
+    [user, isLoading, signIn, signOut],
+  )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
@@ -39,6 +87,6 @@ export function useAuth() {
   return value
 }
 
-export function roleLabel(role: MockRole) {
+export function roleLabel(role: Role) {
   return role.replace(/([a-z])([A-Z])/g, '$1 $2')
 }

@@ -13,8 +13,9 @@ import {
   ShieldCheck,
   SquareArrowOutUpRight,
 } from 'lucide-react'
-import { NAV_TARGETS, SEARCH_ENTITIES } from '@/lib/search-index'
+import { NAV_TARGETS, type SearchEntity } from '@/lib/search-index'
 import { PALETTES, usePreferences } from '@/components/providers/preferences-provider'
+import { getAgents, isAuthenticated, listOrders, listStrategies } from '@/lib/api'
 
 export const OPEN_COMMAND_PALETTE_EVENT = 'tradingos:open-command-palette'
 
@@ -37,6 +38,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
+  const [entities, setEntities] = useState<SearchEntity[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -89,7 +91,7 @@ export function CommandPalette() {
       run: () => go(target.href),
     }))
 
-    const entities: Command[] = SEARCH_ENTITIES.map((entity) => ({
+    const entityCommands: Command[] = entities.map((entity) => ({
       id: `entity-${entity.kind}-${entity.name}`,
       label: entity.name,
       hint: entity.detail,
@@ -112,8 +114,8 @@ export function CommandPalette() {
       },
     }))
 
-    return [...actions, ...nav, ...entities, ...themes]
-  }, [powerSave, palette, go, togglePowerSave, setPalette, close])
+    return [...actions, ...nav, ...entityCommands, ...themes]
+  }, [powerSave, palette, go, togglePowerSave, setPalette, close, entities])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -158,6 +160,44 @@ export function CommandPalette() {
       const timer = window.setTimeout(() => inputRef.current?.focus(), 10)
       return () => window.clearTimeout(timer)
     }
+  }, [open])
+
+  // Loaded on open, not on mount -- the palette is mounted globally
+  // (including on /login, before any token exists), and there's no reason
+  // to hit these endpoints until the user actually opens the palette.
+  useEffect(() => {
+    if (!open || !isAuthenticated()) return
+    let cancelled = false
+    async function load() {
+      const [agentsRes, strategiesRes, ordersRes] = await Promise.allSettled([
+        getAgents(),
+        listStrategies(),
+        listOrders('both'),
+      ])
+      if (cancelled) return
+      const next: SearchEntity[] = []
+      if (agentsRes.status === 'fulfilled') {
+        for (const agent of agentsRes.value) {
+          next.push({ kind: 'agent', name: agent.display_name, detail: `${agent.department} agent`, href: '/agent-fleet' })
+        }
+      }
+      if (strategiesRes.status === 'fulfilled') {
+        for (const strategy of strategiesRes.value) {
+          next.push({ kind: 'strategy', name: strategy.name, detail: `${strategy.instrument_class} · ${strategy.status}`, href: '/strategies' })
+        }
+      }
+      if (ordersRes.status === 'fulfilled') {
+        const seen = new Set<string>()
+        for (const order of ordersRes.value.slice(0, 30)) {
+          if (seen.has(order.symbol)) continue
+          seen.add(order.symbol)
+          next.push({ kind: 'order', name: order.symbol, detail: `${order.mode} · ${order.status}`, href: '/orders' })
+        }
+      }
+      setEntities(next)
+    }
+    load()
+    return () => { cancelled = true }
   }, [open])
 
   useEffect(() => {

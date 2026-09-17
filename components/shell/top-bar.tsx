@@ -12,7 +12,8 @@ import {
   Battery,
   ChevronDown,
 } from 'lucide-react'
-import { ROLES, roleLabel, type MockRole } from '@/components/auth/auth-provider'
+import { roleLabel } from '@/components/auth/auth-provider'
+import type { Role } from '@/lib/api'
 import { PALETTES } from '@/components/providers/preferences-provider'
 import { OPEN_COMMAND_PALETTE_EVENT } from '@/components/shell/command-palette'
 
@@ -29,8 +30,7 @@ interface TopBarProps {
   systemHealth?: 'healthy' | 'degraded' | 'critical'
   userName?: string
   onUserMenu?: () => void
-  role?: MockRole
-  onRoleChange?: (role: MockRole) => void
+  role?: Role
   onLogout?: () => void
 }
 
@@ -43,8 +43,7 @@ export function TopBar({
   systemHealth = 'healthy',
   userName = 'User',
   onUserMenu,
-  role = 'PortfolioManager',
-  onRoleChange,
+  role = 'ReadOnlyAuditor',
   onLogout,
 }: TopBarProps) {
   const [showPaletteMenu, setShowPaletteMenu] = useState(false)
@@ -181,12 +180,6 @@ export function TopBar({
               <div className="px-3 py-2 border-b border-[var(--glass-border)] text-xs text-muted-foreground">
                 <span className="block">{userName}</span>
                 <span className="mt-1 block font-mono text-[9px] uppercase tracking-wider text-cyan-300/70">{roleLabel(role)}</span>
-              </div>
-              <div className="border-b border-[var(--glass-border)] px-3 py-2">
-                <span className="eyebrow text-[8px]">DEV ROLE SWITCHER</span>
-                <div className="mt-2 flex flex-col gap-1">
-                  {ROLES.map((item) => <button key={item} onClick={() => onRoleChange?.(item)} className={`w-full rounded px-2 py-1.5 text-left text-[11px] transition-colors ${role === item ? 'bg-cyan-300/15 text-cyan-200' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'}`}>{roleLabel(item)}</button>)}
-                </div>
               </div>
               <button className="w-full text-left px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200">
                 Profile

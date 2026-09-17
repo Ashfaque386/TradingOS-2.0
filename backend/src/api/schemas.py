@@ -65,6 +65,9 @@ class RunResponse(BaseModel):
     failure_class: FailureClass | None
     source_run_id: uuid.UUID | None
     error: str | None
+    created_at: datetime_type
+    started_at: datetime_type | None
+    completed_at: datetime_type | None
     tasks: list[TaskSummaryResponse] = []
 
 
@@ -102,11 +105,13 @@ class StrategyVersionResponse(BaseModel):
 
     id: uuid.UUID
     version_number: int
+    code: str
     static_validation_passed: bool
     static_validation_errors: list[str] | None
     sandbox_passed: bool | None
     sandbox_result: dict | None
     options_legs: dict | None
+    created_at: datetime_type
 
 
 class StrategyResponse(BaseModel):
@@ -150,7 +155,10 @@ class ApprovalRequestResponse(BaseModel):
     transition_type: str
     status: str
     requested_by: str | None
+    reason: str | None
     decided_by: str | None
+    decided_at: datetime_type | None
+    created_at: datetime_type
 
 
 # --- Backtesting & Optimization (Build Spec §10) ---------------------------
@@ -189,11 +197,16 @@ class BacktestRunResponse(BaseModel):
     id: uuid.UUID
     strategy_version_id: uuid.UUID
     symbol: str
+    start_date: date_type
+    end_date: date_type
     status: str
     refusal_reason: str | None
     metrics: dict | None
+    daily_returns: list | None
+    trade_pnls: list[float] | None
     walk_forward_result: dict | None
     monte_carlo_result: dict | None
+    created_at: datetime_type
 
 
 class WalkForwardRequest(BaseModel):
@@ -270,10 +283,14 @@ class RiskLimitChangeResponse(BaseModel):
     id: uuid.UUID
     limit_name: str
     proposed_value: float
+    reason: str | None
     status: str
     staged_by: str
+    staged_at: datetime_type
     confirmed_by: str | None
+    confirmed_at: datetime_type | None
     applied_by: str | None
+    applied_at: datetime_type | None
 
 
 class RiskLimitResponse(BaseModel):
@@ -532,6 +549,11 @@ class MarketPulseResponse(BaseModel):
     india_vix: float
     sector_indices_change_pct: dict[str, float]
     global_indices_change_pct: dict[str, float]
+
+
+class MarketHoursResponse(BaseModel):
+    is_open: bool
+    as_of: str
 
 
 class FreshnessRecordResponse(BaseModel):
