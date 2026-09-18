@@ -156,6 +156,23 @@ export async function login(email: string, password: string): Promise<CurrentUse
   return getMe()
 }
 
+// The very first user ever registered on a fresh system automatically
+// becomes SystemAdministrator (src/api/routes/auth.py); every user after
+// that is capped at ReadOnlyAuditor, since granting higher roles is an
+// admin action, not self-service. /auth/register returns the created
+// user only (no tokens), so this logs in right after to hand back an
+// authenticated session in one step -- the password never touches disk,
+// here or on the backend: it's hashed immediately and only the hash is
+// persisted.
+export async function register(email: string, password: string): Promise<CurrentUser> {
+  await request<{ id: string; email: string; role: Role; is_active: boolean }>(
+    '/api/v1/auth/register',
+    { method: 'POST', body: JSON.stringify({ email, password }) },
+    false,
+  )
+  return login(email, password)
+}
+
 export async function getMe(): Promise<CurrentUser> {
   const data = await apiGet<{ id: string; email: string; role: Role; is_active: boolean }>(
     '/api/v1/auth/me',

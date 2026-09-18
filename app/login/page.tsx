@@ -58,6 +58,10 @@ export default function LoginPage() {
               {status === 'network' && <div className="auth-alert auth-alert-network" role="alert"><WifiOff className="size-4 shrink-0" /><span>Connectivity error. The neural gateway is unreachable. Try again.</span></div>}
               <button type="submit" disabled={status === 'loading'} className="auth-submit">{status === 'loading' ? <><Loader2 className="size-4 animate-spin" />Authenticating signal...</> : <>Initialize session<ArrowRight className="size-4" /></>}</button>
             </form>
+            <p className="mt-6 text-center text-sm text-muted-foreground">
+              No account yet?{' '}
+              <a href="/register" className="text-cyan-300 hover:text-cyan-200">Create one</a>
+            </p>
           </div>
         </section>
         <p className="mt-5 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/50">Encrypted session · No MFA configured · NSE / BSE intelligence fabric</p>
