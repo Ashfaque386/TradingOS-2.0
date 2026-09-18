@@ -16,6 +16,7 @@ reason about in isolation.
 """
 
 import ast
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,7 +69,50 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
 # eval/exec/compile/__import__ are the standard dynamic-code-execution
 # surface; banning them as *calls* (not just imports) matters because
 # they're builtins, not things that need to be imported first.
-BANNED_CALL_NAMES: frozenset[str] = frozenset({"eval", "exec", "compile", "__import__"})
+#
+# getattr/setattr/delattr/vars/globals/locals are banned for a different
+# reason: reflection, not code execution. Confirmed live (adversarial
+# testing against the real sandbox worker) that `run_backtest` code with
+# NO banned import and NO banned call from the set above can still fully
+# escape restricted_exec.py's guards -- `__import__.__globals__["_real_import"]`
+# recovers the unrestricted `__import__`, and `open.__closure__[i].cell_contents`
+# recovers the unrestricted `open`, both via ordinary dot-attribute access
+# on ordinary Python objects, no import or eval/exec needed. Banning dunder
+# *attribute access* below (BANNED_ATTRIBUTE_PATTERN) closes the dot-notation
+# form of this; banning these calls closes the `getattr(open, "__closure__")`
+# form that would otherwise dodge the attribute-node scan via a string
+# literal (or a computed one -- the ban is on the call itself, not on
+# whatever string it would have been passed, so string concatenation/
+# obfuscation doesn't reopen this).
+BANNED_CALL_NAMES: frozenset[str] = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "getattr",
+        "setattr",
+        "delattr",
+        "vars",
+        "globals",
+        "locals",
+    }
+)
+
+# Any dunder attribute access (`.attr` both starting and ending with `__`)
+# is banned outright -- `run_backtest(data, config) -> dict` has no
+# legitimate need to ever write `x.__globals__`, `x.__closure__`,
+# `x.__class__`, `x.__base__`, `x.__subclasses__`, `x.__code__`,
+# `x.__dict__`, `x.__mro__`, etc. in source form (the interpreter still
+# invokes dunder *methods* implicitly for operators/`len()`/iteration/etc.
+# -- this only bans *explicit* dunder attribute access in the code's own
+# source, which is exactly the sandbox-escape surface and not something a
+# real strategy implementation writes). This one rule closes every
+# reflection-based escape found during adversarial testing, including
+# `().__class__.__base__.__subclasses__()`, in a single general check
+# rather than an allowlist of specific dangerous names that new Python
+# versions or object types could grow more of over time.
+_DUNDER_ATTRIBUTE_PATTERN = re.compile(r"^__.+__$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +158,9 @@ def check_ast(code: str) -> list[str]:
             name = _call_target_name(node)
             if name in BANNED_CALL_NAMES:
                 errors.append(f"banned call: {name}()")
+        elif isinstance(node, ast.Attribute):
+            if _DUNDER_ATTRIBUTE_PATTERN.match(node.attr):
+                errors.append(f"banned attribute access: .{node.attr}")
     return errors
 
 

@@ -36,7 +36,8 @@ import time
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from src.engine.sandbox.restricted_exec import build_restricted_globals
+from src.engine.sandbox.restricted_exec import SandboxPermissionError, build_restricted_globals
+from src.engine.validation import check_ast
 
 DEFAULT_MEMORY_BYTES = 512 * 1024 * 1024
 _memory_limit_applied = False
@@ -83,6 +84,20 @@ def run_one(request: dict) -> dict:
             cpu_seconds=int(limits.get("cpu_seconds", 10)),
             memory_bytes=int(limits.get("memory_bytes", DEFAULT_MEMORY_BYTES)),
         )
+        # Independent re-check of validation.py's own ban-list, not a call
+        # into a shared "trust the caller already did this" path: this
+        # worker is the last line of defense if validate_strategy_code()
+        # was skipped, or missed something, before the code ever reached
+        # here (see restricted_exec.py's module docstring). In particular
+        # this re-applies the dunder-attribute-access ban that closes the
+        # `__import__.__globals__[...]` / `open.__closure__[...]` /
+        # `().__class__.__base__.__subclasses__()` reflection escapes found
+        # during adversarial testing -- none of which trip the import guard
+        # or the restricted `open`, since they use neither.
+        ast_errors = check_ast(code)
+        if ast_errors:
+            raise SandboxPermissionError(f"sandbox: rejected by ban-list re-check: {ast_errors}")
+
         restricted_globals = build_restricted_globals(scratch_dir=scratch_dir, data_dir=data_dir)
         with redirect_stdout(captured):
             exec(compile(code, "<strategy>", "exec"), restricted_globals)
