@@ -49,7 +49,13 @@ services:
       SECRETS_STORE_PATH: /app/secrets/broker_credentials.enc
     ports:
       # API_HOST_PORT always publishes — it's the only way to reach the app.
-      - "${API_HOST_PORT:-8000}:8000"
+      # BIND_HOST defaults to loopback-only: this port serves the entire
+      # Agent Gateway config/CLI-mutation surface (Build Spec §21-22), not
+      # just paper-trading demo data, so it should not be reachable from
+      # other machines on the network by default. Set BIND_HOST=0.0.0.0 (or
+      # a specific interface IP) only if you deliberately want that, e.g.
+      # reaching the Console from another device on your own LAN.
+      - "${BIND_HOST:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
       # POSTGRES_HOST_PORT is opt-in: Postgres and the API talk to each
       # other over localhost inside this one container regardless, so
       # nothing needs port 5432 published on the host by default — that's
@@ -93,7 +99,11 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_HOST_PORT:-3000}:3000"
+      # Same BIND_HOST default as the backend above (loopback-only) -- the
+      # Console is the human control surface for the whole system
+      # (strategy approvals, kill switch, Agent Gateway config), so it
+      # shouldn't be reachable off the host by default either.
+      - "${BIND_HOST:-127.0.0.1}:${FRONTEND_HOST_PORT:-3000}:3000"
 
   redis:
     image: redis:7-alpine
@@ -155,8 +165,10 @@ services:
       # Published by default (unlike Postgres/Redis/Temporal): an operator
       # needs to reach Prometheus's own UI (rule/alert status) directly,
       # the same "something outside the container needs it" reasoning
-      # that already applies to the API and frontend ports.
-      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+      # that already applies to the API and frontend ports. Same BIND_HOST
+      # default (loopback-only) as those, though -- Prometheus has no auth
+      # of its own at all.
+      - "${BIND_HOST:-127.0.0.1}:${PROMETHEUS_HOST_PORT:-9090}:9090"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/healthy"]
       interval: 15s
@@ -195,8 +207,11 @@ services:
       # Default 3001, not 3000 — 3000 is already the frontend's default
       # (FRONTEND_HOST_PORT), and this repo's own `docker-up.js`/`.ps1`
       # port-conflict story (see docs/CLAUDE.md's Phase 1 entry) is exactly
-      # what picking a colliding default here would reintroduce.
-      - "${GRAFANA_HOST_PORT:-3001}:3000"
+      # what picking a colliding default here would reintroduce. Same
+      # BIND_HOST default (loopback-only) as the others -- especially
+      # relevant here since Grafana ships with an admin/admin default
+      # login until someone changes it.
+      - "${BIND_HOST:-127.0.0.1}:${GRAFANA_HOST_PORT:-3001}:3000"
 
 volumes:
   tradingos-2.0_pgdata:
