@@ -243,6 +243,114 @@ async def test_intent_expires_safely_when_unactioned_past_its_window(db_session_
     assert orders == [], "an expired intent must never have produced an order"
 
 
+# Build Spec §21-22 hardening pass: expire_stale_intents is DB-orchestration
+# code (a bulk UPDATE) with the rest of live_trading.py's 700 lines around
+# it, so it's covered by this hand-driven mutation analysis rather than an
+# automated mutmut config (see pyproject.toml's [tool.mutmut] comment) --
+# reasoning through what a mutant could flip in this function's WHERE
+# clause and what would still pass the one existing expiry test above.
+
+
+async def test_expires_an_approved_but_unsubmitted_intent_too(db_session_factory):
+    """The sweep's status filter is `.in_(("pending_approval", "approved"))`
+    -- not just "pending_approval" -- specifically so an intent that got
+    marked "approved" but crashed before reaching the broker (the module
+    docstring's own "approved -- unsubmitted -- expired" transition) still
+    gets swept. The one existing expiry test above only ever creates a
+    "pending_approval" intent, so a mutant that narrowed the filter to
+    that single status would pass it anyway."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db,
+            strategy_id=strategy_id,
+            symbol="DEMOSTOCK",
+            broker_name="zerodha",
+            intent_expiry_seconds=90,
+        )
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db, subscription_id=subscription.id, tick_price=106.0
+        )
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+        row.status = "approved"
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+
+    async with db_session_factory() as db:
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 1
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+    assert row.status == "expired"
+
+
+async def test_does_not_expire_intents_still_within_their_window(db_session_factory):
+    """The comparison is `expires_at <= now`, not something that fires
+    early -- an intent well inside its window must be left completely
+    alone by the sweep."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db,
+            strategy_id=strategy_id,
+            symbol="DEMOSTOCK",
+            broker_name="zerodha",
+            intent_expiry_seconds=300,
+        )
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db, subscription_id=subscription.id, tick_price=106.0
+        )
+
+    async with db_session_factory() as db:
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 0
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+    assert row.status == "pending_approval"
+
+
+async def test_does_not_touch_intents_already_in_a_terminal_state(db_session_factory):
+    """The sweep only ever targets "pending_approval"/"approved" -- a
+    rejected intent whose expires_at has long passed must never be swept
+    or counted, since it's already resolved and the sweep isn't the thing
+    that resolved it."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        )
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db, subscription_id=subscription.id, tick_price=106.0
+        )
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+        row.status = "rejected"
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+
+    async with db_session_factory() as db:
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 0
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+    assert row.status == "rejected"
+
+
 async def test_approving_an_intent_reaches_the_broker_and_writes_order_and_trade_rows(
     db_session_factory,
 ):

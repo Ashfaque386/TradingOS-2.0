@@ -35,6 +35,11 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+# mutmut (Build Spec §21-22 mutation testing, see backend/pyproject.toml's
+# [tool.mutmut]) working copy + cache -- local run artifacts, not project
+# content.
+backend/mutants/
+backend/.mutmut-cache
 # Redis persistence snapshot -- lands wherever redis-server's cwd happens
 # to be when it dumps (backend/ under docker-compose, repo root if run
 # ad hoc for local testing), so this is unanchored rather than pinned to
