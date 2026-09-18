@@ -65,7 +65,16 @@ function runDockerComposeUp(ports, extraArgs) {
     for (const service of SERVICES) {
       env[service.envVar] = String(ports[service.key])
     }
-    const child = spawn('docker', ['compose', 'up', ...extraArgs], {
+    // Without --build, `docker compose up` reuses an already-built image
+    // untouched even when a build ARG (e.g. frontend's NEXT_PUBLIC_API_URL,
+    // derived from API_HOST_PORT in docker-compose.yml) would now resolve
+    // differently -- so a frontend image built once against port 8000
+    // would keep silently pointing at 8000 forever, even after this
+    // script bumps the backend to 8001 on a later run. --build makes
+    // Compose re-evaluate build args every invocation; Docker's layer
+    // cache keeps this cheap when nothing actually changed.
+    const args = extraArgs.includes('--build') ? extraArgs : ['--build', ...extraArgs]
+    const child = spawn('docker', ['compose', 'up', ...args], {
       env,
       shell: process.platform === 'win32',
     })

@@ -22,6 +22,12 @@ services:
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      # Tracks wherever the frontend actually got published, not just its
+      # default port -- scripts/docker-up.js bumps FRONTEND_HOST_PORT when
+      # 3000 is taken, and without this the browser's fetch/WebSocket
+      # calls get silently CORS-blocked (which the frontend can only
+      # report as a generic "unreachable" network error, not a 403).
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-3000}}
       AGENT_GATEWAY_CONFIG_PATH: /app/config/tradingos.config.json
       NSE_HOLIDAYS_PATH: /app/config/nse_holidays.json
       # redis/temporal are their own containers/images (no Postgres+API-style
@@ -71,11 +77,15 @@ services:
       context: .
       args:
         # Baked into the client bundle at build time (see Dockerfile) --
-        # the browser reaches the backend over its published host port,
-        # so these default to match API_HOST_PORT's own default. Override
-        # both in .env if you changed API_HOST_PORT.
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+        # the browser reaches the backend over its published host port.
+        # Derived from API_HOST_PORT (not a hardcoded 8000 literal) so a
+        # manually-changed or dynamically-bumped backend port
+        # (scripts/docker-up.js) is picked up automatically; set
+        # NEXT_PUBLIC_API_URL/WS_URL directly only if the browser needs to
+        # reach the backend by a different host than "localhost" (e.g. a
+        # LAN IP).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${API_HOST_PORT:-8000}}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:${API_HOST_PORT:-8000}}
     image: tradingos-2.0-frontend:latest
     container_name: TradingOS-2.0-Frontend
     restart: unless-stopped

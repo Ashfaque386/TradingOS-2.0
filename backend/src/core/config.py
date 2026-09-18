@@ -16,7 +16,20 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # A plain (optionally comma-separated) string, not list[str]:
+    # pydantic-settings JSON-decodes env values for collection-typed
+    # fields before any validator sees them, which would make a plain
+    # "http://localhost:3003" from docker-compose.yml a hard startup
+    # error instead of a single origin. Docker Compose sets this from
+    # FRONTEND_HOST_PORT so it tracks wherever the frontend's dynamic
+    # port allocator (scripts/docker-up.js) actually landed, instead of
+    # only ever accepting the frontend's default port. Use
+    # cors_origins_list (below) to consume it.
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     # Relative to CWD by default, which is correct for the single container
     # (WORKDIR /app, config/ bind-mounted at /app/config — see
