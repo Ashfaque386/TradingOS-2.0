@@ -8,6 +8,7 @@ import {
   isAuthenticated as hasStoredToken,
   login as apiLogin,
   logout as apiLogout,
+  register as apiRegister,
 } from '@/lib/api'
 
 export const ROLES: Role[] = ['SystemAdministrator', 'PortfolioManager', 'RiskManager', 'ReadOnlyAuditor']
@@ -20,6 +21,7 @@ type AuthContextValue = {
   user: CurrentUser | null
   role: Role
   signIn: (email: string, password: string) => Promise<void>
+  signUp: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -61,6 +63,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(me)
   }, [])
 
+  const signUp = useCallback(async (email: string, password: string) => {
+    const me = await apiRegister(email, password)
+    setUser(me)
+  }, [])
+
   const signOut = useCallback(async () => {
     await apiLogout()
     setUser(null)
@@ -73,9 +80,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       role: user?.role ?? FALLBACK_ROLE,
       signIn,
+      signUp,
       signOut,
     }),
-    [user, isLoading, signIn, signOut],
+    [user, isLoading, signIn, signUp, signOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
