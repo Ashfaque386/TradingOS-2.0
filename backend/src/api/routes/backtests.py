@@ -7,6 +7,7 @@ import uuid
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
@@ -34,6 +35,7 @@ router = APIRouter(prefix="/backtests", tags=["backtests"])
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("POST", "/api/v1/backtests", roles=_OPERATOR_ROLES)
+register_policy("GET", "/api/v1/backtests", roles=list(Role))
 register_policy("GET", "/api/v1/backtests/{run_id}", roles=list(Role))
 register_policy("POST", "/api/v1/backtests/{run_id}/walk-forward", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/backtests/{run_id}/monte-carlo", roles=_OPERATOR_ROLES)
@@ -60,11 +62,16 @@ def _run_response(run: BacktestRun) -> BacktestRunResponse:
         id=run.id,
         strategy_version_id=run.strategy_version_id,
         symbol=run.symbol,
+        start_date=run.start_date,
+        end_date=run.end_date,
         status=run.status,
         refusal_reason=run.refusal_reason,
         metrics=run.metrics,
+        daily_returns=run.daily_returns,
+        trade_pnls=run.trade_pnls,
         walk_forward_result=run.walk_forward_result,
         monte_carlo_result=run.monte_carlo_result,
+        created_at=run.created_at,
     )
 
 
@@ -102,6 +109,19 @@ async def run_backtest_endpoint(
         created_by=str(current_user.id),
     )
     return _run_response(run)
+
+
+@router.get("")
+async def list_backtest_runs_endpoint(
+    strategy_version_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[BacktestRunResponse]:
+    query = select(BacktestRun).order_by(BacktestRun.created_at.desc())
+    if strategy_version_id is not None:
+        query = query.where(BacktestRun.strategy_version_id == strategy_version_id)
+    result = await db.execute(query)
+    return [_run_response(run) for run in result.scalars().all()]
 
 
 @router.get("/{run_id}")

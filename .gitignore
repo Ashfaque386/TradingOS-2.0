@@ -35,3 +35,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+backend/dump.rdb
+
+# Next.js 16 auto-generates these on every `next dev`/`next build` start
+# (framework tooling boilerplate, not project content) -- the real project
+# doc lives at docs/CLAUDE.md.
+/AGENTS.md
+/CLAUDE.md

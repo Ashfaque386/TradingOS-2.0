@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Bell,
@@ -13,6 +13,7 @@ import {
   KeyRound,
   Lock,
   Plug,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldAlert,
@@ -23,219 +24,181 @@ import {
   XCircle,
 } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
+import { useAuth } from '@/components/auth/auth-provider'
+import {
+  type AgentSummary,
+  type AlertLevel,
+  type BrokerCredentialStatus,
+  type ConfigVersionSummary,
+  type GatewayConfigResponse,
+  type NotificationChannelStatus,
+  type RiskLimit,
+  type RiskLimitChange,
+  ALERT_LEVELS,
+  ApiError,
+  KNOWN_BROKERS,
+  NOTIFICATION_CHANNELS,
+  applyRiskLimitChange,
+  confirmRiskLimitChange,
+  deleteBrokerCredentials,
+  deleteNotificationChannel,
+  getAgents,
+  getGatewayConfig,
+  listBrokerCredentialStatus,
+  listGatewayConfigVersions,
+  listNotificationChannels,
+  listRiskLimitChanges,
+  listRiskLimits,
+  putGatewayConfig,
+  rollbackGatewayConfig,
+  stageRiskLimitChange,
+  validateGatewayConfig,
+  writeBrokerCredentials,
+  writeNotificationChannel,
+} from '@/lib/api'
 
 type SectionId = 'gateway' | 'skills' | 'credentials' | 'notifications' | 'risk'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: string }[] = [
   { id: 'gateway', label: 'Agent Gateway Config', icon: Braces, desc: 'Infra & agent defaults' },
   { id: 'skills', label: 'Skill Marketplace', icon: Sparkles, desc: 'Grant tools to agents' },
-  { id: 'credentials', label: 'Broker & LLM Credentials', icon: KeyRound, desc: 'Write-only secrets' },
+  { id: 'credentials', label: 'Broker Credentials', icon: KeyRound, desc: 'Write-only secrets' },
   { id: 'notifications', label: 'Notification Channels', icon: Bell, desc: 'Telegram / Discord / Slack' },
   { id: 'risk', label: 'Risk Limits', icon: SlidersHorizontal, desc: 'Dual-control thresholds' },
 ]
 
 /* ------------------------------- Section 1 -------------------------------- */
 
-const RAW_JSON5 = `{
-  // TradingOS agent gateway — resolved config
-  infra: {
-    region: "ap-south-1",
-    latencyBudgetMs: 50,
-    maxConcurrentAgents: 12,
-    killSwitchArmed: true,
-  },
-  agentDefaults: {
-    model: "gpt-4o",
-    temperature: 0.2,
-    maxToolCalls: 8,
-    retryPolicy: { attempts: 3, backoffMs: 400 },
-  },
-  agents: {
-    entries: {
-      "ceo-agent":     { model: "claude-3.7-sonnet", temperature: 0.1 },
-      "risk-guardian": { model: "gpt-4o", latencyBudgetMs: 30 },
-      "execution-02":  { model: "gpt-4o-mini", maxToolCalls: 4 },
-    },
-  },
-  channels: {
-    slack:    { bound: true,  workspace: "quant-desk" },
-    telegram: { bound: true,  chatId: "-100•••••" },
-    discord:  { bound: false, guild: null },
-  },
-}`
-
-const VALIDATION_ERRORS = [
-  { path: 'agents.entries.ceo-agent.foo', message: 'unknown key: agents.entries.ceo-agent.foo' },
-  { path: 'infra.latencyBudgetMs', message: 'value 50 is at the hard ceiling (max 50ms) — no headroom for retries' },
-]
-
-const CONFIG_VERSIONS = [
-  { v: 'v38', when: '2025-06-11 09:02 IST', author: 'N. Iyer (Admin)', note: 'Tightened execution-02 tool calls', current: true },
-  { v: 'v37', when: '2025-06-10 17:44 IST', author: 'S. Rao (PM)', note: 'Bound Telegram channel', current: false },
-  { v: 'v36', when: '2025-06-10 11:20 IST', author: 'N. Iyer (Admin)', note: 'Lowered latency budget 60→50ms', current: false },
-  { v: 'v35', when: '2025-06-09 15:08 IST', author: 'A. Mehta (Risk)', note: 'Armed kill-switch by default', current: false },
-]
-
 function GatewaySection() {
+  const { role } = useAuth()
+  const canEdit = role === 'SystemAdministrator'
   const [tab, setTab] = useState<'form' | 'raw'>('form')
-  const [validated, setValidated] = useState(false)
-  const [rollingBack, setRollingBack] = useState<string | null>(null)
+  const [config, setConfig] = useState<GatewayConfigResponse | null>(null)
+  const [rawText, setRawText] = useState('')
+  const [versions, setVersions] = useState<ConfigVersionSummary[]>([])
+  const [validateErrors, setValidateErrors] = useState<string[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const [latencyBudget, setLatencyBudget] = useState('50')
-  const [maxConcurrent, setMaxConcurrent] = useState('12')
-  const [defaultModel, setDefaultModel] = useState('gpt-4o')
-  const [temperature, setTemperature] = useState('0.2')
-  const [killSwitch, setKillSwitch] = useState(true)
+  async function reload() {
+    const [cfg, vers] = await Promise.all([getGatewayConfig(), listGatewayConfigVersions()])
+    setConfig(cfg)
+    setRawText(cfg.raw_text)
+    setVersions(vers)
+  }
+
+  useEffect(() => { reload() }, [])
+
+  async function handleValidate() {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await validateGatewayConfig(rawText)
+      setValidateErrors(result.errors)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Validation failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleSave() {
+    setBusy(true)
+    setError(null)
+    try {
+      await putGatewayConfig(rawText)
+      await reload()
+      setValidateErrors(null)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Save failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRollback(versionId: number) {
+    setBusy(true)
+    setError(null)
+    try {
+      await rollbackGatewayConfig(versionId)
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Rollback failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const parsed = config?.parsed as Record<string, any> | undefined
 
   return (
     <div className="set-block">
       <div className="set-block-head">
-        <div>
-          <h2>Agent Gateway Config</h2>
-          <p>Resolved configuration across infra defaults, agent defaults, per-agent overrides, and channel bindings.</p>
-        </div>
+        <div><h2>Agent Gateway Config</h2><p>Resolved configuration across infra defaults, agent defaults, per-agent overrides, and channel bindings.</p></div>
         <div className="set-tabgroup">
-          <button className={tab === 'form' ? 'active' : ''} onClick={() => setTab('form')}>
-            <SlidersHorizontal className="size-3.5" /> Form
-          </button>
-          <button className={tab === 'raw' ? 'active' : ''} onClick={() => setTab('raw')}>
-            <Braces className="size-3.5" /> Raw JSON5
-          </button>
+          <button className={tab === 'form' ? 'active' : ''} onClick={() => setTab('form')}><SlidersHorizontal className="size-3.5" /> Summary</button>
+          <button className={tab === 'raw' ? 'active' : ''} onClick={() => setTab('raw')}><Braces className="size-3.5" /> Raw JSON</button>
         </div>
       </div>
+      {error && <div className="mb-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
 
       {tab === 'form' ? (
         <div className="set-form-grid">
           <fieldset className="set-fieldset">
-            <legend>Infra defaults</legend>
-            <label className="set-field">
-              <span>Latency budget (ms)</span>
-              <input value={latencyBudget} onChange={(e) => setLatencyBudget(e.target.value)} inputMode="numeric" />
-            </label>
-            <label className="set-field">
-              <span>Max concurrent agents</span>
-              <input value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} inputMode="numeric" />
-            </label>
-            <label className="set-toggle-row">
-              <span>Kill-switch armed on boot</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={killSwitch}
-                className={`set-switch ${killSwitch ? 'on' : ''}`}
-                onClick={() => setKillSwitch((v) => !v)}
-              >
-                <span />
-              </button>
-            </label>
+            <legend>LLM provider order</legend>
+            <p className="text-xs text-muted-foreground">{parsed?.llmProviders?.order?.join(' → ') ?? '—'}</p>
           </fieldset>
-
+          <fieldset className="set-fieldset">
+            <legend>Broker failover</legend>
+            <p className="text-xs text-muted-foreground">{parsed?.brokerFailover?.primary ?? '—'} → {parsed?.brokerFailover?.fallback ?? '—'}</p>
+          </fieldset>
+          <fieldset className="set-fieldset">
+            <legend>Risk threshold pointers (read-only)</legend>
+            <p className="text-xs text-muted-foreground">Max drawdown {parsed?.riskThresholdRefs?.maxDrawdownPct ?? '—'}% · WS latency {parsed?.riskThresholdRefs?.wsLatencyMs ?? '—'}ms — set via the Risk Limits section, not here.</p>
+          </fieldset>
           <fieldset className="set-fieldset">
             <legend>Agent defaults</legend>
-            <label className="set-field">
-              <span>Default model</span>
-              <select value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}>
-                <option>gpt-4o</option>
-                <option>gpt-4o-mini</option>
-                <option>claude-3.7-sonnet</option>
-                <option>gemini-2.0-flash</option>
-              </select>
-            </label>
-            <label className="set-field">
-              <span>Temperature</span>
-              <input value={temperature} onChange={(e) => setTemperature(e.target.value)} inputMode="decimal" />
-            </label>
+            <p className="text-xs text-muted-foreground">Model {parsed?.agents?.defaults?.model ?? 'auto'} · Heartbeat {parsed?.agents?.defaults?.heartbeatEnabled ? 'on' : 'off'} · Skills {(parsed?.agents?.defaults?.skills ?? []).join(', ') || '—'}</p>
           </fieldset>
-
           <fieldset className="set-fieldset set-fieldset-wide">
-            <legend>Per-agent overrides</legend>
-            <div className="set-override-list">
-              {[
-                { id: 'ceo-agent', model: 'claude-3.7-sonnet', extra: 'temp 0.1' },
-                { id: 'risk-guardian', model: 'gpt-4o', extra: 'latency 30ms' },
-                { id: 'execution-02', model: 'gpt-4o-mini', extra: 'maxToolCalls 4' },
-              ].map((o) => (
-                <div key={o.id} className="set-override-row">
-                  <code>{o.id}</code>
-                  <span className="set-override-model">{o.model}</span>
-                  <span className="set-override-extra">{o.extra}</span>
-                </div>
-              ))}
-            </div>
+            <legend>Per-agent overrides ({Object.keys(parsed?.agents?.entries ?? {}).length})</legend>
+            <div className="set-override-list">{Object.entries(parsed?.agents?.entries ?? {}).map(([id, entry]: [string, any]) => <div key={id} className="set-override-row"><code>{id}</code><span className="set-override-model">{entry.model ?? 'default model'}</span><span className="set-override-extra">{entry.enabled === false ? 'disabled' : ''} {entry.heartbeatEnabled !== undefined ? `heartbeat:${entry.heartbeatEnabled}` : ''}</span></div>)}{Object.keys(parsed?.agents?.entries ?? {}).length === 0 && <p className="text-xs text-muted-foreground">No per-agent overrides — use Agent Fleet or the Raw JSON tab to add one.</p>}</div>
           </fieldset>
-
           <fieldset className="set-fieldset set-fieldset-wide">
-            <legend>Channel bindings</legend>
-            <div className="set-binding-row">
-              {[
-                { name: 'Slack', bound: true, meta: 'quant-desk' },
-                { name: 'Telegram', bound: true, meta: 'chatId -100•••••' },
-                { name: 'Discord', bound: false, meta: 'not bound' },
-              ].map((c) => (
-                <div key={c.name} className={`set-binding ${c.bound ? 'bound' : ''}`}>
-                  <span className="set-binding-dot" />
-                  <strong>{c.name}</strong>
-                  <small>{c.meta}</small>
-                </div>
-              ))}
-            </div>
+            <legend>Channel bindings ({(parsed?.bindings ?? []).length})</legend>
+            <div className="set-binding-row">{(parsed?.bindings ?? []).map((b: any, i: number) => <div key={i} className="set-binding bound"><span className="set-binding-dot" /><strong>{b.agentId}</strong><small>{b.match?.channel} · {b.match?.accountId ?? 'any account'}</small></div>)}{(parsed?.bindings ?? []).length === 0 && <p className="text-xs text-muted-foreground">No channel bindings configured.</p>}</div>
           </fieldset>
         </div>
       ) : (
-        <pre className="set-raw-editor">{RAW_JSON5}</pre>
+        <div>
+          <textarea className="set-raw-editor" style={{ width: '100%', minHeight: 260 }} value={rawText} onChange={(e) => setRawText(e.target.value)} disabled={!canEdit} spellCheck={false} />
+          {!canEdit && <p className="mt-2 text-xs text-muted-foreground">Read-only — SystemAdministrator role required to edit.</p>}
+        </div>
       )}
 
-      <div className="set-validate-bar">
-        <button className="set-btn set-btn-primary" onClick={() => setValidated(true)}>
-          <ShieldCheck className="size-3.5" /> Validate
-        </button>
-        {validated && (
-          <div className="set-validate-result">
-            <p className="set-validate-title">
-              <AlertTriangle className="size-3.5" /> {VALIDATION_ERRORS.length} schema issues found
-            </p>
-            {VALIDATION_ERRORS.map((err) => (
-              <div key={err.path} className="set-validate-err">
-                <code>{err.path}</code>
-                <span>{err.message}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {canEdit && (
+        <div className="set-validate-bar">
+          <button className="set-btn set-btn-secondary" onClick={handleValidate} disabled={busy}><ShieldCheck className="size-3.5" /> Validate</button>
+          <button className="set-btn set-btn-primary" onClick={handleSave} disabled={busy}>{busy ? <RefreshCw className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Save & apply</button>
+          {validateErrors && (
+            <div className="set-validate-result">
+              <p className="set-validate-title"><AlertTriangle className="size-3.5" /> {validateErrors.length === 0 ? 'No schema issues' : `${validateErrors.length} schema issues found`}</p>
+              {validateErrors.map((err) => <div key={err} className="set-validate-err"><span>{err}</span></div>)}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="set-versions">
-        <p className="set-versions-title">
-          <History className="size-3.5" /> Config version history
-        </p>
+        <p className="set-versions-title"><History className="size-3.5" /> Config version history</p>
         <ul>
-          {CONFIG_VERSIONS.map((cv) => (
-            <li key={cv.v}>
-              <span className="set-version-tag mono">{cv.v}</span>
-              <span className="set-version-when mono">{cv.when}</span>
-              <span className="set-version-author">{cv.author}</span>
-              <span className="set-version-note">{cv.note}</span>
-              {cv.current ? (
-                <span className="set-version-current">Current</span>
-              ) : (
-                <button
-                  className="set-rollback"
-                  onClick={() => {
-                    setRollingBack(cv.v)
-                    setTimeout(() => setRollingBack(null), 1400)
-                  }}
-                >
-                  {rollingBack === cv.v ? (
-                    <>
-                      <Check className="size-3" /> Staged
-                    </>
-                  ) : (
-                    <>
-                      <RotateCcw className="size-3" /> Rollback
-                    </>
-                  )}
-                </button>
-              )}
+          {versions.map((cv) => (
+            <li key={cv.id}>
+              <span className="set-version-tag mono">v{cv.id}</span>
+              <span className="set-version-when mono">{new Date(cv.created_at).toLocaleString()}</span>
+              <span className="set-version-author">{cv.source}</span>
+              <span className="set-version-note">{cv.status}</span>
+              {cv.id === config?.version_id ? <span className="set-version-current">Current</span> : canEdit ? <button className="set-rollback" disabled={busy} onClick={() => handleRollback(cv.id)}><RotateCcw className="size-3" /> Rollback</button> : null}
             </li>
           ))}
         </ul>
@@ -246,139 +209,73 @@ function GatewaySection() {
 
 /* ------------------------------- Section 2 -------------------------------- */
 
-type Health = 'green' | 'yellow' | 'red'
-
-interface Skill {
-  id: string
-  desc: string
-  health: Health
-  grantedTo: string[]
-}
-
-const AGENTS = ['CEO', 'RiskGuardian', 'Execution-02', 'SignalScout', 'StrategyOps', 'ComplianceBot']
-
-const SKILLS: Skill[] = [
-  { id: 'market-data-read', desc: 'Read live and historical OHLCV across NSE/BSE instruments.', health: 'green', grantedTo: ['SignalScout', 'StrategyOps', 'RiskGuardian'] },
-  { id: 'option-chain-read', desc: 'Fetch live F&O option chains, OI, and IV surfaces.', health: 'green', grantedTo: ['SignalScout', 'StrategyOps'] },
-  { id: 'portfolio-status-read', desc: 'Read open positions, exposure, and realized/unrealized P&L.', health: 'yellow', grantedTo: ['RiskGuardian', 'CEO'] },
-  { id: 'code-format-lint', desc: 'Format and lint generated strategy code before review.', health: 'green', grantedTo: ['StrategyOps'] },
-  { id: 'sandbox-dry-run', desc: 'Execute strategy logic in an isolated no-order sandbox.', health: 'red', grantedTo: ['StrategyOps', 'Execution-02'] },
-  { id: 'notification-send', desc: 'Dispatch alerts to bound Telegram/Discord/Slack channels.', health: 'green', grantedTo: ['ComplianceBot', 'RiskGuardian', 'CEO'] },
-]
-
 function initials(name: string) {
   return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase()
 }
 
+async function patchAgentSkills(agentId: string, skills: string[]) {
+  const config = await getGatewayConfig()
+  const parsed = JSON.parse(JSON.stringify(config.parsed)) as Record<string, any>
+  const agentsSection = parsed.agents ?? { entries: {} }
+  const existing = agentsSection.entries[agentId] ?? {}
+  agentsSection.entries[agentId] = { ...existing, skills }
+  parsed.agents = agentsSection
+  await putGatewayConfig(JSON.stringify(parsed))
+}
+
 function SkillsSection() {
+  const { role } = useAuth()
+  const canEdit = role === 'SystemAdministrator'
+  const [agents, setAgents] = useState<AgentSummary[]>([])
   const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState<Skill | null>(null)
-  const [enabled, setEnabled] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(SKILLS.map((s) => [s.id, s.health !== 'red'])),
-  )
-  const [matrix, setMatrix] = useState<Record<string, Record<string, boolean>>>(() =>
-    Object.fromEntries(
-      SKILLS.map((s) => [s.id, Object.fromEntries(AGENTS.map((a) => [a, s.grantedTo.includes(a)]))]),
-    ),
-  )
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
+  const [newSkillId, setNewSkillId] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  const filtered = useMemo(
-    () => SKILLS.filter((s) => s.id.toLowerCase().includes(query.toLowerCase()) || s.desc.toLowerCase().includes(query.toLowerCase())),
-    [query],
-  )
+  async function reload() { setAgents(await getAgents()) }
+  useEffect(() => { reload() }, [])
 
-  const toggleGrant = (skillId: string, agent: string) =>
-    setMatrix((m) => ({ ...m, [skillId]: { ...m[skillId], [agent]: !m[skillId][agent] } }))
+  const skills = useMemo(() => Array.from(new Set(agents.flatMap((a) => a.skills))).sort(), [agents])
+  const filteredSkills = skills.filter((s) => s.toLowerCase().includes(query.toLowerCase()))
+
+  async function toggleGrant(skillId: string, agent: AgentSummary) {
+    setBusy(true)
+    try {
+      const has = agent.skills.includes(skillId)
+      await patchAgentSkills(agent.agent_id, has ? agent.skills.filter((s) => s !== skillId) : [...agent.skills, skillId])
+      await reload()
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="set-block">
       <div className="set-block-head">
-        <div>
-          <h2>Skill Marketplace</h2>
-          <p>Reusable capabilities granted to agents. Toggle a skill on/off or open it to manage per-agent grants.</p>
-        </div>
-        <label className="set-search">
-          <Search className="size-3.5" />
-          <input placeholder="Search skills..." value={query} onChange={(e) => setQuery(e.target.value)} />
-        </label>
+        <div><h2>Skill Marketplace</h2><p>Skills granted to agents via the Agent Gateway config — the same source Agent Fleet's per-agent Skills tab edits.</p></div>
+        <label className="set-search"><Search className="size-3.5" /><input placeholder="Search skills..." value={query} onChange={(e) => setQuery(e.target.value)} /></label>
       </div>
-
       <div className="set-skill-grid">
-        {filtered.map((s) => {
-          const grants = matrix[s.id]
-          const granted = AGENTS.filter((a) => grants[a])
+        {filteredSkills.map((s) => {
+          const granted = agents.filter((a) => a.skills.includes(s))
           return (
-            <button key={s.id} className="set-skill-card" onClick={() => setSelected(s)}>
-              <div className="set-skill-card-top">
-                <span className={`set-health set-health-${s.health}`} title={`health: ${s.health}`} />
-                <code>{s.id}</code>
-                <span
-                  role="switch"
-                  aria-checked={enabled[s.id]}
-                  className={`set-switch set-switch-sm ${enabled[s.id] ? 'on' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setEnabled((v) => ({ ...v, [s.id]: !v[s.id] }))
-                  }}
-                >
-                  <span />
-                </span>
-              </div>
-              <p className="set-skill-desc">{s.desc}</p>
-              <div className="set-skill-card-foot">
-                <div className="avatar-stack">
-                  {granted.slice(0, 4).map((a) => (
-                    <span key={a} title={a}>{initials(a)}</span>
-                  ))}
-                </div>
-                <small>{granted.length} agent{granted.length === 1 ? '' : 's'} granted</small>
-              </div>
+            <button key={s} className="set-skill-card" onClick={() => setSelectedSkill(s)}>
+              <div className="set-skill-card-top"><code>{s}</code></div>
+              <div className="set-skill-card-foot"><div className="avatar-stack">{granted.slice(0, 4).map((a) => <span key={a.agent_id} title={a.display_name}>{initials(a.display_name)}</span>)}</div><small>{granted.length} agent{granted.length === 1 ? '' : 's'} granted</small></div>
             </button>
           )
         })}
+        {filteredSkills.length === 0 && <p className="text-xs text-muted-foreground">No skills granted yet.</p>}
       </div>
 
-      {selected && (
-        <div className="set-modal-scrim" onClick={() => setSelected(null)}>
+      {canEdit && <div className="mt-3 flex gap-2"><input value={newSkillId} onChange={(e) => setNewSkillId(e.target.value)} placeholder="new-skill-id" className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /><button disabled={!newSkillId.trim()} onClick={() => setSelectedSkill(newSkillId.trim())} className="text-button">Open grant matrix</button></div>}
+
+      {selectedSkill && (
+        <div className="set-modal-scrim" onClick={() => setSelectedSkill(null)}>
           <div className="set-detail" onClick={(e) => e.stopPropagation()}>
-            <div className="set-detail-head">
-              <div>
-                <span className={`set-health set-health-${selected.health}`} />
-                <code>{selected.id}</code>
-              </div>
-              <button className="set-icon-btn" onClick={() => setSelected(null)} aria-label="Close">
-                <X className="size-4" />
-              </button>
-            </div>
-            <p className="set-detail-desc">{selected.desc}</p>
+            <div className="set-detail-head"><div><code>{selectedSkill}</code></div><button className="set-icon-btn" onClick={() => setSelectedSkill(null)} aria-label="Close"><X className="size-4" /></button></div>
             <p className="set-matrix-title">Per-agent grant matrix</p>
-            <div className="set-matrix">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Agent</th>
-                    <th>{selected.id}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {AGENTS.map((a) => (
-                    <tr key={a}>
-                      <td>{a}</td>
-                      <td>
-                        <button
-                          className={`set-check ${matrix[selected.id][a] ? 'on' : ''}`}
-                          onClick={() => toggleGrant(selected.id, a)}
-                          aria-label={`${matrix[selected.id][a] ? 'Revoke' : 'Grant'} ${selected.id} for ${a}`}
-                        >
-                          {matrix[selected.id][a] && <Check className="size-3.5" />}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="set-matrix-hint">This grid is reusable to display all skills &times; all agents in a combined governance view.</p>
+            <div className="set-matrix"><table><thead><tr><th>Agent</th><th>{selectedSkill}</th></tr></thead><tbody>{agents.map((a) => <tr key={a.agent_id}><td>{a.display_name}</td><td><button className={`set-check ${a.skills.includes(selectedSkill) ? 'on' : ''}`} disabled={!canEdit || busy} onClick={() => toggleGrant(selectedSkill, a)} aria-label={`${a.skills.includes(selectedSkill) ? 'Revoke' : 'Grant'} ${selectedSkill} for ${a.display_name}`}>{a.skills.includes(selectedSkill) && <Check className="size-3.5" />}</button></td></tr>)}</tbody></table></div>
           </div>
         </div>
       )}
@@ -388,290 +285,241 @@ function SkillsSection() {
 
 /* ------------------------------- Section 3 -------------------------------- */
 
-type ConnState = 'connected' | 'not-connected' | 'error'
+function BrokerCredentialCard({ status, canEdit, onChanged }: { status: BrokerCredentialStatus; canEdit: boolean; onChanged: () => void }) {
+  const [apiKey, setApiKey] = useState('')
+  const [apiSecret, setApiSecret] = useState('')
+  const [accessToken, setAccessToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-interface Credential {
-  id: string
-  label: string
-  group: 'Broker' | 'LLM Provider'
-  state: ConnState
-  saved: boolean
-}
+  async function handleSave() {
+    setBusy(true)
+    setError(null)
+    try {
+      await writeBrokerCredentials(status.broker, apiKey, apiSecret || undefined, accessToken || undefined)
+      setApiKey(''); setApiSecret(''); setAccessToken('')
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Save failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
-const CREDENTIALS: Credential[] = [
-  { id: 'zerodha', label: 'Zerodha Kite', group: 'Broker', state: 'connected', saved: true },
-  { id: 'upstox', label: 'Upstox', group: 'Broker', state: 'error', saved: true },
-  { id: 'openai', label: 'OpenAI', group: 'LLM Provider', state: 'connected', saved: true },
-  { id: 'anthropic', label: 'Anthropic', group: 'LLM Provider', state: 'connected', saved: true },
-  { id: 'google', label: 'Google Gemini', group: 'LLM Provider', state: 'connected', saved: true },
-  { id: 'mistral', label: 'Mistral', group: 'LLM Provider', state: 'not-connected', saved: false },
-  { id: 'cohere', label: 'Cohere', group: 'LLM Provider', state: 'connected', saved: true },
-  { id: 'groq', label: 'Groq', group: 'LLM Provider', state: 'connected', saved: true },
-  { id: 'perplexity', label: 'Perplexity', group: 'LLM Provider', state: 'not-connected', saved: false },
-]
-
-function CredentialCard({ cred }: { cred: Credential }) {
-  const [value, setValue] = useState('')
-  const [saved, setSaved] = useState(cred.saved)
-  const [testing, setTesting] = useState(false)
-  const [tested, setTested] = useState<ConnState | null>(null)
-
-  const state = tested ?? cred.state
+  async function handleDelete() {
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteBrokerCredentials(status.broker)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="set-cred-card">
-      <div className="set-cred-head">
-        <strong>{cred.label}</strong>
-        <span className={`set-conn set-conn-${state}`}>
-          {state === 'connected' ? <CheckCircle2 className="size-3" /> : state === 'error' ? <XCircle className="size-3" /> : <Circle className="size-3" />}
-          {state === 'connected' ? 'Connected' : state === 'error' ? 'Auth failed' : 'Not connected'}
-        </span>
-      </div>
-      <div className="set-cred-field">
-        <Lock className="size-3.5" />
-        <input
-          type="password"
-          placeholder={saved ? '•••• saved' : 'Paste API key / secret'}
-          value={value}
-          onChange={(e) => {
-            setValue(e.target.value)
-            setSaved(false)
-          }}
-        />
-      </div>
-      <div className="set-cred-actions">
-        <button
-          className="set-btn set-btn-ghost"
-          disabled={!value}
-          onClick={() => {
-            setSaved(true)
-            setValue('')
-          }}
-        >
-          Save (write-only)
-        </button>
-        <button
-          className="set-btn set-btn-secondary"
-          disabled={testing}
-          onClick={() => {
-            setTesting(true)
-            setTested(null)
-            setTimeout(() => {
-              setTesting(false)
-              setTested(cred.state === 'error' ? 'error' : 'connected')
-            }, 1100)
-          }}
-        >
-          {testing ? 'Testing…' : 'Test Connection'}
-        </button>
-      </div>
+      <div className="set-cred-head"><strong>{status.broker}</strong><span className={`set-conn set-conn-${status.configured ? 'connected' : 'not-connected'}`}>{status.configured ? <CheckCircle2 className="size-3" /> : <Circle className="size-3" />}{status.configured ? 'Configured' : 'Not configured'}</span></div>
+      {error && <p className="text-xs text-rose-300">{error}</p>}
+      {canEdit && <>
+        <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>
+        <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API secret (optional)" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} /></div>
+        <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="Access token (optional)" value={accessToken} onChange={(e) => setAccessToken(e.target.value)} /></div>
+        <div className="set-cred-actions">
+          <button className="set-btn set-btn-ghost" disabled={!apiKey || busy} onClick={handleSave}>Save (write-only)</button>
+          {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleDelete}>Remove</button>}
+        </div>
+      </>}
     </div>
   )
 }
 
 function CredentialsSection() {
-  const brokers = CREDENTIALS.filter((c) => c.group === 'Broker')
-  const llms = CREDENTIALS.filter((c) => c.group === 'LLM Provider')
+  const { role } = useAuth()
+  const canEdit = role === 'SystemAdministrator'
+  const [statuses, setStatuses] = useState<BrokerCredentialStatus[]>([])
+
+  async function reload() { setStatuses(await listBrokerCredentialStatus()) }
+  useEffect(() => { reload() }, [])
+
   return (
     <div className="set-block">
-      <div className="set-block-head">
-        <div>
-          <h2>Broker & LLM Credentials</h2>
-          <p>Secrets are write-only. Saved values are never displayed &mdash; only a masked &ldquo;saved&rdquo; state and live connection status.</p>
-        </div>
-      </div>
-
+      <div className="set-block-head"><div><h2>Broker Credentials</h2><p>Secrets are write-only. Saved values are never displayed &mdash; only a configured/not-configured status.</p></div></div>
       <p className="set-group-label">Brokers</p>
-      <div className="set-cred-grid">
-        {brokers.map((c) => <CredentialCard key={c.id} cred={c} />)}
-      </div>
-
+      <div className="set-cred-grid">{statuses.length > 0 ? statuses.map((c) => <BrokerCredentialCard key={c.broker} status={c} canEdit={canEdit} onChanged={reload} />) : KNOWN_BROKERS.map((b) => <BrokerCredentialCard key={b} status={{ broker: b, configured: false }} canEdit={canEdit} onChanged={reload} />)}</div>
       <p className="set-group-label">LLM Providers</p>
-      <div className="set-cred-grid">
-        {llms.map((c) => <CredentialCard key={c.id} cred={c} />)}
-      </div>
+      <p className="p-4 text-xs text-muted-foreground">LLM provider API keys are configured via deployment environment variables, not through this console — there is no runtime credential-store endpoint for them (unlike brokers).</p>
     </div>
   )
 }
 
 /* ------------------------------- Section 4 -------------------------------- */
 
-const ALERT_LEVELS = [
-  { id: 'kill-switch', label: 'Kill-switch trips' },
-  { id: 'sign-off', label: 'Sign-off items' },
-  { id: 'go-live', label: 'Go-live gate passes' },
-  { id: 'daily', label: 'Daily summary' },
-]
+const ALERT_LABELS: Record<AlertLevel, string> = { 'kill-switch': 'Kill-switch trips', 'sign-off': 'Sign-off items', 'go-live': 'Go-live gate passes', daily: 'Daily summary' }
 
-interface Channel {
-  id: string
-  name: string
-  meta: string
-  defaults: string[]
-}
+function ChannelCard({ status, canEdit, onChanged }: { status: NotificationChannelStatus; canEdit: boolean; onChanged: () => void }) {
+  const [botToken, setBotToken] = useState('')
+  const [chatId, setChatId] = useState('')
+  const [webhookUrl, setWebhookUrl] = useState('')
+  const [prefs, setPrefs] = useState<Record<string, boolean>>(() => Object.fromEntries(ALERT_LEVELS.map((l) => [l, status.alert_levels.includes(l)])))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-const CHANNELS: Channel[] = [
-  { id: 'telegram', name: 'Telegram', meta: 'Bot @tradingos_alerts', defaults: ['kill-switch', 'sign-off', 'go-live', 'daily'] },
-  { id: 'discord', name: 'Discord', meta: 'Webhook · #ops-alerts', defaults: ['kill-switch', 'go-live'] },
-  { id: 'slack', name: 'Slack', meta: 'Workspace quant-desk', defaults: [] },
-]
+  async function handleSave(enabled: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      await writeNotificationChannel(status.channel, {
+        enabled,
+        bot_token: botToken || undefined,
+        chat_id: chatId || undefined,
+        webhook_url: webhookUrl || undefined,
+        alert_levels: ALERT_LEVELS.filter((l) => prefs[l]),
+      })
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Save failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
-function ChannelCard({ channel }: { channel: Channel }) {
-  const [connected, setConnected] = useState(channel.defaults.length > 0)
-  const [prefs, setPrefs] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(ALERT_LEVELS.map((l) => [l.id, channel.defaults.includes(l.id)])),
-  )
+  async function handleDisconnect() {
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteNotificationChannel(status.channel)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Disconnect failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
-    <div className={`set-channel ${connected ? 'connected' : ''}`}>
-      <div className="set-channel-head">
-        <div>
-          <strong>{channel.name}</strong>
-          <small>{channel.meta}</small>
-        </div>
-        <button
-          className={connected ? 'set-btn set-btn-danger' : 'set-btn set-btn-primary'}
-          onClick={() => setConnected((v) => !v)}
-        >
-          <Plug className="size-3.5" /> {connected ? 'Disconnect' : 'Connect'}
-        </button>
-      </div>
-      <fieldset className="set-alert-prefs" disabled={!connected}>
+    <div className={`set-channel ${status.configured && status.enabled ? 'connected' : ''}`}>
+      <div className="set-channel-head"><div><strong>{status.channel}</strong><small>{status.configured ? 'configured' : 'not configured'}</small></div>{canEdit && (status.configured ? <button className="set-btn set-btn-danger" disabled={busy} onClick={handleDisconnect}><Plug className="size-3.5" /> Disconnect</button> : <button className="set-btn set-btn-primary" disabled={busy || (!botToken && !webhookUrl)} onClick={() => handleSave(true)}><Plug className="size-3.5" /> Connect</button>)}</div>
+      {error && <p className="px-4 text-xs text-rose-300">{error}</p>}
+      {canEdit && !status.configured && <div className="px-4 pb-3 flex flex-col gap-2">
+        {status.channel === 'telegram' && <><input placeholder="Bot token" value={botToken} onChange={(e) => setBotToken(e.target.value)} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /><input placeholder="Chat ID" value={chatId} onChange={(e) => setChatId(e.target.value)} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /></>}
+        {(status.channel === 'discord' || status.channel === 'slack') && <input placeholder="Webhook URL" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" />}
+      </div>}
+      <fieldset className="set-alert-prefs" disabled={!status.configured || !canEdit}>
         <legend>Alert levels</legend>
-        {ALERT_LEVELS.map((l) => (
-          <label key={l.id} className="set-alert-pref">
-            <button
-              type="button"
-              className={`set-check ${prefs[l.id] ? 'on' : ''}`}
-              onClick={() => setPrefs((p) => ({ ...p, [l.id]: !p[l.id] }))}
-              aria-label={`${prefs[l.id] ? 'Disable' : 'Enable'} ${l.label} on ${channel.name}`}
-            >
-              {prefs[l.id] && <Check className="size-3.5" />}
-            </button>
-            <span>{l.label}</span>
-          </label>
-        ))}
+        {ALERT_LEVELS.map((l) => <label key={l} className="set-alert-pref"><button type="button" className={`set-check ${prefs[l] ? 'on' : ''}`} onClick={() => { const next = { ...prefs, [l]: !prefs[l] }; setPrefs(next); if (status.configured) handleSave(status.enabled) }} aria-label={`${prefs[l] ? 'Disable' : 'Enable'} ${ALERT_LABELS[l]} on ${status.channel}`}>{prefs[l] && <Check className="size-3.5" />}</button><span>{ALERT_LABELS[l]}</span></label>)}
       </fieldset>
     </div>
   )
 }
 
 function NotificationsSection() {
+  const { role } = useAuth()
+  const canEdit = role === 'SystemAdministrator'
+  const [statuses, setStatuses] = useState<NotificationChannelStatus[]>([])
+
+  async function reload() { setStatuses(await listNotificationChannels()) }
+  useEffect(() => { reload() }, [])
+
+  const byChannel = (name: string) => statuses.find((s) => s.channel === name) ?? { channel: name, configured: false, enabled: false, allowed_sender_ids: [], alert_levels: [] }
+
   return (
     <div className="set-block">
-      <div className="set-block-head">
-        <div>
-          <h2>Notification Channels</h2>
-          <p>Connect messaging channels and choose which alert levels each one receives.</p>
-        </div>
-      </div>
-      <div className="set-channel-grid">
-        {CHANNELS.map((c) => <ChannelCard key={c.id} channel={c} />)}
-      </div>
+      <div className="set-block-head"><div><h2>Notification Channels</h2><p>Connect messaging channels and choose which real alert levels each one receives.</p></div></div>
+      <div className="set-channel-grid">{NOTIFICATION_CHANNELS.map((c) => <ChannelCard key={c} status={byChannel(c)} canEdit={canEdit} onChanged={reload} />)}</div>
     </div>
   )
 }
 
 /* ------------------------------- Section 5 -------------------------------- */
 
-type ProposeState = 'idle' | 'staged' | 'awaiting' | 'confirmed'
-
-interface RiskLimit {
-  id: string
-  label: string
-  current: string
-  unit: string
-}
-
-const RISK_LIMITS: RiskLimit[] = [
-  { id: 'max-dd', label: 'Max drawdown', current: '12', unit: '%' },
-  { id: 'corr', label: 'Correlation limit', current: '0.65', unit: 'ρ' },
-  { id: 'latency', label: 'Latency guard', current: '50', unit: 'ms' },
-]
-
-function RiskRow({ limit }: { limit: RiskLimit }) {
-  const [state, setState] = useState<ProposeState>('idle')
-  const [proposed, setProposed] = useState('')
-
-  return (
-    <div className={`set-risk-row set-risk-${state}`}>
-      <div className="set-risk-meta">
-        <span className="set-risk-label">{limit.label}</span>
-        <strong className="mono">
-          {limit.current}
-          <em>{limit.unit}</em>
-        </strong>
-      </div>
-
-      {state === 'idle' && (
-        <button className="set-btn set-btn-secondary" onClick={() => setState('staged')}>
-          Propose Change
-        </button>
-      )}
-
-      {state === 'staged' && (
-        <div className="set-risk-stage">
-          <input
-            placeholder={`New value (${limit.unit})`}
-            value={proposed}
-            onChange={(e) => setProposed(e.target.value)}
-            inputMode="decimal"
-          />
-          <button className="set-btn set-btn-ghost" onClick={() => setState('idle')}>Cancel</button>
-          <button className="set-btn set-btn-primary" disabled={!proposed} onClick={() => setState('awaiting')}>
-            Stage change
-          </button>
-        </div>
-      )}
-
-      {state === 'awaiting' && (
-        <div className="set-risk-await">
-          <span className="set-await-badge">
-            <ShieldAlert className="size-3.5" /> Awaiting second approval
-          </span>
-          <span className="set-await-detail mono">
-            {limit.current}{limit.unit} → {proposed}{limit.unit}
-          </span>
-          <span className="set-await-note">Requires a different user to confirm</span>
-          <button className="set-btn set-btn-primary" onClick={() => setState('confirmed')}>
-            Confirm as second user
-          </button>
-        </div>
-      )}
-
-      {state === 'confirmed' && (
-        <div className="set-risk-confirmed">
-          <span className="set-confirmed-badge">
-            <CheckCircle2 className="size-3.5" /> Confirmed & applied
-          </span>
-          <span className="set-await-detail mono">Now {proposed}{limit.unit}</span>
-          <button className="set-btn set-btn-ghost" onClick={() => { setState('idle'); setProposed('') }}>
-            Reset demo
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function RiskSection() {
+  const { role, user } = useAuth()
+  const canOperate = role === 'SystemAdministrator' || role === 'RiskManager'
+  const [limits, setLimits] = useState<RiskLimit[]>([])
+  const [changes, setChanges] = useState<RiskLimitChange[]>([])
+  const [limitName, setLimitName] = useState('')
+  const [proposedValue, setProposedValue] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function reload() {
+    const [l, c] = await Promise.all([listRiskLimits(), listRiskLimitChanges()])
+    setLimits(l)
+    setChanges(c.filter((x) => x.status === 'staged' || x.status === 'confirmed'))
+  }
+  useEffect(() => { reload() }, [])
+
+  async function handleStage() {
+    if (!limitName.trim() || !proposedValue) return
+    setBusy(true)
+    setError(null)
+    try {
+      await stageRiskLimitChange(limitName.trim(), Number(proposedValue), reason || undefined)
+      setLimitName(''); setProposedValue(''); setReason('')
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to stage change')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleConfirm(changeId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await confirmRiskLimitChange(changeId)
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Confirmation failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleApply(changeId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await applyRiskLimitChange(changeId)
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Apply failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="set-block">
-      <div className="set-block-head">
-        <div>
-          <h2>Risk Limits</h2>
-          <p>Thresholds are read-only. Changes follow a dual-control flow &mdash; a second, different user must confirm before they apply.</p>
-        </div>
-      </div>
-      <div className="set-dualcontrol-banner">
-        <Lock className="size-4" />
-        <div>
-          <strong>Dual-control enforced</strong>
-          <p>Stage &rarr; awaiting second approval &rarr; confirmed. No single operator can change a live risk limit alone.</p>
-        </div>
-      </div>
+      <div className="set-block-head"><div><h2>Risk Limits</h2><p>Thresholds change only through dual control &mdash; stage &rarr; a different user confirms &rarr; apply.</p></div></div>
+      <div className="set-dualcontrol-banner"><Lock className="size-4" /><div><strong>Dual-control enforced</strong><p>Confirming your own staged change is rejected server-side — a genuinely different user must confirm.</p></div></div>
+      {error && <div className="mb-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
+
+      <p className="set-group-label">Current effective limits</p>
+      <div className="set-risk-list">{limits.map((l) => <div key={l.name} className="set-risk-row"><div className="set-risk-meta"><span className="set-risk-label">{l.name}</span><strong className="mono">{l.value}</strong></div></div>)}{limits.length === 0 && <p className="text-xs text-muted-foreground">No risk limits set yet.</p>}</div>
+
+      {canOperate && <div className="mt-4 flex flex-wrap items-end gap-2 rounded-xl border border-white/10 p-3">
+        <label className="set-field"><span>Limit name</span><input value={limitName} onChange={(e) => setLimitName(e.target.value)} placeholder="max_drawdown_pct" /></label>
+        <label className="set-field"><span>Proposed value</span><input value={proposedValue} onChange={(e) => setProposedValue(e.target.value)} inputMode="decimal" /></label>
+        <label className="set-field"><span>Reason</span><input value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+        <button className="set-btn set-btn-primary" disabled={busy || !limitName.trim() || !proposedValue} onClick={handleStage}>Stage change</button>
+      </div>}
+
+      <p className="set-group-label mt-4">Pending changes</p>
       <div className="set-risk-list">
-        {RISK_LIMITS.map((l) => <RiskRow key={l.id} limit={l} />)}
+        {changes.map((c) => (
+          <div key={c.id} className={`set-risk-row set-risk-${c.status === 'staged' ? 'staged' : 'awaiting'}`}>
+            <div className="set-risk-meta"><span className="set-risk-label">{c.limit_name}</span><strong className="mono">→ {c.proposed_value}</strong><small className="block text-muted-foreground">staged by {c.staged_by === user?.id ? 'you' : c.staged_by.slice(0, 8)}{c.reason ? ` · ${c.reason}` : ''}</small></div>
+            {c.status === 'staged' && canOperate && <button className="set-btn set-btn-primary" disabled={busy || c.staged_by === user?.id} onClick={() => handleConfirm(c.id)}>{c.staged_by === user?.id ? 'Needs a different confirmer' : 'Confirm as second user'}</button>}
+            {c.status === 'confirmed' && canOperate && <button className="set-btn set-btn-primary" disabled={busy} onClick={() => handleApply(c.id)}><CheckCircle2 className="size-3.5" /> Apply</button>}
+          </div>
+        ))}
+        {changes.length === 0 && <p className="text-xs text-muted-foreground">No changes staged or awaiting confirmation.</p>}
       </div>
     </div>
   )
@@ -699,10 +547,7 @@ export default function SettingsPage() {
               return (
                 <button key={s.id} className={active ? 'active' : ''} onClick={() => setSection(s.id)}>
                   <Icon className="size-4" />
-                  <span className="set-subnav-text">
-                    <strong>{s.label}</strong>
-                    <small>{s.desc}</small>
-                  </span>
+                  <span className="set-subnav-text"><strong>{s.label}</strong><small>{s.desc}</small></span>
                   <ChevronRight className="set-subnav-caret size-3.5" />
                 </button>
               )

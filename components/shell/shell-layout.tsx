@@ -1,11 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Sidebar } from './sidebar'
 import { TopBar } from './top-bar'
 import { MobileNav } from './mobile-nav'
 import { useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
+import { getKillSwitch, getMarketHours } from '@/lib/api'
 
 interface ShellLayoutProps {
   children: React.ReactNode
@@ -14,7 +16,37 @@ interface ShellLayoutProps {
 export function ShellLayout({ children }: ShellLayoutProps) {
   const { palette, setPalette, powerSave, setPowerSave } = usePreferences()
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false)
-  const { role, setRole, signOut } = useAuth()
+  const { user, role, isAuthenticated, isLoading, signOut } = useAuth()
+  const router = useRouter()
+  const [marketOpen, setMarketOpen] = useState(true)
+  const [systemHealth, setSystemHealth] = useState<'healthy' | 'critical'>('healthy')
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) router.replace('/login')
+  }, [isLoading, isAuthenticated, router])
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+    let cancelled = false
+    async function poll() {
+      const [hours, paperKs, liveKs] = await Promise.allSettled([
+        getMarketHours(),
+        getKillSwitch('paper'),
+        getKillSwitch('live'),
+      ])
+      if (cancelled) return
+      if (hours.status === 'fulfilled') setMarketOpen(hours.value.is_open)
+      const tripped =
+        (paperKs.status === 'fulfilled' && paperKs.value.tripped) ||
+        (liveKs.status === 'fulfilled' && liveKs.value.tripped)
+      setSystemHealth(tripped ? 'critical' : 'healthy')
+    }
+    poll()
+    const interval = setInterval(poll, 30000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [isAuthenticated])
+
+  if (isLoading || !isAuthenticated) return null
 
   return (
     <div className="shell-root min-h-screen bg-background">
@@ -24,12 +56,14 @@ export function ShellLayout({ children }: ShellLayoutProps) {
         onPaletteChange={setPalette}
         powerSave={powerSave}
         onPowerSaveChange={setPowerSave}
-        marketHours="open"
-        systemHealth="healthy"
-        userName="Trader"
+        marketHours={marketOpen ? 'open' : 'closed'}
+        systemHealth={systemHealth}
+        userName={user?.email ?? 'User'}
         role={role}
-        onRoleChange={setRole}
-        onLogout={signOut}
+        onLogout={() => {
+          void signOut()
+          router.replace('/login')
+        }}
       />
 
       {/* Sidebar (desktop) */}

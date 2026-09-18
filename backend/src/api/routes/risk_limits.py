@@ -39,6 +39,7 @@ register_policy("POST", "/api/v1/risk-limits/stage", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/risk-limits/{change_id}/confirm", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/risk-limits/{change_id}/apply", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/risk-limits", roles=list(Role))
+register_policy("GET", "/api/v1/risk-limits/changes", roles=list(Role))
 
 
 def _to_response(change: RiskLimitChangeRequest) -> RiskLimitChangeResponse:
@@ -46,10 +47,14 @@ def _to_response(change: RiskLimitChangeRequest) -> RiskLimitChangeResponse:
         id=change.id,
         limit_name=change.limit_name,
         proposed_value=change.proposed_value,
+        reason=change.reason,
         status=change.status,
         staged_by=change.staged_by,
+        staged_at=change.staged_at,
         confirmed_by=change.confirmed_by,
+        confirmed_at=change.confirmed_at,
         applied_by=change.applied_by,
+        applied_at=change.applied_at,
     )
 
 
@@ -99,6 +104,19 @@ async def apply_risk_limit_change_endpoint(
     except RiskLimitChangeNotConfirmedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _to_response(change)
+
+
+@router.get("/changes")
+async def list_risk_limit_changes_endpoint(
+    status_filter: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[RiskLimitChangeResponse]:
+    query = select(RiskLimitChangeRequest).order_by(RiskLimitChangeRequest.staged_at.desc())
+    if status_filter is not None:
+        query = query.where(RiskLimitChangeRequest.status == status_filter)
+    result = await db.execute(query)
+    return [_to_response(row) for row in result.scalars().all()]
 
 
 @router.get("")

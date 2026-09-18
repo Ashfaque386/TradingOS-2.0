@@ -8,8 +8,8 @@ phase's demo-trigger endpoints (Phase 7's `/daily-signal-run`, Phase 9's
 `/generate-intent`).
 """
 
+from datetime import UTC, datetime
 from datetime import date as date_type
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -20,6 +20,7 @@ from src.api.schemas import (
     FreshnessRecordResponse,
     InstrumentResponse,
     MarketDataProvenanceResponse,
+    MarketHoursResponse,
     MarketPulseResponse,
     RunBhavcopyFallbackRequest,
     RunCorporateActionsIngestionRequest,
@@ -31,6 +32,7 @@ from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.data.providers import FakeMarketDataProvider
+from src.engine.paper_trading.market_hours import is_market_open_ist
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.instrument import Instrument
 from src.models.market_data_provenance import MarketDataProvenance
@@ -41,6 +43,7 @@ router = APIRouter(prefix="/market-data", tags=["market-data"])
 
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
+register_policy("GET", "/api/v1/market-data/market-hours", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/pulse", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/freshness/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/instruments", roles=list(Role))
@@ -79,6 +82,14 @@ def _provenance_response(row: MarketDataProvenance) -> MarketDataProvenanceRespo
         started_at=row.started_at.isoformat(),
         completed_at=row.completed_at.isoformat(),
     )
+
+
+@router.get("/market-hours")
+async def market_hours_endpoint(
+    _current_user: User = Depends(require_role),
+) -> MarketHoursResponse:
+    now = datetime.now(UTC)
+    return MarketHoursResponse(is_open=is_market_open_ist(now), as_of=now.isoformat())
 
 
 @router.get("/pulse")

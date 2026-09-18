@@ -27,6 +27,7 @@ _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER, Role.RISK_
 register_policy(
     "POST", "/api/v1/orchestration/runs", roles=[Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 )
+register_policy("GET", "/api/v1/orchestration/runs", roles=list(Role))
 register_policy("GET", "/api/v1/orchestration/runs/{run_id}", roles=list(Role))
 register_policy("POST", "/api/v1/orchestration/runs/{run_id}/pause", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/orchestration/runs/{run_id}/continue", roles=_OPERATOR_ROLES)
@@ -53,6 +54,9 @@ async def _load_run_response(db: AsyncSession, run_id: uuid.UUID) -> RunResponse
         failure_class=run.failure_class,
         source_run_id=run.source_run_id,
         error=run.error,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
         tasks=[TaskSummaryResponse.model_validate(t) for t in tasks],
     )
 
@@ -69,6 +73,19 @@ async def create_run_endpoint(
     )
     async with session_factory() as db:
         return await _load_run_response(db, run.id)
+
+
+@router.get("/runs")
+async def list_runs_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[RunResponse]:
+    run_ids = (
+        (await db.execute(select(OrganizationRun.id).order_by(OrganizationRun.created_at.desc())))
+        .scalars()
+        .all()
+    )
+    return [await _load_run_response(db, run_id) for run_id in run_ids]
 
 
 @router.get("/runs/{run_id}")

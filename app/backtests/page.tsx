@@ -1,45 +1,129 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Activity, ArrowDown, ArrowUp, Check, ChevronDown, Download, FlaskConical, Play, RefreshCw, SlidersHorizontal, Sparkles, TrendingDown, TrendingUp, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
+import { Check, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
-import { ChartContainer, ChartTooltipContent } from '@/components/ui/chart'
+import { ChartContainer } from '@/components/ui/chart'
+import {
+  type BacktestRun,
+  type ComparisonResult,
+  type Strategy,
+  ApiError,
+  compareBacktests,
+  listBacktests,
+  listStrategies,
+  runMonteCarlo,
+} from '@/lib/api'
 
-const equity = [
-  { date: 'Jan 24', strategy: 100, nifty: 100, drawdown: 0 }, { date: 'Feb', strategy: 104, nifty: 102, drawdown: -1.2 },
-  { date: 'Mar', strategy: 108, nifty: 105, drawdown: -0.8 }, { date: 'Apr', strategy: 106, nifty: 103, drawdown: -3.4 },
-  { date: 'May', strategy: 114, nifty: 109, drawdown: -1.1 }, { date: 'Jun', strategy: 119, nifty: 112, drawdown: -2.2 },
-  { date: 'Jul', strategy: 117, nifty: 114, drawdown: -4.1 }, { date: 'Aug', strategy: 126, nifty: 118, drawdown: -1.4 },
-  { date: 'Sep', strategy: 131, nifty: 121, drawdown: -1.8 }, { date: 'Oct', strategy: 128, nifty: 119, drawdown: -4.8 },
-  { date: 'Nov', strategy: 139, nifty: 125, drawdown: -1.7 }, { date: 'Dec', strategy: 146, nifty: 130, drawdown: -1.1 },
-]
-const monteCarlo = Array.from({ length: 18 }, (_, i) => ({ range: `${(i + 1) * 2}-${(i + 2) * 2}%`, count: [8, 18, 35, 58, 94, 150, 230, 340, 460, 590, 710, 780, 720, 610, 475, 320, 180, 84][i] }))
-const trades = [
-  ['2025-01-08 09:31', '2025-01-08 14:42', 'NIFTY FUT', 'LONG', '₹8,450', '5h 11m'], ['2025-01-14 10:05', '2025-01-16 11:20', 'RELIANCE', 'SHORT', '-₹2,180', '2d 1h'],
-  ['2025-01-22 09:45', '2025-01-23 15:12', 'BANKNIFTY', 'LONG', '₹12,760', '1d 5h'], ['2025-02-03 11:18', '2025-02-05 10:05', 'TCS', 'LONG', '₹6,320', '1d 23h'],
-  ['2025-02-11 09:28', '2025-02-12 13:36', 'NIFTY FUT', 'SHORT', '₹4,890', '1d 4h'], ['2025-02-19 10:16', '2025-02-21 14:08', 'HDFCBANK', 'LONG', '-₹1,740', '2d 4h'],
-]
-const metrics = [['Sharpe', '1.84', '+0.12', 'up'], ['Sortino', '2.41', '+0.18', 'up'], ['Calmar', '1.67', '+0.09', 'up'], ['Max Drawdown', '−12.4%', '−1.8%', 'down'], ['CAGR', '20.7%', '+3.2%', 'up'], ['Win Rate', '58.6%', '+2.4%', 'up'], ['Profit Factor', '1.72', '+0.11', 'up'], ['Expectancy', '₹4,280', '+₹610', 'up']]
-const walkForward = [['2022 Q1 → Q2', '₹3,820', '₹2,940', true], ['2022 Q3 → Q4', '₹4,110', '₹3,680', true], ['2023 Q1 → Q2', '₹5,240', '₹4,060', true], ['2023 Q3 → Q4', '₹4,890', '₹3,920', true], ['2024 Q1 → Q2', '₹6,120', '₹2,840', false], ['2024 Q3 → Q4', '₹5,730', '₹4,470', true]]
+function Panel({ title, eyebrow, children, className = '' }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string }) {
+  return <section className={`backtest-panel ${className}`}><div className="flex items-start justify-between gap-3 border-b border-white/8 px-4 py-3"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2 className="mt-1 text-sm font-semibold text-white">{title}</h2></div><SlidersHorizontal className="size-4 text-slate-500" /></div>{children}</section>
+}
 
-function Panel({ title, eyebrow, children, className = '' }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string }) { return <section className={`backtest-panel ${className}`}><div className="flex items-start justify-between gap-3 border-b border-white/8 px-4 py-3"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2 className="mt-1 text-sm font-semibold text-white">{title}</h2></div><SlidersHorizontal className="size-4 text-slate-500" /></div>{children}</section> }
-function ChartTip({ active, payload }: any) { if (!active || !payload?.length) return null; return <div className="rounded-lg border border-cyan-300/20 bg-slate-950/95 p-2 text-[10px] shadow-xl"><p className="mb-1 text-slate-400">{payload[0].payload.date}</p>{payload.map((p: any) => <p key={p.dataKey} style={{ color: p.color }}>{p.name}: {p.value}%</p>)}</div> }
+function equityCurve(run: BacktestRun): { date: string; equity: number }[] {
+  if (!run.daily_returns || run.daily_returns.length === 0) return []
+  let equity = 100
+  return run.daily_returns.map(([date, ret]) => {
+    equity *= 1 + ret
+    return { date, equity: Number(equity.toFixed(2)) }
+  })
+}
+
+function fmtPct(v: number | null): string {
+  return v === null ? '—' : `${(v * 100).toFixed(1)}%`
+}
+function fmtNum(v: number | null, digits = 2): string {
+  return v === null ? '—' : v.toFixed(digits)
+}
 
 export default function BacktestsPage() {
-  const [strategy, setStrategy] = useState('NIFTY-Weekly-IronCondor')
+  const [strategies, setStrategies] = useState<Strategy[]>([])
+  const [runs, setRuns] = useState<BacktestRun[]>([])
+  const [strategyFilter, setStrategyFilter] = useState<string>('all')
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [compareIds, setCompareIds] = useState<string[]>([])
+  const [comparison, setComparison] = useState<ComparisonResult | null>(null)
   const [running, setRunning] = useState(false)
-  const [runComplete, setRunComplete] = useState(true)
-  const [page, setPage] = useState(1)
-  const [selectedRuns, setSelectedRuns] = useState<string[]>(['NIFTY-Weekly-IronCondor'])
-  const [sortAsc, setSortAsc] = useState(false)
-  const sortedTrades = useMemo(() => [...trades].sort((a, b) => sortAsc ? a[4].localeCompare(b[4]) : b[4].localeCompare(a[4])), [sortAsc])
-  const run = () => { setRunning(true); setRunComplete(false); window.setTimeout(() => { setRunning(false); setRunComplete(true) }, 1200) }
-  return <ShellLayout><main className="mx-auto w-full max-w-[1700px] pb-10"><header className="backtest-header"><div><p className="eyebrow">TRADINGOS // QUANT RESEARCH</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Backtests</h1><p className="mt-2 text-sm text-slate-400">Validate strategy edge across history, stress regimes, and simulated paths.</p></div><div className="flex flex-wrap items-center gap-2"><select value={strategy} onChange={e => setStrategy(e.target.value)} className="backtest-select"><option>NIFTY-Weekly-IronCondor</option><option>BANKNIFTY-ORB-Breakout</option><option>RELIANCE-MeanReversion-v2</option></select><button onClick={run} disabled={running} className="backtest-primary">{running ? <RefreshCw className="size-4 animate-spin" /> : <Play className="size-4" />}{running ? 'Running...' : 'Run Backtest'}</button><button className="backtest-icon" title="Export CSV"><Download className="size-4" /></button></div></header>{!runComplete && <div className="backtest-progress"><RefreshCw className="size-4 animate-spin text-cyan-300" /> Running walk-forward, Monte Carlo, and execution simulation...</div>}
-    <div className="metrics-grid">{metrics.map(([name, value, change, direction]) => <article className="backtest-metric" key={name}><span>{name}</span><strong>{value}</strong><small className={direction === 'up' ? 'positive' : 'negative'}>{direction === 'up' ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}{change}</small></article>)}</div>
-    <div className="backtest-main-grid"><Panel title="Equity curve & drawdown" eyebrow="PERFORMANCE PATH" className="equity-panel"><div className="chart-legend"><span><i className="legend-line cyan" /> Strategy</span><span><i className="legend-line violet" /> Nifty 50</span></div><ChartContainer config={{ strategy: { label: 'Strategy', color: 'var(--chart-1)' }, nifty: { label: 'Nifty 50', color: 'var(--chart-2)' } }} className="h-[260px] w-full px-2"><ComposedChart data={equity} margin={{ left: 0, right: 8, top: 12, bottom: 0 }}><CartesianGrid stroke="rgba(148,163,184,.1)" vertical={false} /><XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} /><Tooltip content={<ChartTip />} /><Line type="monotone" dataKey="strategy" stroke="var(--color-strategy)" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="nifty" stroke="var(--color-nifty)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} /></ComposedChart></ChartContainer><div className="drawdown-label">UNDERWATER / DRAWDOWN</div><ChartContainer config={{ drawdown: { label: 'Drawdown', color: 'var(--chart-3)' } }} className="h-[92px] w-full px-2"><AreaChart data={equity} margin={{ left: 0, right: 8, top: 0, bottom: 0 }}><XAxis dataKey="date" hide /><YAxis hide domain={[-6, 0]} /><Area type="monotone" dataKey="drawdown" stroke="var(--color-drawdown)" fill="var(--color-drawdown)" fillOpacity={.18} /></AreaChart></ChartContainer></Panel>
-      <Panel title="Monte Carlo stress" eyebrow="10,000 PATHS" className="monte-panel"><div className="monte-callout"><Sparkles className="size-4" /><div><span>95th percentile drawdown</span><strong>−18.6%</strong><small>Position sizing governor</small></div></div><ChartContainer config={{ count: { label: 'Simulations', color: 'var(--chart-4)' } }} className="h-[190px] w-full px-1"><BarChart data={monteCarlo} margin={{ left: -22, right: 4, top: 10, bottom: 0 }}><XAxis dataKey="range" hide /><YAxis hide /><Tooltip cursor={{ fill: 'rgba(103,232,249,.06)' }} content={<ChartTooltipContent hideLabel />} /><ReferenceLine x="36-38%" stroke="#fbbf24" strokeDasharray="4 4" label={{ value: 'P95', fill: '#fbbf24', fontSize: 10 }} /><Bar dataKey="count" radius={[3, 3, 0, 0]}>{monteCarlo.map((_, i) => <Cell key={i} fill={i > 13 ? '#f59e0b' : '#22d3ee'} fillOpacity={.65 + i / 50} />)}</Bar></BarChart></ChartContainer></Panel></div>
-    <div className="backtest-two-col"><Panel title="Trade ledger" eyebrow="EXECUTION LOG"><div className="overflow-x-auto"><table className="backtest-table"><thead><tr><th>Entry / Exit</th><th>Symbol</th><th>Side</th><th onClick={() => setSortAsc(!sortAsc)} className="cursor-pointer">P&L {sortAsc ? <ArrowUp className="inline size-3" /> : <ArrowDown className="inline size-3" />}</th><th>Holding</th></tr></thead><tbody>{sortedTrades.slice((page - 1) * 4, page * 4).map((row, i) => <tr key={i}><td><span>{row[0]}</span><small>{row[1]}</small></td><td>{row[2]}</td><td><span className={row[3] === 'LONG' ? 'side-long' : 'side-short'}>{row[3]}</span></td><td className={row[4].startsWith('-') ? 'loss' : 'gain'}>{row[4]}</td><td>{row[5]}</td></tr>)}</tbody></table></div><div className="table-footer"><span>Showing {(page - 1) * 4 + 1}–{Math.min(page * 4, trades.length)} of {trades.length} trades</span><div><button disabled={page === 1} onClick={() => setPage(1)}><ArrowDown className="size-3 rotate-90" /></button><button disabled={page === 2} onClick={() => setPage(2)}><ArrowUp className="size-3 rotate-90" /></button></div></div></Panel><Panel title="Walk-forward optimization" eyebrow="ROBUSTNESS"><div className="overflow-x-auto"><table className="backtest-table"><thead><tr><th>Rolling window</th><th>In-sample</th><th>Out-of-sample</th><th>Gate</th></tr></thead><tbody>{walkForward.map(row => <tr key={row[0] as string}><td>{row[0]}</td><td>{row[1]}</td><td>{row[2]}</td><td>{row[3] ? <Check className="size-4 text-emerald-300" /> : <X className="size-4 text-rose-300" />}</td></tr>)}</tbody></table></div><div className="wf-summary"><span>5 / 6 windows passed</span><strong>83.3% robustness</strong></div></Panel></div>
-    <Panel title="Compare runs" eyebrow="RESEARCH WORKBENCH" className="compare-panel"><div className="compare-toolbar">{['NIFTY-Weekly-IronCondor', 'BANKNIFTY-ORB-Breakout', 'RELIANCE-MeanReversion-v2', 'TCS-Earnings-Drift'].map((runName, i) => <button key={runName} className={selectedRuns.includes(runName) ? 'run-chip selected' : 'run-chip'} onClick={() => setSelectedRuns(prev => prev.includes(runName) ? prev.filter(x => x !== runName) : prev.length < 6 ? [...prev, runName] : prev)}><span className={`run-dot dot-${i}`} />{runName}</button>)}</div><div className="compare-grid"><ChartContainer config={{ strategy: { label: 'Selected runs', color: 'var(--chart-1)' } }} className="h-[180px] min-w-0"><LineChart data={equity}><CartesianGrid stroke="rgba(148,163,184,.08)" vertical={false} /><XAxis dataKey="date" hide /><YAxis hide /><Line dataKey="strategy" stroke="#22d3ee" strokeWidth={2} dot={false} /><Line dataKey="nifty" stroke="#8b5cf6" strokeWidth={2} dot={false} /></LineChart></ChartContainer><div><p className="eyebrow mb-2">PAIRWISE CORRELATION</p><div className="correlation-grid">{['NW', 'BO', 'RM', 'TE'].map((x, i) => <span key={x} className="corr-label">{x}</span>)}{[1, .62, .38, .51, .62, 1, .44, .72, .38, .44, 1, .29, .51, .72, .29, 1].map((v, i) => <div key={i} className="corr-cell" style={{ opacity: .28 + v * .65 }}>{v.toFixed(2)}</div>)}</div></div></div></Panel>
+  const [error, setError] = useState<string | null>(null)
+
+  async function reload() {
+    const data = await listBacktests()
+    setRuns(data)
+    setSelectedRunId((prev) => prev ?? data[0]?.id ?? null)
+  }
+
+  useEffect(() => {
+    listStrategies().then(setStrategies)
+    reload()
+    const interval = setInterval(reload, 15000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const filteredRuns = strategyFilter === 'all' ? runs : runs.filter((r) => r.strategy_version_id === strategyFilter)
+  const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null
+  const curve = selectedRun ? equityCurve(selectedRun) : []
+
+  async function handleRunMonteCarlo() {
+    if (!selectedRun) return
+    setRunning(true)
+    setError(null)
+    try {
+      await runMonteCarlo(selectedRun.id)
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Monte Carlo run failed')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  async function handleCompare() {
+    if (compareIds.length < 2) return
+    setError(null)
+    try {
+      setComparison(await compareBacktests(compareIds))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Comparison failed')
+    }
+  }
+
+  const metrics = selectedRun?.metrics
+  const metricCards: [string, string][] = metrics ? [
+    ['Sharpe', fmtNum(metrics.sharpe)],
+    ['CAGR', fmtPct(metrics.cagr)],
+    ['Max Drawdown', fmtPct(metrics.max_drawdown)],
+    ['Win Rate', fmtPct(metrics.win_rate)],
+    ['Profit Factor', fmtNum(metrics.profit_factor)],
+    ['Trades', String(metrics.num_trades)],
+  ] : []
+
+  return <ShellLayout><main className="mx-auto w-full max-w-[1700px] pb-10">
+    <header className="backtest-header"><div><p className="eyebrow">TRADINGOS // QUANT RESEARCH</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Backtests</h1><p className="mt-2 text-sm text-slate-400">Real backtest runs, real engine-computed metrics — creating a fresh run requires OHLCV bars, which this console doesn't yet collect (POST /backtests API only).</p></div><div className="flex flex-wrap items-center gap-2"><select value={strategyFilter} onChange={e => setStrategyFilter(e.target.value)} className="backtest-select"><option value="all">All strategies</option>{strategies.map(s => <option key={s.id} value={s.versions[s.versions.length - 1]?.id}>{s.name}</option>)}</select><select value={selectedRunId ?? ''} onChange={e => setSelectedRunId(e.target.value)} className="backtest-select">{filteredRuns.map(r => <option key={r.id} value={r.id}>{r.symbol} · {r.id.slice(0, 8)} · {r.status}</option>)}</select><button onClick={handleRunMonteCarlo} disabled={running || !selectedRun} className="backtest-primary">{running ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{running ? 'Running...' : 'Run Monte Carlo'}</button></div></header>
+    {error && <div className="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
+    {!selectedRun && <div className="rounded-xl border border-white/10 p-8 text-center text-sm text-muted-foreground">No backtest runs yet. Create one via POST /api/v1/backtests with historical bars.</div>}
+    {selectedRun && <>
+      <div className="metrics-grid">{metricCards.map(([name, value]) => <article className="backtest-metric" key={name}><span>{name}</span><strong>{value}</strong></article>)}</div>
+      <div className="backtest-main-grid">
+        <Panel title="Equity curve" eyebrow="DAILY RETURNS, COMPOUNDED" className="equity-panel">
+          {curve.length === 0 ? <p className="p-4 text-xs text-muted-foreground">No daily-return series recorded for this run.</p> : <ChartContainer config={{ equity: { label: 'Equity', color: 'var(--chart-1)' } }} className="h-[260px] w-full px-2"><AreaChart data={curve} margin={{ left: 0, right: 8, top: 12, bottom: 0 }}><CartesianGrid stroke="rgba(148,163,184,.1)" vertical={false} /><XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip /><Area type="monotone" dataKey="equity" stroke="var(--color-equity)" fill="var(--color-equity)" fillOpacity={.18} /></AreaChart></ChartContainer>}
+        </Panel>
+        <Panel title="Monte Carlo stress" eyebrow={selectedRun.monte_carlo_result ? `${selectedRun.monte_carlo_result.n_paths} PATHS` : 'NOT RUN'} className="monte-panel">
+          {selectedRun.monte_carlo_result ? <div className="monte-callout"><Sparkles className="size-4" /><div><span>95th percentile drawdown</span><strong>{fmtPct(selectedRun.monte_carlo_result.percentile_95_max_drawdown)}</strong><small>Mean final P&L {fmtNum(selectedRun.monte_carlo_result.mean_final_pnl, 0)} · Median {fmtNum(selectedRun.monte_carlo_result.median_final_pnl, 0)}</small></div></div> : <p className="p-4 text-xs text-muted-foreground">Not run yet — click "Run Monte Carlo" above.</p>}
+        </Panel>
+      </div>
+      <div className="backtest-two-col">
+        <Panel title="Trade P&L ledger" eyebrow="PER-TRADE NET P&L">
+          {!selectedRun.trade_pnls || selectedRun.trade_pnls.length === 0 ? <p className="p-4 text-xs text-muted-foreground">No trades recorded.</p> : <div className="overflow-x-auto"><table className="backtest-table"><thead><tr><th>#</th><th>Net P&L</th></tr></thead><tbody>{selectedRun.trade_pnls.map((pnl, i) => <tr key={i}><td>{i + 1}</td><td className={pnl < 0 ? 'loss' : 'gain'}>{pnl.toFixed(0)}</td></tr>)}</tbody></table></div>}
+        </Panel>
+        <Panel title="Walk-forward optimization" eyebrow="ROBUSTNESS">
+          {!selectedRun.walk_forward_result ? <p className="p-4 text-xs text-muted-foreground">Not run — walk-forward requires submitting historical bars via POST /backtests/{'{run_id}'}/walk-forward.</p> : <><div className="overflow-x-auto"><table className="backtest-table"><thead><tr><th>Test window</th><th>Expectancy</th><th>Trades</th><th>Gate</th></tr></thead><tbody>{selectedRun.walk_forward_result.windows.map((w, i) => <tr key={i}><td>{w.test_start} → {w.test_end}</td><td>{fmtNum(w.out_of_sample_expectancy, 0)}</td><td>{w.num_trades}</td><td>{w.passed ? <Check className="size-4 text-emerald-300" /> : <X className="size-4 text-rose-300" />}</td></tr>)}</tbody></table></div><div className="wf-summary"><span>{selectedRun.walk_forward_result.windows.filter(w => w.passed).length} / {selectedRun.walk_forward_result.windows.length} windows passed</span><strong>{selectedRun.walk_forward_result.passed ? 'Robust' : 'Not robust'}</strong></div></>}
+        </Panel>
+      </div>
+      <Panel title="Compare runs" eyebrow="RESEARCH WORKBENCH" className="compare-panel">
+        <div className="compare-toolbar">{runs.map((r, i) => <button key={r.id} className={compareIds.includes(r.id) ? 'run-chip selected' : 'run-chip'} onClick={() => setCompareIds(prev => prev.includes(r.id) ? prev.filter(x => x !== r.id) : [...prev, r.id])}><span className={`run-dot dot-${i % 6}`} />{r.symbol} · {r.id.slice(0, 6)}</button>)}</div>
+        <div className="mt-3 flex items-center gap-2"><button onClick={handleCompare} disabled={compareIds.length < 2} className="button-secondary">Compare selected ({compareIds.length})</button></div>
+        {comparison && <div className="mt-4"><p className="eyebrow mb-2">PAIRWISE CORRELATION</p><div className="flex flex-col gap-1 font-mono text-xs">{Object.entries(comparison.correlations).map(([pair, value]) => <div key={pair} className="flex justify-between border-b border-white/5 py-1"><span>{pair}</span><span style={{ opacity: 0.4 + Math.abs(value) * 0.6 }}>{value.toFixed(2)}</span></div>)}</div></div>}
+      </Panel>
+    </>}
   </main></ShellLayout>
 }
