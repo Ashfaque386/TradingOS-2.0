@@ -24,6 +24,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Claude Code's own tooling scratch space (e.g. isolated worktrees it
+# creates for background subagents) -- local runtime state, not project
+# content.
+/.claude/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
