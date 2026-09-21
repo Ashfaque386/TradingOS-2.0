@@ -6,7 +6,20 @@ from src.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+# Build Spec §21-22 hardening pass: SQLAlchemy's default pool (size 5,
+# overflow 10 -- 15 connections total) measured live against a real
+# QueuePool exhaustion under a WebSocket fan-out load smoke test (see
+# scripts/ws-fanout-load-smoke-test.mjs) -- each open WebSocket channel
+# (src/api/routes/websockets.py's sign-off-queue and activity-feed) opens
+# its own short-lived session on every poll interval (every 1.5-2s), so
+# as few as ~30 concurrent Console connections (a handful of browser tabs
+# across a small team, not an exotic load) reliably exhausted the default
+# pool and made the whole app -- every HTTP route too, not just
+# WebSockets -- time out until enough connections closed. Sized with
+# headroom over that measured failure point, not an arbitrary bump.
+engine = create_async_engine(
+    settings.database_url, pool_pre_ping=True, pool_size=20, max_overflow=20
+)
 
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 

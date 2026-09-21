@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.core.db as db_module
+from src.api.routes.audit import get_audit_archive_root
 from src.core.config import get_settings
 from src.core.roles import Role
 from src.core.security import hash_password
@@ -77,9 +78,21 @@ async def redis_client() -> AsyncIterator[Redis]:
 @pytest_asyncio.fixture
 async def client(
     db_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path,
 ) -> AsyncIterator[AsyncClient]:
+    # The audit archive's default path (settings.audit_archive_path) is a
+    # relative "audit_archive" dir resolved off the process cwd -- the same
+    # cwd a manually-run dev server uses. Without this override, any real
+    # traffic sent to that dev server (e.g. a WS load smoke test's login
+    # calls) lands in the exact same WORM ndjson file this suite's own
+    # POST /api/v1/audit/verify tests diff the DB chain against, producing
+    # a false "diverged" reading that has nothing to do with this test run.
+    # A fresh per-test tmp_path keeps the archive isolated the same way
+    # db_session_factory already isolates the database.
+    app.dependency_overrides[get_audit_archive_root] = lambda: tmp_path / "audit_archive"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
+    app.dependency_overrides.pop(get_audit_archive_root, None)
 
 
 @pytest.fixture
