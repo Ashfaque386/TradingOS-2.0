@@ -11,6 +11,17 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos"
     redis_url: str = "redis://localhost:6379/0"
 
+    # See src/core/db.py's engine construction for why these are settings
+    # rather than hardcoded: the default (20/20, sized for the WebSocket
+    # fan-out load measured in the Build Spec §21-22 hardening pass) is
+    # right for backend/Dockerfile's own container, which has nothing else
+    # competing for memory in it. Dockerfile.allinone's single container
+    # also runs Postgres, Redis, the frontend's Node server, and nginx, all
+    # sharing one memory budget -- it overrides these much smaller via the
+    # allinone-supervisord.conf api program's environment.
+    db_pool_size: int = 20
+    db_max_overflow: int = 20
+
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15

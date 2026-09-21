@@ -18,7 +18,10 @@ settings = get_settings()
 # WebSockets -- time out until enough connections closed. Sized with
 # headroom over that measured failure point, not an arbitrary bump.
 engine = create_async_engine(
-    settings.database_url, pool_pre_ping=True, pool_size=20, max_overflow=20
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
 )
 
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
