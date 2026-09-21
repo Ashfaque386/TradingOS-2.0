@@ -1,0 +1,119 @@
+# One self-contained image: frontend, backend, Postgres, Redis, and an
+# nginx reverse proxy, all supervisord-managed inside a single container
+# behind a single public port -- deploy this one image anywhere (Render,
+# Railway, Fly, a bare `docker run`, ...) with no per-platform wiring
+# (no separate database/Redis service to provision, no NEXT_PUBLIC_*
+# build args, no CORS_ORIGINS to keep in sync) and it comes up working.
+#
+# This is deliberately separate from the root Dockerfile (frontend only)
+# and backend/Dockerfile (backend + its own embedded Postgres) -- those
+# two stay as they are for docker-compose.yml's local multi-service dev
+# workflow. Use this one for a single-service deployment instead.
+#
+# Trade-off, by design, not an oversight: Postgres's and Redis's data live
+# on this container's own filesystem, same as backend/Dockerfile's embedded
+# Postgres. Most hosting platforms' default "ephemeral" instances do NOT
+# persist that across a restart/redeploy -- attach a persistent disk/volume
+# mounted at /var/lib/postgresql/data if you need the database to survive
+# one (Redis's own data here is disposable -- pub/sub, rate-limit counters,
+# the mock tick stream -- and does not need to persist).
+
+# ---- Frontend build (Next.js standalone output) ----
+FROM node:24-alpine AS frontend-deps
+WORKDIR /fe
+RUN apk add --no-cache libc6-compat && corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+FROM node:24-alpine AS frontend-build
+WORKDIR /fe
+RUN corepack enable
+COPY --from=frontend-deps /fe/node_modules ./node_modules
+COPY . .
+# Explicitly EMPTY, not merely unset: lib/api.ts's/lib/ws.ts's fallback
+# only goes same-origin (relative fetch; WS origin derived from
+# window.location) when NEXT_PUBLIC_API_URL is an empty string -- unset
+# falls back to a hardcoded http://localhost:8000, which is wrong here
+# (this image serves the frontend and backend from one origin via the
+# bundled nginx reverse proxy, deploy/nginx.conf.template, not a separate
+# backend on its own port). Baking in an empty string is what makes the
+# same built image work unmodified on any host/port/platform.
+ENV NEXT_PUBLIC_API_URL="" \
+    NEXT_PUBLIC_WS_URL=""
+RUN pnpm build
+
+# ---- Final image ----
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PGDATA=/var/lib/postgresql/data \
+    PATH="/usr/lib/postgresql/16/bin:${PATH}"
+
+# Postgres 16 (same PGDG-repo approach as backend/Dockerfile) + Redis +
+# nginx + Node (to run the frontend's standalone server.js) + gettext-base
+# (envsubst, for templating nginx's listen port from $PORT at container
+# start, whatever the host platform sets it to).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl ca-certificates gnupg lsb-release supervisor \
+        redis-server nginx-light gettext-base \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-16 \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/nginx/sites-enabled/default
+
+WORKDIR /app
+
+# ---- Backend ----
+COPY backend/pyproject.toml ./
+COPY backend/src ./src
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini ./
+COPY backend/scripts ./scripts
+RUN pip install . \
+    && sed -i 's/\r$//' scripts/container-entrypoint.sh scripts/api-entrypoint.sh \
+    && chmod +x scripts/container-entrypoint.sh scripts/api-entrypoint.sh
+
+# Agent Gateway config + NSE holiday calendar (AGENT_GATEWAY_CONFIG_PATH/
+# NSE_HOLIDAYS_PATH default to config/... relative to this WORKDIR).
+COPY config ./config
+
+# ---- Frontend (standalone build output only, not the source tree) ----
+WORKDIR /app/frontend
+COPY --from=frontend-build /fe/public ./public
+COPY --from=frontend-build /fe/.next/standalone ./
+COPY --from=frontend-build /fe/.next/static ./.next/static
+WORKDIR /app
+
+# ---- Process supervision, reverse proxy, entrypoint ----
+COPY deploy/allinone-supervisord.conf /etc/supervisor/conf.d/tradingos.conf
+COPY deploy/nginx.conf.template /etc/nginx/conf.d/tradingos.conf.template
+COPY deploy/allinone-entrypoint.sh /app/deploy-entrypoint.sh
+RUN sed -i 's/\r$//' /app/deploy-entrypoint.sh \
+    && chmod +x /app/deploy-entrypoint.sh \
+    && mkdir -p /var/log/supervisor "$PGDATA" \
+    && chown -R postgres:postgres "$PGDATA" \
+    && mkdir -p /var/lib/redis \
+    && chown -R redis:redis /var/lib/redis
+
+# The one port actually meant to be reachable -- nginx listens here (see
+# allinone-entrypoint.sh, which renders it from $PORT); everything else
+# (postgres, redis, uvicorn, the frontend's node server) is loopback-only
+# inside this same container. Most platforms override $PORT themselves;
+# 8080 is just the default for a plain `docker run`.
+ENV PORT=8080
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
+    CMD sh -c 'curl -f http://localhost:${PORT:-8080}/health || exit 1'
+
+ENTRYPOINT ["/app/deploy-entrypoint.sh"]

@@ -47,4 +47,11 @@ if [ -n "$DEFAULT_ADMIN_EMAIL" ] && [ -n "$DEFAULT_ADMIN_PASSWORD" ]; then
 fi
 
 echo "[api] starting uvicorn..."
-exec uvicorn src.main:app --host 0.0.0.0 --port 8000
+# UVICORN_HOST defaults to 0.0.0.0 -- required for backend/Dockerfile's own
+# multi-container use (docker-compose publishes this container's 8000
+# directly to the host, so uvicorn must accept that). The all-in-one image
+# (Dockerfile.allinone) overrides this to 127.0.0.1: there, only its bundled
+# nginx reverse proxy is meant to be reachable at all, so uvicorn stays
+# loopback-only behind it, same internal-only posture as every other port
+# in this project (Build Spec §21-22).
+exec uvicorn src.main:app --host "${UVICORN_HOST:-0.0.0.0}" --port 8000

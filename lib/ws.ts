@@ -9,8 +9,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { getAccessToken, API_BASE_URL } from './api'
 
+// `new URL()` below requires an absolute string (unlike `fetch`, it has no
+// implicit base to resolve a relative one against) -- when API_BASE_URL is
+// deliberately empty (same-origin deployment, e.g. the all-in-one image's
+// bundled nginx reverse proxy, which serves the frontend and backend from
+// one origin), fall back to the page's own origin at connect time instead
+// of a relative string that would throw.
 const WS_BASE_URL =
-  process.env.NEXT_PUBLIC_WS_URL ?? API_BASE_URL.replace(/^http/, 'ws')
+  process.env.NEXT_PUBLIC_WS_URL ??
+  (API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(
+    /^http/,
+    'ws',
+  )
 
 export type WsStatus = 'connecting' | 'open' | 'closed'
 
