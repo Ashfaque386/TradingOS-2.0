@@ -2,7 +2,7 @@
 
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, OrbitControls, Sparkles } from '@react-three/drei'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Mesh } from 'three'
 import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
@@ -12,6 +12,7 @@ import {
   type ActivityEvent,
   type ActivityFeedMessage,
   type AgentSummary,
+  type KillSwitchMode,
   type KillSwitchState,
   type MarketHours,
   type OrganizationRun,
@@ -20,6 +21,7 @@ import {
   getKillSwitch,
   getMarketHours,
   listRuns,
+  resetKillSwitch,
 } from '@/lib/api'
 import { useWebSocketChannel } from '@/lib/ws'
 
@@ -116,31 +118,51 @@ export default function Home() {
   const [liveKillSwitch, setLiveKillSwitch] = useState<KillSwitchState | null>(null)
   const [marketHours, setMarketHours] = useState<MarketHours | null>(null)
   const [signoff, setSignoff] = useState<SignoffSnapshot | null>(null)
+  const [resettingMode, setResettingMode] = useState<KillSwitchMode | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
+
+  const canResetKillSwitch = role === 'SystemAdministrator' || role === 'RiskManager'
+
+  const load = useCallback(async () => {
+    const [agentsRes, runsRes, paperKs, liveKs, hours] = await Promise.allSettled([
+      getAgents(),
+      listRuns(),
+      getKillSwitch('paper'),
+      getKillSwitch('live'),
+      getMarketHours(),
+    ])
+    if (agentsRes.status === 'fulfilled') setAgents(agentsRes.value)
+    if (runsRes.status === 'fulfilled') setRuns(runsRes.value)
+    if (paperKs.status === 'fulfilled') setPaperKillSwitch(paperKs.value)
+    if (liveKs.status === 'fulfilled') setLiveKillSwitch(liveKs.value)
+    if (hours.status === 'fulfilled') setMarketHours(hours.value)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      const [agentsRes, runsRes, paperKs, liveKs, hours] = await Promise.allSettled([
-        getAgents(),
-        listRuns(),
-        getKillSwitch('paper'),
-        getKillSwitch('live'),
-        getMarketHours(),
-      ])
-      if (cancelled) return
-      if (agentsRes.status === 'fulfilled') setAgents(agentsRes.value)
-      if (runsRes.status === 'fulfilled') setRuns(runsRes.value)
-      if (paperKs.status === 'fulfilled') setPaperKillSwitch(paperKs.value)
-      if (liveKs.status === 'fulfilled') setLiveKillSwitch(liveKs.value)
-      if (hours.status === 'fulfilled') setMarketHours(hours.value)
+    async function tick() {
+      if (!cancelled) await load()
     }
-    load()
-    const interval = setInterval(load, 20000)
+    tick()
+    const interval = setInterval(tick, 20000)
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [])
+  }, [load])
+
+  async function handleResetKillSwitch(mode: KillSwitchMode) {
+    setResettingMode(mode)
+    setResetError(null)
+    try {
+      await resetKillSwitch(mode, `Reset via Overview console by ${role}`)
+      await load()
+    } catch {
+      setResetError(`Failed to reset the ${mode} kill switch. Try again.`)
+    } finally {
+      setResettingMode(null)
+    }
+  }
 
   useWebSocketChannel<ActivityFeedMessage>('/ws/activity-feed', {}, (message) => {
     if (message.type === 'backfill') {
@@ -180,7 +202,33 @@ export default function Home() {
         <div><Radio /><span>LIVE RUNS<strong>{liveRunsCount.toString().padStart(2, '0')}</strong></span></div>
         <div className={pendingSignoffs > 0 ? 'kpi-alert' : ''}><AlertTriangle /><span>PENDING SIGN-OFFS<strong>{pendingSignoffs.toString().padStart(2, '0')}</strong></span></div>
         <div><TrendingUp /><span>TODAY'S PAPER P&L<strong className="text-muted-foreground">not exposed yet</strong></span></div>
-        <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : 'OFF · ARMED'}</strong></span></div>
+        <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : 'OFF · ARMED'}</strong>
+          {killSwitchTripped && canResetKillSwitch && (
+            <span className="kill-switch-reset-controls">
+              {paperKillSwitch?.tripped && (
+                <button
+                  type="button"
+                  className="kill-switch-reset-btn"
+                  disabled={resettingMode === 'paper'}
+                  onClick={() => handleResetKillSwitch('paper')}
+                >
+                  {resettingMode === 'paper' ? 'Resetting paper…' : 'Reset paper kill switch'}
+                </button>
+              )}
+              {liveKillSwitch?.tripped && (
+                <button
+                  type="button"
+                  className="kill-switch-reset-btn"
+                  disabled={resettingMode === 'live'}
+                  onClick={() => handleResetKillSwitch('live')}
+                >
+                  {resettingMode === 'live' ? 'Resetting live…' : 'Reset live kill switch'}
+                </button>
+              )}
+              {resetError && <small className="kill-switch-reset-error">{resetError}</small>}
+            </span>
+          )}
+        </span></div>
         <div><Timer /><span>MARKET HOURS<strong>{marketHours === null ? '—' : marketHours.is_open ? 'OPEN' : 'CLOSED'}</strong></span></div>
       </div>
     </section>
