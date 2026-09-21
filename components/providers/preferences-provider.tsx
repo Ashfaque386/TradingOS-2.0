@@ -13,7 +13,7 @@ export const PALETTES = [
   { id: 'nominal', label: 'Nominal', color: '#06b6d4' },
   { id: 'caution', label: 'Caution', color: '#f59e0b' },
   { id: 'risk', label: 'Risk', color: '#ef4444' },
-  { id: 'neutral', label: 'Neutral', color: '#6b7280' },
+  { id: 'neutral', label: 'Neutral', color: '#94a3b8' },
   { id: 'light', label: 'Light', color: '#f5f5f5' },
   { id: 'contrast', label: 'Contrast', color: '#ffffff' },
 ] as const
@@ -24,7 +24,9 @@ const ACCENTS: Record<string, string> = {
   nominal: '#06b6d4',
   caution: '#f59e0b',
   risk: '#ef4444',
-  neutral: '#6b7280',
+  // Build Spec §21-22 WCAG 2.1 AA pass: was #6b7280 (4.17:1 against the
+  // dark background as literal nav-item text -- under the 4.5:1 minimum).
+  neutral: '#94a3b8',
   light: '#1f2937',
   contrast: '#ffffff',
 }

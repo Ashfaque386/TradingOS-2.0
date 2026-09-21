@@ -30,13 +30,7 @@ from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.gateway.apply import apply_config_text
-from src.gateway.loader import (
-    ConfigLoadError,
-    load_and_validate,
-    parse_config_text,
-    read_config_text,
-    validate_config_dict,
-)
+from src.gateway.loader import ConfigLoadError, parse_config_text, validate_config_dict
 from src.gateway.service import ServiceError, _atomic_write, rollback_config
 from src.gateway.state import get_state
 from src.models.agent_config_version import AgentConfigVersion
@@ -92,21 +86,31 @@ class ConfigVersionSummaryResponse(BaseModel):
 
 @router.get("/config")
 async def get_gateway_config_endpoint(
+    db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> GatewayConfigResponse:
-    path = _config_path()
-    try:
-        raw_text = read_config_text(path)
-        config = load_and_validate(path)
-    except ConfigLoadError as exc:
+    """Serves the last-known-good config from `GatewayState` (Build Spec
+    §6.2) -- the same in-memory holder every agent-facing call site
+    reads -- never by re-reading the file straight off disk. A hot-reload
+    watcher or a hand-edit can leave the on-disk file transiently (or
+    indefinitely, if nobody fixes it) invalid; this endpoint is exactly
+    what an operator opens to confirm the app is still fine regardless,
+    so it must reflect the truth `GatewayState` already guarantees, not
+    fail alongside a broken file it was never running on in the first
+    place.
+    """
+    version_id = get_state().get_version_id()
+    config = get_state().get_config()
+    if config is None or version_id is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"config on disk is currently invalid: {'; '.join(exc.errors)}",
-        ) from exc
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="no Agent Gateway config has been applied yet",
+        )
+    version = await db.get(AgentConfigVersion, version_id)
     return GatewayConfigResponse(
-        raw_text=raw_text,
+        raw_text=version.raw_content if version is not None else "",
         parsed=config.model_dump(mode="json", by_alias=True),
-        version_id=get_state().get_version_id(),
+        version_id=version_id,
     )
 
 

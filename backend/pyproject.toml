@@ -68,6 +68,11 @@ tradingos-cli = "src.gateway.cli:cli"
 dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<0.25",
+    # Build Spec §21-22 hardening pass: mutation testing (actual
+    # mutation-kill rate, not just line coverage) for the risk-critical
+    # modules -- run with `mutmut run`, see [tool.mutmut] below for scope
+    # and why this is pinned below 3.0.
+    "mutmut>=2.4,<3.0",
 ]
 
 [build-system]
@@ -80,6 +85,31 @@ include = ["src*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mutmut]
+# Build Spec §21-22 hardening pass: scoped to the pure, deterministic
+# risk-critical logic named in that pass (Kill Switch, Compliance
+# Checker, correlation constraint) -- not the whole codebase, which
+# would take far too long to be run routinely and would mostly mutate
+# code with no bearing on capital-at-risk decisions. live-intent expiry
+# (src/orchestration/live_trading.py::expire_stale_intents) is
+# DB-orchestration code with the rest of that 700-line file around it;
+# it's covered by a hand-driven mutation analysis instead (see
+# tests/test_orchestration_live_trading.py's expiry tests' docstrings),
+# not by this automated config, to avoid mutating hundreds of unrelated
+# lines just to reach one function.
+#
+# Pinned to mutmut>=2.4,<3.0 (not the 3.x this project's dev extra names
+# below): mutmut 3.8.0's stats/trampoline instrumentation has a hardcoded
+# `assert not name.startswith("src.")`, which trips on this repo's own
+# package (literally named `src`, as in every `from src.x import y`) --
+# confirmed live, not assumed. mutmut 2.x's simpler mutate-in-place/rerun
+# model has no such assertion.
+paths_to_mutate = "src/engine/risk/kill_switch.py,src/engine/risk/compliance.py,src/engine/risk/correlation_constraint.py,src/orchestration/kill_switch.py"
+# Only the tests that actually exercise these modules -- the full suite
+# (~700 tests, ~2.5 minutes) re-run per surviving mutant would make a
+# routine mutation-testing run impractically slow.
+runner = ".venv/bin/python -m pytest -x tests/test_engine_kill_switch.py tests/test_engine_compliance.py tests/test_engine_correlation_constraint.py tests/test_orchestration_kill_switch.py"
 
 [tool.ruff]
 target-version = "py312"
