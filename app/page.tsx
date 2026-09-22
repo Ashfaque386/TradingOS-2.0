@@ -169,6 +169,13 @@ export default function Home() {
       setActivities(message.events.slice(-40).reverse())
     } else {
       setActivities((prev) => [message.event, ...prev].slice(0, 40))
+      // Kill-switch trips/resets land here via the audit log within ~1.5s
+      // (src/api/routes/websockets.py), but paperKillSwitch/liveKillSwitch
+      // only otherwise refresh on the 20s poll below -- without this, the
+      // Pulse orb and KILL SWITCH strip could show a stale "armed" state
+      // for up to 20s after a real trip. Refetch immediately instead of
+      // waiting for the next tick.
+      if (message.event.entity_type === 'kill-switch') load()
     }
   })
 

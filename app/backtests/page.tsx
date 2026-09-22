@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Check, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { ChartContainer } from '@/components/ui/chart'
+import { useAuth } from '@/components/auth/auth-provider'
 import {
   type BacktestRun,
   type ComparisonResult,
@@ -37,6 +38,13 @@ function fmtNum(v: number | null, digits = 2): string {
 }
 
 export default function BacktestsPage() {
+  const { role } = useAuth()
+  // POST /backtests/{run_id}/monte-carlo is SystemAdministrator/
+  // PortfolioManager-only server-side (src/api/routes/backtests.py's
+  // _OPERATOR_ROLES) -- this page had no role gate at all before, so a
+  // RiskManager/ReadOnlyAuditor saw an enabled "Run Monte Carlo" button
+  // that would 403.
+  const canOperate = role === 'SystemAdministrator' || role === 'PortfolioManager'
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [strategyFilter, setStrategyFilter] = useState<string>('all')
@@ -98,7 +106,7 @@ export default function BacktestsPage() {
   ] : []
 
   return <ShellLayout><main className="mx-auto w-full max-w-[1700px] pb-10">
-    <header className="backtest-header"><div><p className="eyebrow">TRADINGOS // QUANT RESEARCH</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Backtests</h1><p className="mt-2 text-sm text-slate-400">Real backtest runs, real engine-computed metrics — creating a fresh run requires OHLCV bars, which this console doesn't yet collect (POST /backtests API only).</p></div><div className="flex flex-wrap items-center gap-2"><select value={strategyFilter} onChange={e => setStrategyFilter(e.target.value)} className="backtest-select"><option value="all">All strategies</option>{strategies.map(s => <option key={s.id} value={s.versions[s.versions.length - 1]?.id}>{s.name}</option>)}</select><select value={selectedRunId ?? ''} onChange={e => setSelectedRunId(e.target.value)} className="backtest-select">{filteredRuns.map(r => <option key={r.id} value={r.id}>{r.symbol} · {r.id.slice(0, 8)} · {r.status}</option>)}</select><button onClick={handleRunMonteCarlo} disabled={running || !selectedRun} className="backtest-primary">{running ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{running ? 'Running...' : 'Run Monte Carlo'}</button></div></header>
+    <header className="backtest-header"><div><p className="eyebrow">TRADINGOS // QUANT RESEARCH</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Backtests</h1><p className="mt-2 text-sm text-slate-400">Real backtest runs, real engine-computed metrics — creating a fresh run requires OHLCV bars, which this console doesn't yet collect (POST /backtests API only).</p></div><div className="flex flex-wrap items-center gap-2"><select value={strategyFilter} onChange={e => setStrategyFilter(e.target.value)} className="backtest-select"><option value="all">All strategies</option>{strategies.map(s => <option key={s.id} value={s.versions[s.versions.length - 1]?.id}>{s.name}</option>)}</select><select value={selectedRunId ?? ''} onChange={e => setSelectedRunId(e.target.value)} className="backtest-select">{filteredRuns.map(r => <option key={r.id} value={r.id}>{r.symbol} · {r.id.slice(0, 8)} · {r.status}</option>)}</select><button onClick={handleRunMonteCarlo} disabled={running || !selectedRun || !canOperate} title={canOperate ? undefined : 'Your role does not have Monte Carlo run access'} className="backtest-primary">{running ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{running ? 'Running...' : 'Run Monte Carlo'}</button></div></header>
     {error && <div className="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
     {!selectedRun && <div className="rounded-xl border border-white/10 p-8 text-center text-sm text-muted-foreground">No backtest runs yet. Create one via POST /api/v1/backtests with historical bars.</div>}
     {selectedRun && <>

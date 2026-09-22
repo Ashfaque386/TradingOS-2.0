@@ -3,7 +3,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, Cable, Clock3, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
-import { type FreshnessRecord, type Instrument, type MarketPulse, getFreshness, getMarketPulse, listInstruments } from '@/lib/api'
+import {
+  type BrokerCredentialStatus,
+  type FreshnessRecord,
+  type Instrument,
+  type LlmProviderStatus,
+  type MarketPulse,
+  LLM_PROVIDER_LABELS,
+  getFreshness,
+  getMarketPulse,
+  listBrokerCredentialStatus,
+  listInstruments,
+  listLlmProviderStatus,
+} from '@/lib/api'
 
 const TABS = [
   { id: 'pulse', label: 'Pulse', icon: Activity },
@@ -111,7 +123,45 @@ function FreshnessTab() {
 }
 
 function ProvidersTab() {
-  return <Panel title="Provider Status" eyebrow="NOT AVAILABLE"><GapNotice>No backend endpoint reports live LLM provider or broker connectivity health. LLM fallback order is visible in Settings → Agent Gateway Config; the LlmRouter itself tracks per-call failures internally but doesn't expose a health/uptime API. Broker circuit-breaker state is enforced server-side (src/brokers/factory.py's ResilientBrokerAdapter) but also isn't surfaced over HTTP yet.</GapNotice></Panel>
+  const [providers, setProviders] = useState<LlmProviderStatus[]>([])
+  const [brokers, setBrokers] = useState<BrokerCredentialStatus[]>([])
+
+  useEffect(() => {
+    listLlmProviderStatus().then(setProviders)
+    listBrokerCredentialStatus().then(setBrokers)
+  }, [])
+
+  return (
+    <div className="technical-layout">
+      <Panel title="LLM providers" eyebrow="CREDENTIAL + FALLBACK-CHAIN STATUS">
+        <div className="provider-status-list">
+          {providers.map((p) => (
+            <div className="provider-status-row" key={p.provider}>
+              <span className={`provider-status-dot ${p.configured ? (p.in_fallback_order ? 'green' : 'amber') : 'gray'}`} />
+              <div className="min-w-0 flex-1">
+                <strong>{LLM_PROVIDER_LABELS[p.provider as keyof typeof LLM_PROVIDER_LABELS] ?? p.provider}</strong>
+                <small>{p.configured ? (p.in_fallback_order ? 'configured · in fallback chain' : 'configured · not in fallback chain') : 'not configured'}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Broker connections" eyebrow="OAUTH TOKEN STATUS">
+        <div className="provider-status-list">
+          {brokers.map((b) => (
+            <div className="provider-status-row" key={b.broker}>
+              <span className={`provider-status-dot ${b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
+              <div className="min-w-0 flex-1">
+                <strong className="capitalize">{b.broker}</strong>
+                <small>{b.token_status === 'valid' ? 'token valid' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+        <GapNotice>Real-time connectivity/latency (as opposed to whether a token is currently valid) isn't exposed: the broker circuit breaker (src/brokers/resilient.py) is constructed fresh per order dispatch rather than held as a persistent per-broker instance, so there is no live breaker state to surface yet.</GapNotice>
+      </Panel>
+    </div>
+  )
 }
 
 function OptionChainTab() {

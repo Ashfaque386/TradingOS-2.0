@@ -530,6 +530,18 @@ export type UnifiedExecution = {
 export const listOrders = (mode: 'paper' | 'live' | 'both' = 'both') =>
   apiGet<UnifiedExecution[]>(`/api/v1/orders?mode=${mode}`)
 
+export type PositionByStrategy = {
+  mode: 'paper' | 'live'
+  strategy_id: string
+  strategy_name: string
+  symbol: string
+  quantity: number
+  avg_cost: number
+  realized_pnl: number
+}
+
+export const listPositionsByStrategy = () => apiGet<PositionByStrategy[]>('/api/v1/orders/positions')
+
 // ---- Manual order intent (routed through the real risk gate) ----
 export type OrderIntentInput = {
   mode: KillSwitchMode
