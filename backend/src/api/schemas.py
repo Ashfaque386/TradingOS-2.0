@@ -617,6 +617,30 @@ class FreshnessRecordResponse(BaseModel):
     ingested_at: str
 
 
+class LiveOptionChainEntryResponse(BaseModel):
+    """Mirrors src.brokers.base.OptionChainEntry -- a real per-strike row
+    from whichever broker is configured (Phase 16 audit follow-up D).
+    Every optional field is genuinely `None`, never a fabricated `0.0`,
+    when the broker's own response didn't carry it."""
+
+    strike: float
+    call_symbol: str | None
+    put_symbol: str | None
+    call_ltp: float | None
+    put_ltp: float | None
+    call_oi: float | None
+    put_oi: float | None
+    call_iv: float | None
+    put_iv: float | None
+
+
+class LiveOptionChainResponse(BaseModel):
+    broker: str
+    underlying: str
+    expiry: str
+    entries: list[LiveOptionChainEntryResponse]
+
+
 class InstrumentResponse(BaseModel):
     symbol: str
     exchange: str

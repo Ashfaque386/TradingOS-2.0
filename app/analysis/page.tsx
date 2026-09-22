@@ -6,16 +6,20 @@ import { Activity, AlertTriangle, Cable, Clock3, Globe2, LineChart as LineChartI
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { ChartContainer } from '@/components/ui/chart'
 import {
+  ApiError,
   type BrokerCircuitBreakerStatus,
   type BrokerCredentialStatus,
   type FreshnessRecord,
   type IndicatorSeries,
   type Instrument,
+  type LiveOptionChain,
   type LlmProviderStatus,
   type MarketPulse,
   LLM_PROVIDER_LABELS,
   getFreshness,
   getIndicators,
+  getLiveOptionChain,
+  getLiveOptionExpiries,
   getMarketPulse,
   listBrokerCircuitBreakerStatus,
   listBrokerCredentialStatus,
@@ -282,6 +286,104 @@ function ProvidersTab() {
   )
 }
 
+function LiveOptionChainPanel() {
+  const [underlyingInput, setUnderlyingInput] = useState('')
+  const [expiries, setExpiries] = useState<string[] | null>(null)
+  const [selectedExpiry, setSelectedExpiry] = useState('')
+  const [chain, setChain] = useState<LiveOptionChain | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function loadExpiries() {
+    const underlying = underlyingInput.trim()
+    if (!underlying) return
+    setLoading(true)
+    setError(null)
+    setChain(null)
+    setExpiries(null)
+    try {
+      const result = await getLiveOptionExpiries(underlying)
+      setExpiries(result)
+      if (result.length > 0) setSelectedExpiry(result[0])
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load expiries.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadChain(expiry: string) {
+    const underlying = underlyingInput.trim()
+    if (!underlying || !expiry) return
+    setLoading(true)
+    setError(null)
+    try {
+      setChain(await getLiveOptionChain(underlying, expiry))
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load option chain.')
+      setChain(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (selectedExpiry) loadChain(selectedExpiry)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedExpiry])
+
+  return (
+    <Panel
+      title="Live option chain"
+      eyebrow="REAL OI / IV / LTP — VIA WHICHEVER BROKER IS CONFIGURED"
+      actions={
+        <div className="flex items-center gap-2">
+          <input
+            value={underlyingInput}
+            onChange={(e) => setUnderlyingInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && loadExpiries()}
+            placeholder="Broker instrument key, e.g. NSE_INDEX|Nifty 50"
+            className="backtest-select w-64 font-mono text-xs"
+          />
+          <button onClick={loadExpiries} className="backtest-select" disabled={loading || !underlyingInput.trim()}>Load</button>
+          {expiries && expiries.length > 0 && (
+            <select value={selectedExpiry} onChange={(e) => setSelectedExpiry(e.target.value)} className="backtest-select">
+              {expiries.map((e) => <option key={e} value={e}>{e}</option>)}
+            </select>
+          )}
+        </div>
+      }
+    >
+      {!underlyingInput && expiries === null && (
+        <GapNotice>Enter a broker instrument key (the format your configured broker's API expects — e.g. Upstox's `NSE_INDEX|Nifty 50`) and click Load. Zerodha has no option-chain endpoint at all and honestly reports so rather than returning a fabricated result.</GapNotice>
+      )}
+      {error && <GapNotice>{error}</GapNotice>}
+      {chain && (
+        <div className="overflow-x-auto mt-4">
+          <p className="mb-2 text-[10px] text-muted-foreground">Broker: <span className="font-mono text-foreground">{chain.broker}</span> · {chain.underlying} · {chain.expiry}</p>
+          <table className="option-chain-table">
+            <thead><tr><th>Call OI</th><th>Call IV</th><th>Call LTP</th><th>Strike</th><th>Put LTP</th><th>Put IV</th><th>Put OI</th></tr></thead>
+            <tbody>
+              {chain.entries.map((e) => (
+                <tr key={e.strike}>
+                  <td className="mono">{e.call_oi ?? '—'}</td>
+                  <td className="mono">{e.call_iv ?? '—'}</td>
+                  <td className="mono">{e.call_ltp ?? '—'}</td>
+                  <td className="strike-cell">{e.strike}</td>
+                  <td className="mono">{e.put_ltp ?? '—'}</td>
+                  <td className="mono">{e.put_iv ?? '—'}</td>
+                  <td className="mono">{e.put_oi ?? '—'}</td>
+                </tr>
+              ))}
+              {chain.entries.length === 0 && <tr><td colSpan={7} className="p-4 text-center text-xs text-muted-foreground">No entries returned for this underlying/expiry.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 function OptionChainTab() {
   const [instruments, setInstruments] = useState<Instrument[]>([])
   const [underlying, setUnderlying] = useState('NIFTY')
@@ -292,10 +394,12 @@ function OptionChainTab() {
   const underlyings = Array.from(new Set(instruments.filter((i) => i.instrument_type === 'option').map((i) => i.underlying_symbol).filter((s): s is string => Boolean(s))))
 
   return (
-    <Panel title="Option instrument master" eyebrow={`${underlying} · STATIC INSTRUMENT MASTER — NO LIVE OI/IV/LTP FEED`} actions={<select value={underlying} onChange={(e) => setUnderlying(e.target.value)} className="backtest-select">{underlyings.length > 0 ? underlyings.map((s) => <option key={s}>{s}</option>) : <option>{underlying}</option>}</select>}>
-      <GapNotice>No live option-chain feed (open interest, implied volatility, last-traded price) is exposed by the backend — only the static instrument master (strike, expiry, lot size, tick size) below.</GapNotice>
-      <div className="overflow-x-auto mt-4"><table className="option-chain-table"><thead><tr><th>Symbol</th><th>Strike</th><th>Type</th><th>Expiry</th><th>Lot size</th><th>Tick size</th></tr></thead><tbody>{options.map((o) => <tr key={o.symbol}><td className="mono">{o.symbol}</td><td className="strike-cell">{o.strike_price}</td><td>{o.option_type}</td><td className="mono">{o.expiry_date}</td><td className="mono">{o.lot_size}</td><td className="mono">{o.tick_size}</td></tr>)}{options.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-xs text-muted-foreground">No option instruments found for this underlying.</td></tr>}</tbody></table></div>
-    </Panel>
+    <div className="flex flex-col gap-5">
+      <LiveOptionChainPanel />
+      <Panel title="Option instrument master" eyebrow={`${underlying} · STATIC INSTRUMENT MASTER`} actions={<select value={underlying} onChange={(e) => setUnderlying(e.target.value)} className="backtest-select">{underlyings.length > 0 ? underlyings.map((s) => <option key={s}>{s}</option>) : <option>{underlying}</option>}</select>}>
+        <div className="overflow-x-auto mt-4"><table className="option-chain-table"><thead><tr><th>Symbol</th><th>Strike</th><th>Type</th><th>Expiry</th><th>Lot size</th><th>Tick size</th></tr></thead><tbody>{options.map((o) => <tr key={o.symbol}><td className="mono">{o.symbol}</td><td className="strike-cell">{o.strike_price}</td><td>{o.option_type}</td><td className="mono">{o.expiry_date}</td><td className="mono">{o.lot_size}</td><td className="mono">{o.tick_size}</td></tr>)}{options.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-xs text-muted-foreground">No option instruments found for this underlying.</td></tr>}</tbody></table></div>
+      </Panel>
+    </div>
   )
 }
 

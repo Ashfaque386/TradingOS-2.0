@@ -180,6 +180,40 @@ async def test_get_option_chain_is_fully_implemented_unlike_zerodha():
     assert entries[0].strike == 2500.0
     assert entries[0].call_ltp == 10.5
     assert entries[0].put_ltp == 8.2
+    # Neither market_data.oi nor option_greeks was present in this mock
+    # response at all -- honestly None, never a fabricated 0.0.
+    assert entries[0].call_oi is None
+    assert entries[0].call_iv is None
+
+
+async def test_get_option_chain_extracts_real_oi_and_iv_when_present():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "strike_price": 2500,
+                        "call_options": {
+                            "instrument_key": "NSE_FO|CALL1",
+                            "market_data": {"ltp": 10.5, "oi": 125000.0},
+                            "option_greeks": {"iv": 18.4},
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|PUT1",
+                            "market_data": {"ltp": 8.2, "oi": 98000.0},
+                            "option_greeks": {"iv": 21.1},
+                        },
+                    }
+                ]
+            },
+        )
+
+    entries = await _adapter(handler).get_option_chain("NSE_EQ|RELIANCE", "2025-01-30")
+    assert entries[0].call_oi == 125000.0
+    assert entries[0].put_oi == 98000.0
+    assert entries[0].call_iv == 18.4
+    assert entries[0].put_iv == 21.1
 
 
 async def test_get_expiries_deduplicates_and_sorts():

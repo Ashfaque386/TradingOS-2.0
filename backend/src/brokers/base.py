@@ -165,11 +165,21 @@ class BrokerQuote:
 
 @dataclass(frozen=True, slots=True)
 class OptionChainEntry:
+    """`call_oi`/`put_oi`/`call_iv`/`put_iv` are genuinely optional --
+    `None` when a broker's response doesn't carry them for a given row,
+    never a fabricated `0.0`, the same never-fabricate-a-metric posture
+    as every other optional numeric field in this codebase (Follow-up D,
+    Phase 16 wiring audit)."""
+
     strike: float
     call_symbol: str | None
     put_symbol: str | None
     call_ltp: float | None
     put_ltp: float | None
+    call_oi: float | None = None
+    put_oi: float | None = None
+    call_iv: float | None = None
+    put_iv: float | None = None
 
 
 class BrokerAdapter(Protocol):

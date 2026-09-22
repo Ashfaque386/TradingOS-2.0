@@ -192,6 +192,8 @@ class UpstoxAdapter:
             put = row.get("put_options") or {}
             call_market = call.get("market_data") or {}
             put_market = put.get("market_data") or {}
+            call_greeks = call.get("option_greeks") or {}
+            put_greeks = put.get("option_greeks") or {}
             entries.append(
                 OptionChainEntry(
                     strike=float(row.get("strike_price", 0.0)),
@@ -199,6 +201,10 @@ class UpstoxAdapter:
                     put_symbol=put.get("instrument_key"),
                     call_ltp=call_market.get("ltp"),
                     put_ltp=put_market.get("ltp"),
+                    call_oi=call_market.get("oi"),
+                    put_oi=put_market.get("oi"),
+                    call_iv=call_greeks.get("iv"),
+                    put_iv=put_greeks.get("iv"),
                 )
             )
         return entries
