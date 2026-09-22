@@ -57,11 +57,20 @@ async def list_broker_credential_status_endpoint(
     _current_user: User = Depends(require_role),
     store: SecretsStore = Depends(get_broker_credentials_store),
 ) -> list[BrokerCredentialStatusResponse]:
-    configured = set(store.list_configured_brokers())
-    return [
-        BrokerCredentialStatusResponse(broker=broker, configured=broker in configured)
-        for broker in KNOWN_BROKERS
-    ]
+    responses = []
+    for broker in KNOWN_BROKERS:
+        creds = store.get_credentials(broker)
+        responses.append(
+            BrokerCredentialStatusResponse(
+                broker=broker,
+                configured=creds is not None,
+                token_status=creds.token_status if creds else "never-connected",
+                token_expires_at=creds.token_expires_at if creds else None,
+                redirect_uri=creds.redirect_uri if creds else None,
+                token_duration=creds.token_duration if creds else None,
+            )
+        )
+    return responses
 
 
 @router.post("/{broker}", status_code=status.HTTP_204_NO_CONTENT)

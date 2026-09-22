@@ -8,10 +8,12 @@ from src.api.routes import (
     auth,
     backtests,
     broker_credentials,
+    broker_oauth,
     chat,
     gateway,
     kill_switch,
     live_trading,
+    llm_providers,
     market_data,
     notification_channels,
     orchestration,
@@ -38,6 +40,7 @@ api_router.include_router(risk_limits.router)
 api_router.include_router(risk.router)
 api_router.include_router(paper_trading.router)
 api_router.include_router(broker_credentials.router)
+api_router.include_router(broker_oauth.router)
 api_router.include_router(shadow_mode.router)
 api_router.include_router(live_trading.router)
 api_router.include_router(market_data.router)
@@ -47,4 +50,5 @@ api_router.include_router(webhooks.router)
 api_router.include_router(chat.router)
 api_router.include_router(orders.router)
 api_router.include_router(gateway.router)
+api_router.include_router(llm_providers.router)
 api_router.include_router(websockets.router)
