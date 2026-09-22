@@ -569,6 +569,24 @@ class MarketHoursResponse(BaseModel):
     as_of: str
 
 
+class IndicatorSeriesResponse(BaseModel):
+    symbol: str
+    dates: list[str]
+    close: list[float]
+    sma: list[float | None]
+    sma_window: int
+    ema: list[float | None]
+    ema_span: int
+    rsi: list[float | None]
+    rsi_period: int
+    macd: list[float | None]
+    macd_signal: list[float | None]
+    macd_histogram: list[float | None]
+    bollinger_upper: list[float | None]
+    bollinger_middle: list[float | None]
+    bollinger_lower: list[float | None]
+
+
 class FreshnessRecordResponse(BaseModel):
     symbol: str
     data_type: str

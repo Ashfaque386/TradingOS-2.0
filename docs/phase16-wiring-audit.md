@@ -20,8 +20,9 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
 - **5 real gaps found and fixed this pass** (below).
 - **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
-  One of those six (Follow-up B, broker-fill reconciliation) was subsequently
-  picked up and resolved in a follow-up pass — see its entry below.
+  Two of those six (Follow-up B, broker-fill reconciliation; Follow-up C,
+  technical indicators) were subsequently picked up and resolved in
+  follow-up passes — see their entries below. Four (A, D, E, F) remain open.
 
 ## Gaps found and fixed
 
@@ -229,12 +230,45 @@ A below — this reconciliation job reuses the existing single
 trading scheduler, so it inherits that same "only one broker configured at a
 time" constraint rather than solving it.
 
-**C. Technical Indicators tab has no backend** (`app/analysis/page.tsx`,
-already labeled `NOT AVAILABLE`). No endpoint computes SMA/EMA/RSI/MACD/
-Bollinger Bands for arbitrary symbols; only the backtest engine computes
-signal-generation indicators internally without exposing them as a general
-time-series API. Real OHLCV data exists in the data lake but isn't served
-this way. Confirmed accurate, left as-is.
+**C. Technical Indicators tab has no backend — RESOLVED (post-audit follow-up).**
+(`app/analysis/page.tsx`, was labeled `NOT AVAILABLE`). No endpoint computed
+SMA/EMA/RSI/MACD/Bollinger Bands for arbitrary symbols; only the backtest
+engine computed signal-generation indicators internally, never exposed as a
+general time-series API. Real OHLCV data existed in the data lake but wasn't
+served this way.
+
+Fixed in a follow-up pass: new pure-math module
+`backend/src/engine/indicators.py` (SMA, EMA, Wilder's RSI, MACD, Bollinger
+Bands — every function genuinely refuses to report a value before its
+window has real data behind it, `min_periods=window`/`span`, never a
+`min_periods=1` partial-window shortcut, matching this codebase's
+"never fabricate a metric" rule), a new `GET
+/api/v1/market-data/indicators/{symbol}` endpoint (all 4 roles, read-only)
+reading real OHLCV via `src.data.lake.read_daily_bars` directly — not
+`DataLakePriceProvider`, which silently falls back to synthetic data for a
+thin symbol — so an un-ingested symbol honestly returns an empty series
+instead of a fabricated one. `app/analysis/page.tsx`'s `TechnicalTab` was
+rebuilt from the bare `GapNotice` stub into a real symbol-picker + price
+chart (close, with toggleable SMA/EMA/Bollinger overlays) plus RSI and MACD
+sub-panels, reusing CSS classes (`.technical-layout`,
+`.indicator-chart-panel`, `.sub-indicators`, `.overlay-toggles`) the
+original v0 build had already prepared for exactly this feature but left
+unused. 17 pure indicator-math tests (`test_engine_indicators.py`) plus 3
+new API tests (`test_market_data_api.py`) — the math tests hand-verify
+warm-up-null boundaries, Bollinger's middle band matching the plain SMA
+exactly, and closed-form edge cases (a strictly monotonic series' RSI is
+genuinely 0 or 100, not undefined).
+
+**Live-verified:** ingested 50 real trading days of synthetic-but-real
+OHLCV for a demo symbol via the existing `POST
+/market-data/ingest/daily`/`ingest/instrument-master` triggers, confirmed
+the indicators endpoint returns real non-degenerate SMA/EMA/RSI/MACD/
+Bollinger values with correct null warm-up periods via direct API
+inspection, then confirmed the same in the browser via Playwright — the
+chart renders real SVG lines against the ingested data, the "no ingested
+history" fallback message correctly does *not* show, and toggling the
+Bollinger overlay button adds exactly 2 more chart lines. Screenshot
+confirmed visually correct. Spec deleted after use, not committed.
 
 **D. Live Option Chain has no live OI/IV/LTP feed** (`app/analysis/page.tsx`,
 already labeled with a `GapNotice`). Only the static instrument master

@@ -3,11 +3,13 @@ freshness/instrument/provenance reads, plus every manual ingestion trigger
 -- through the actual HTTP routes, RBAC included.
 """
 
+import pandas as pd
 import pytest
 from httpx import AsyncClient
 
 from src.api.routes.market_data import get_data_lake_backup_root, get_data_lake_root
 from src.core.roles import Role
+from src.data import lake
 from src.main import app
 
 
@@ -164,3 +166,82 @@ async def test_catalog_refresh_and_backup_triggers(client: AsyncClient, make_use
     backup_resp = await client.post("/api/v1/market-data/backup", headers=_auth(token))
     assert backup_resp.status_code == 200
     assert backup_resp.json()["status"] == "success"
+
+
+def _linear_ramp_bars(n: int, start: str) -> pd.DataFrame:
+    idx = pd.bdate_range(start=start, periods=n)
+    return pd.DataFrame(
+        {
+            "open": [100.0 + i for i in range(n)],
+            "high": [101.0 + i for i in range(n)],
+            "low": [99.0 + i for i in range(n)],
+            "close": [100.0 + i for i in range(n)],
+            "volume": [1000] * n,
+        },
+        index=idx,
+    )
+
+
+async def test_indicators_endpoint_returns_real_sma_and_bollinger_middle_once_window_fills(
+    client: AsyncClient, make_user, tmp_path
+):
+    lake.write_daily_bars(tmp_path / "lake", "INDSTOCK", _linear_ramp_bars(40, "2026-07-01"))
+
+    await make_user("md7@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "md7@example.com", "supersecret1")
+
+    resp = await client.get(
+        "/api/v1/market-data/indicators/INDSTOCK?lookback_days=120&sma_window=20&bollinger_window=20",
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["symbol"] == "INDSTOCK"
+    assert len(body["dates"]) == 40
+    assert len(body["close"]) == 40
+    # A 20-day SMA/Bollinger-middle must be null for the first 19 points --
+    # no min_periods=1 shortcut fabricating a partial-window average.
+    assert all(v is None for v in body["sma"][:19])
+    assert body["sma"][19] == pytest.approx(sum(range(20)) / 20 + 100.0)
+    assert body["bollinger_middle"][19] == pytest.approx(body["sma"][19])
+    assert body["bollinger_upper"][19] > body["bollinger_middle"][19]
+    assert body["bollinger_lower"][19] < body["bollinger_middle"][19]
+    # EMA/RSI/MACD all present with the same date-aligned length.
+    assert len(body["ema"]) == 40
+    assert len(body["rsi"]) == 40
+    assert len(body["macd"]) == 40
+    # A strictly-rising close series' RSI is genuinely 100, not undefined.
+    assert body["rsi"][-1] == pytest.approx(100.0)
+
+
+async def test_indicators_endpoint_returns_empty_series_for_an_uningested_symbol(
+    client: AsyncClient, make_user
+):
+    await make_user("md8@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "md8@example.com", "supersecret1")
+
+    resp = await client.get("/api/v1/market-data/indicators/NEVERINGESTED", headers=_auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbol"] == "NEVERINGESTED"
+    assert body["dates"] == []
+    assert body["close"] == []
+    assert body["sma"] == []
+    assert body["bollinger_upper"] == []
+
+
+async def test_indicators_endpoint_accessible_to_every_role(client: AsyncClient, make_user):
+    for i, role in enumerate(
+        [
+            Role.SYSTEM_ADMINISTRATOR,
+            Role.PORTFOLIO_MANAGER,
+            Role.RISK_MANAGER,
+            Role.READ_ONLY_AUDITOR,
+        ]
+    ):
+        email = f"md9-{i}@example.com"
+        await make_user(email, "supersecret1", role)
+        token = await _login(client, email, "supersecret1")
+        resp = await client.get("/api/v1/market-data/indicators/ANYSTOCK", headers=_auth(token))
+        assert resp.status_code == 200, f"role {role} was denied read access to indicators"

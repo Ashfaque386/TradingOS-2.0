@@ -8,16 +8,18 @@ phase's demo-trigger endpoints (Phase 7's `/daily-signal-run`, Phase 9's
 `/generate-intent`).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
 from pathlib import Path
 
+import pandas as pd
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
     FreshnessRecordResponse,
+    IndicatorSeriesResponse,
     InstrumentResponse,
     MarketDataProvenanceResponse,
     MarketHoursResponse,
@@ -31,7 +33,15 @@ from src.api.schemas import (
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.data.lake import read_daily_bars
 from src.data.providers import FakeMarketDataProvider
+from src.engine.indicators import (
+    bollinger_bands,
+    exponential_moving_average,
+    macd,
+    relative_strength_index,
+    simple_moving_average,
+)
 from src.engine.paper_trading.market_hours import is_market_open_ist
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.instrument import Instrument
@@ -46,6 +56,7 @@ _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 register_policy("GET", "/api/v1/market-data/market-hours", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/pulse", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/freshness/{symbol}", roles=list(Role))
+register_policy("GET", "/api/v1/market-data/indicators/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/instruments", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/provenance", roles=list(Role))
 register_policy("POST", "/api/v1/market-data/ingest/daily", roles=_OPERATOR_ROLES)
@@ -124,6 +135,74 @@ async def freshness_endpoint(
         )
         for row in result.scalars().all()
     ]
+
+
+def _series_to_list(series: pd.Series) -> list[float | None]:
+    return [None if pd.isna(value) else float(value) for value in series]
+
+
+@router.get("/indicators/{symbol}")
+async def indicators_endpoint(
+    symbol: str,
+    lookback_days: int = 250,
+    sma_window: int = 20,
+    ema_span: int = 20,
+    rsi_period: int = 14,
+    macd_fast: int = 12,
+    macd_slow: int = 26,
+    macd_signal_period: int = 9,
+    bollinger_window: int = 20,
+    bollinger_std: float = 2.0,
+    root: Path = Depends(get_data_lake_root),
+    current_user: User = Depends(require_role),
+) -> IndicatorSeriesResponse:
+    """Computes real technical indicators over whatever real OHLCV history
+    the data lake actually has for `symbol` -- reads `src.data.lake`
+    directly rather than `DataLakePriceProvider` (which silently falls
+    back to synthetic data), so a symbol the pipeline hasn't ingested
+    honestly comes back empty instead of a fabricated series."""
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=lookback_days)
+    df = read_daily_bars(root, symbol, start, end)
+    if df.empty:
+        return IndicatorSeriesResponse(
+            symbol=symbol,
+            dates=[],
+            close=[],
+            sma=[],
+            sma_window=sma_window,
+            ema=[],
+            ema_span=ema_span,
+            rsi=[],
+            rsi_period=rsi_period,
+            macd=[],
+            macd_signal=[],
+            macd_histogram=[],
+            bollinger_upper=[],
+            bollinger_middle=[],
+            bollinger_lower=[],
+        )
+
+    close = df["close"]
+    macd_line, macd_sig, macd_hist = macd(close, macd_fast, macd_slow, macd_signal_period)
+    boll_upper, boll_mid, boll_lower = bollinger_bands(close, bollinger_window, bollinger_std)
+    return IndicatorSeriesResponse(
+        symbol=symbol,
+        dates=[d.strftime("%Y-%m-%d") for d in df.index],
+        close=[float(v) for v in close],
+        sma=_series_to_list(simple_moving_average(close, sma_window)),
+        sma_window=sma_window,
+        ema=_series_to_list(exponential_moving_average(close, ema_span)),
+        ema_span=ema_span,
+        rsi=_series_to_list(relative_strength_index(close, rsi_period)),
+        rsi_period=rsi_period,
+        macd=_series_to_list(macd_line),
+        macd_signal=_series_to_list(macd_sig),
+        macd_histogram=_series_to_list(macd_hist),
+        bollinger_upper=_series_to_list(boll_upper),
+        bollinger_middle=_series_to_list(boll_mid),
+        bollinger_lower=_series_to_list(boll_lower),
+    )
 
 
 @router.get("/instruments")

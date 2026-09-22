@@ -768,6 +768,26 @@ export type FreshnessRecord = {
 }
 export const getFreshness = (symbol: string) => apiGet<FreshnessRecord[]>(`/api/v1/market-data/freshness/${symbol}`)
 
+export type IndicatorSeries = {
+  symbol: string
+  dates: string[]
+  close: number[]
+  sma: (number | null)[]
+  sma_window: number
+  ema: (number | null)[]
+  ema_span: number
+  rsi: (number | null)[]
+  rsi_period: number
+  macd: (number | null)[]
+  macd_signal: (number | null)[]
+  macd_histogram: (number | null)[]
+  bollinger_upper: (number | null)[]
+  bollinger_middle: (number | null)[]
+  bollinger_lower: (number | null)[]
+}
+export const getIndicators = (symbol: string, lookbackDays = 250) =>
+  apiGet<IndicatorSeries>(`/api/v1/market-data/indicators/${symbol}?lookback_days=${lookbackDays}`)
+
 export type Instrument = {
   symbol: string
   exchange: string
