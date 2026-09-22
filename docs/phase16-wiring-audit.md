@@ -20,8 +20,11 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
 - **5 real gaps found and fixed this pass** (below).
 - **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
-  One of those six (Follow-up B, broker-fill reconciliation) was subsequently
-  picked up and resolved in a follow-up pass — see its entry below.
+  Four of those six (Follow-up A, broker circuit-breaker state; Follow-up B,
+  broker-fill reconciliation; Follow-up C, technical indicators; Follow-up F,
+  today's realized P&L) were subsequently picked up in follow-up passes — A,
+  B, and C fully resolved, F partially resolved (realized-only by design, see
+  its entry below) — see their entries below. Two (D, E) remain open.
 
 ## Gaps found and fixed
 
@@ -182,14 +185,52 @@ These are all cases where the frontend is **already honest** about the gap
 where fixing them properly requires new backend engineering beyond what a
 wiring pass should do speculatively.
 
-**A. Broker circuit-breaker / connectivity health not exposed**
-(`app/analysis/page.tsx` Provider Status tab, narrowed `GapNotice`).
+**A. Broker circuit-breaker / connectivity health not exposed — RESOLVED (post-audit follow-up).**
+(`app/analysis/page.tsx` Provider Status tab, was a narrowed `GapNotice`).
 `ResilientBrokerAdapter`/`BrokerCircuitBreaker` (`backend/src/brokers/resilient.py`,
-`factory.py`) exist, but `build_configured_adapter()` constructs a fresh
-breaker on every call — there is no persistent, queryable breaker state. This
-can't be fixed by adding an endpoint alone; it needs the breaker to become a
-per-broker singleton held in application state first. Left as an explicitly
-scoped follow-up rather than attempted here.
+`factory.py`) existed, but `build_configured_adapter()` constructed a fresh,
+zero-state breaker on every single call — including once per HTTP request via
+`src.api.routes.live_trading.get_live_broker_adapter`. Three consecutive 5xx
+responses spread across different real callers (the tick source, the
+live-trading scheduler, one-off API-route adapters) could each independently
+see only 1 or 2 failures and never actually trip; the breaker's whole purpose
+silently didn't work against the app's real call pattern, and there was no
+live state anywhere to query even if it had.
+
+Fixed in a follow-up pass: new `backend/src/brokers/breaker_registry.py`
+holds exactly one `BrokerCircuitBreaker` per broker name for the process's
+lifetime (a plain module-level dict, not a DB row — unlike Phase 6's Kill
+Switch, breaker state losing itself on restart is fine, and this app runs as
+a single uvicorn process with no `--workers N`, so a module-level singleton
+genuinely is the one shared instance every caller sees, matching this
+codebase's existing in-process-singleton precedent: `src.gateway`'s
+`GatewayState`, `src.agents.llm_router`'s per-provider `ProviderHealth`).
+`build_configured_adapter()` now passes `get_broker_circuit_breaker(broker)`
+into every `ResilientBrokerAdapter` it builds instead of leaving the breaker
+argument to default to a fresh instance. `BrokerCircuitBreaker` gained public
+`opened_at`/`cooldown_seconds`/`failure_threshold` properties and a
+`cooldown_remaining_seconds()` method (clamped to >=0, `None` while closed) so
+real state is externally readable without exposing a raw, meaningless
+monotonic timestamp. New `GET /api/v1/broker-credentials/circuit-breaker`
+(all 4 roles, read-only) reports real `state`/`consecutive_failures`/
+`failure_threshold`/`cooldown_remaining_seconds` per broker — a broker with no
+entry yet in the registry (no adapter ever built for it) is honestly reported
+as `closed`/`0` rather than omitted, since that is the breaker's own true
+starting state. The Provider Status tab's broker-connection rows now show
+real circuit-breaker state alongside OAuth token status (a red dot + failure
+count + countdown when open, polled every 10s), and the `GapNotice` that used
+to sit under them was removed since the gap it named no longer exists.
+
+9 new backend tests (`test_brokers_breaker_registry.py`,
+`test_brokers_factory.py`, 2 new in `test_engine_circuit_breaker.py`, 3 new in
+`test_broker_credentials_api.py`) proving the singleton behavior directly
+(repeated `build_configured_adapter()` calls for the same broker share one
+`.breaker` object; different brokers get independent instances) and the API
+endpoint reflecting a genuinely tripped breaker end to end (3 real
+`BrokerServerError`s against the shared instance → `state: "open"` over
+HTTP, with the *other* broker's row unaffected, proving independence, not a
+shared flag). `ruff check`/`ruff format --check`/`tsc --noEmit` clean; full
+backend suite green with zero regressions.
 
 **B. `Trade.status` can never progress past `pending_confirmation` — RESOLVED (post-audit follow-up).**
 (Orders & Trades page, "Live Order Intents" tab). Confirmed via
@@ -229,12 +270,45 @@ A below — this reconciliation job reuses the existing single
 trading scheduler, so it inherits that same "only one broker configured at a
 time" constraint rather than solving it.
 
-**C. Technical Indicators tab has no backend** (`app/analysis/page.tsx`,
-already labeled `NOT AVAILABLE`). No endpoint computes SMA/EMA/RSI/MACD/
-Bollinger Bands for arbitrary symbols; only the backtest engine computes
-signal-generation indicators internally without exposing them as a general
-time-series API. Real OHLCV data exists in the data lake but isn't served
-this way. Confirmed accurate, left as-is.
+**C. Technical Indicators tab has no backend — RESOLVED (post-audit follow-up).**
+(`app/analysis/page.tsx`, was labeled `NOT AVAILABLE`). No endpoint computed
+SMA/EMA/RSI/MACD/Bollinger Bands for arbitrary symbols; only the backtest
+engine computed signal-generation indicators internally, never exposed as a
+general time-series API. Real OHLCV data existed in the data lake but wasn't
+served this way.
+
+Fixed in a follow-up pass: new pure-math module
+`backend/src/engine/indicators.py` (SMA, EMA, Wilder's RSI, MACD, Bollinger
+Bands — every function genuinely refuses to report a value before its
+window has real data behind it, `min_periods=window`/`span`, never a
+`min_periods=1` partial-window shortcut, matching this codebase's
+"never fabricate a metric" rule), a new `GET
+/api/v1/market-data/indicators/{symbol}` endpoint (all 4 roles, read-only)
+reading real OHLCV via `src.data.lake.read_daily_bars` directly — not
+`DataLakePriceProvider`, which silently falls back to synthetic data for a
+thin symbol — so an un-ingested symbol honestly returns an empty series
+instead of a fabricated one. `app/analysis/page.tsx`'s `TechnicalTab` was
+rebuilt from the bare `GapNotice` stub into a real symbol-picker + price
+chart (close, with toggleable SMA/EMA/Bollinger overlays) plus RSI and MACD
+sub-panels, reusing CSS classes (`.technical-layout`,
+`.indicator-chart-panel`, `.sub-indicators`, `.overlay-toggles`) the
+original v0 build had already prepared for exactly this feature but left
+unused. 17 pure indicator-math tests (`test_engine_indicators.py`) plus 3
+new API tests (`test_market_data_api.py`) — the math tests hand-verify
+warm-up-null boundaries, Bollinger's middle band matching the plain SMA
+exactly, and closed-form edge cases (a strictly monotonic series' RSI is
+genuinely 0 or 100, not undefined).
+
+**Live-verified:** ingested 50 real trading days of synthetic-but-real
+OHLCV for a demo symbol via the existing `POST
+/market-data/ingest/daily`/`ingest/instrument-master` triggers, confirmed
+the indicators endpoint returns real non-degenerate SMA/EMA/RSI/MACD/
+Bollinger values with correct null warm-up periods via direct API
+inspection, then confirmed the same in the browser via Playwright — the
+chart renders real SVG lines against the ingested data, the "no ingested
+history" fallback message correctly does *not* show, and toggling the
+Bollinger overlay button adds exactly 2 more chart lines. Screenshot
+confirmed visually correct. Spec deleted after use, not committed.
 
 **D. Live Option Chain has no live OI/IV/LTP feed** (`app/analysis/page.tsx`,
 already labeled with a `GapNotice`). Only the static instrument master
@@ -252,14 +326,57 @@ building that quickly risked introducing exactly the "looks real, quietly
 wrong" failure mode this audit exists to catch. Left as an honest gap
 pending a deliberate design pass, not a rushed fix.
 
-**F. "Today's Paper P&L" not exposed** (Overview KPI strip, already labeled
-"not exposed yet"). `PaperPosition.realized_pnl` is cumulative-to-date, not
-scoped to a trading day, and unrealized P&L would additionally require a
-current market price per symbol that isn't stored on the position row.
-Computing a true "today's" figure needs either a per-day rollup derived from
-`paper_fills` timestamps or a new daily-snapshot job — not a cheap join like
-Gap 3's positions-by-strategy endpoint was. Confirmed accurate, left as a
-follow-up rather than attempted here.
+**F. "Today's Paper P&L" not exposed — PARTIALLY RESOLVED (post-audit follow-up, realized-only by design).**
+(Overview KPI strip, was labeled "not exposed yet"). `PaperPosition.realized_pnl`
+is cumulative-to-date, not scoped to a trading day, and unrealized P&L would
+additionally require a current market price per symbol that isn't stored on
+the position row.
+
+**Correction to the original finding**, discovered while implementing the
+fix: the per-fill realized P&L delta was **not** actually discarded as first
+assumed — `PaperFill` already carries its own `realized_pnl` column (the
+exact per-fill delta `apply_fill` computes, written by
+`_persist_fill` alongside the cumulative total it adds to
+`PaperPosition.realized_pnl`), and `PaperFill.created_at` is already a real
+timestamp. So "today's realized P&L" turned out to be a trivial aggregate
+query (`SUM(PaperFill.realized_pnl) WHERE created_at >= IST midnight today`),
+not the harder per-day rollup or snapshot job originally assumed.
+
+Fixed: new `GET /api/v1/paper-trading/pnl/today` endpoint (all 4 roles,
+read-only, portfolio-wide — not scoped to one subscription, matching the
+KPI's own portfolio-wide framing), Overview's KPI relabeled from "TODAY'S
+PAPER P&L" to **"TODAY'S REALIZED P&L"** to be honest about scope. 5 new
+tests (`test_paper_trading_api.py`) covering the zero-fills baseline, a real
+open+stop-loss-exit cycle where the aggregate is asserted to exactly match
+the closing fill's own `realized_pnl` (the opening fill's `realized_pnl` is
+always `0.0`, per `apply_fill`'s accounting), and RBAC access for all 4
+roles.
+
+**Deliberately not attempted in this pass: unrealized (mark-to-market)
+P&L.** This still needs a genuine current price per open position, which
+this engine has no non-fabricated source for outside of a configured
+broker's live quote. The one real, already-running candidate — the last
+tick on each symbol's `paper:ticks:{symbol}` Redis stream — is only a real
+market price when a broker is actually configured; otherwise it's
+`MockTickSource`'s synthetic random walk, and conflating the two under one
+undifferentiated "P&L" number would be exactly the kind of ambiguous,
+possibly-synthetic-looking-real figure this audit exists to catch (the same
+reasoning that kept Follow-up E's Prometheus metrics out of a JSON
+endpoint). Left as an explicitly scoped, honestly-labeled follow-up rather
+than rushed.
+
+**Live-verified:** enrolled a real paper-trading subscription on a known
+BUY-signal day, confirmed the endpoint reads `0.0`/`0` fills before any
+activity, opened a real position via a real tick (`realized_pnl: 0.0`, as
+expected for an opening fill), drove a real stop-loss exit via a tick 10%
+below the 3%-threshold entry price, and confirmed the aggregate endpoint's
+`realized_pnl` matched the exit fill's own `realized_pnl` to the cent
+(`-503.84`) with `fill_count: 2`. Confirmed the same number renders on the
+Overview KPI strip in a real browser via Playwright (`-₹504`, correctly
+colored rose for a loss) — this also caught and fixed a real cosmetic
+formatting bug (the currency symbol was rendering before the minus sign,
+`₹-504`, instead of the conventional `-₹504`). Spec deleted after use, not
+committed.
 
 ## Acceptance criteria status
 

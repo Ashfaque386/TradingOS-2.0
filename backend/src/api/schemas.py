@@ -384,6 +384,12 @@ class PaperFillResponse(BaseModel):
     created_at: str
 
 
+class TodaysPaperPnlResponse(BaseModel):
+    as_of_date: str
+    realized_pnl: float
+    fill_count: int
+
+
 class DailySignalResponse(BaseModel):
     id: uuid.UUID
     subscription_id: uuid.UUID
@@ -423,6 +429,22 @@ class BrokerCredentialStatusResponse(BaseModel):
     token_expires_at: str | None = None
     redirect_uri: str | None = None
     token_duration: str | None = None
+
+
+class BrokerCircuitBreakerStatusResponse(BaseModel):
+    """Real, queryable state from the one persistent `BrokerCircuitBreaker`
+    instance src.brokers.breaker_registry holds per broker -- `state`
+    reflects genuine consecutive-5xx-failure history across every real
+    caller (tick source, live-trading scheduler, API-route adapters),
+    not a per-call snapshot that resets itself the instant the request
+    handling it returns. `cooldown_remaining_seconds` is `None` whenever
+    `state == "closed"` (there is nothing counting down)."""
+
+    broker: str
+    state: str  # "closed" | "open"
+    consecutive_failures: int
+    failure_threshold: int
+    cooldown_remaining_seconds: float | None = None
 
 
 class BrokerOAuthLoginUrlResponse(BaseModel):
@@ -567,6 +589,24 @@ class MarketPulseResponse(BaseModel):
 class MarketHoursResponse(BaseModel):
     is_open: bool
     as_of: str
+
+
+class IndicatorSeriesResponse(BaseModel):
+    symbol: str
+    dates: list[str]
+    close: list[float]
+    sma: list[float | None]
+    sma_window: int
+    ema: list[float | None]
+    ema_span: int
+    rsi: list[float | None]
+    rsi_period: int
+    macd: list[float | None]
+    macd_signal: list[float | None]
+    macd_histogram: list[float | None]
+    bollinger_upper: list[float | None]
+    bollinger_middle: list[float | None]
+    bollinger_lower: list[float | None]
 
 
 class FreshnessRecordResponse(BaseModel):

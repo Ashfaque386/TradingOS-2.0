@@ -5,11 +5,21 @@ so every caller (the credential-status API, Shadow Mode checks, the
 Phase 7 tick feed's broker-quote poller, Phase 9's LiveExecutionPipeline)
 shares one definition of "which brokers exist" instead of hardcoding the
 pair themselves.
+
+`build_configured_adapter` wraps every adapter it builds in the *same*
+per-broker `BrokerCircuitBreaker` (src.brokers.breaker_registry) rather
+than a fresh one each call, so consecutive failures across different
+callers (tick source, live-trading scheduler, one-off API-route
+adapters) all count against one real, queryable breaker state instead
+of each seeing an isolated, always-reset instance -- see
+breaker_registry.py's own docstring for why this was a real gap
+(Phase 16 wiring audit follow-up A).
 """
 
 import structlog
 
 from src.brokers.base import BrokerAdapter, BrokerCredentials
+from src.brokers.breaker_registry import get_broker_circuit_breaker
 from src.brokers.resilient import ResilientBrokerAdapter
 from src.brokers.upstox import UpstoxAdapter
 from src.brokers.zerodha import ZerodhaKiteAdapter
@@ -66,6 +76,6 @@ def build_configured_adapter(*, sandbox: bool = False) -> ResilientBrokerAdapter
             continue
         adapter = build_broker_adapter(broker, credentials, sandbox=sandbox)
         logger.info("brokers.configured_adapter_selected", broker=broker, sandbox=sandbox)
-        return ResilientBrokerAdapter(adapter)
+        return ResilientBrokerAdapter(adapter, breaker=get_broker_circuit_breaker(broker))
 
     return None

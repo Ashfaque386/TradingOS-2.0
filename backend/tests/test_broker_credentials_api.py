@@ -4,11 +4,14 @@ only a configured/not-configured boolean is, and only
 SystemAdministrator may write or delete.
 """
 
+import pytest
 from cryptography.fernet import Fernet
 from httpx import AsyncClient
 
 from src.api.routes.broker_credentials import get_broker_credentials_store
+from src.brokers import breaker_registry
 from src.core.roles import Role
+from src.engine.risk.circuit_breaker import BrokerServerError
 from src.main import app
 from src.security.secrets_store import SecretsStore
 
@@ -114,3 +117,71 @@ async def test_delete_requires_system_administrator_and_then_clears_status(
         assert store.get_credentials("upstox") is None
     finally:
         _clear_override()
+
+
+async def test_circuit_breaker_status_defaults_closed_for_a_never_built_adapter(client, make_user):
+    breaker_registry._BREAKERS.pop("zerodha", None)
+    try:
+        await make_user("cb1@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "cb1@example.com", "supersecret1")
+
+        resp = await client.get("/api/v1/broker-credentials/circuit-breaker", headers=_auth(token))
+        assert resp.status_code == 200
+        by_broker = {row["broker"]: row for row in resp.json()}
+        assert by_broker["zerodha"]["state"] == "closed"
+        assert by_broker["zerodha"]["consecutive_failures"] == 0
+        assert by_broker["zerodha"]["cooldown_remaining_seconds"] is None
+        assert by_broker["upstox"]["state"] == "closed"
+    finally:
+        breaker_registry._BREAKERS.pop("zerodha", None)
+
+
+async def test_circuit_breaker_status_reflects_a_real_tripped_breaker(client, make_user):
+    breaker_registry._BREAKERS.pop("zerodha", None)
+    try:
+        await make_user("cb2@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "cb2@example.com", "supersecret1")
+
+        breaker = breaker_registry.get_broker_circuit_breaker("zerodha")
+
+        async def _always_5xx():
+            raise BrokerServerError(503, "simulated broker outage")
+
+        for _ in range(3):
+            with pytest.raises(BrokerServerError):
+                await breaker.call(_always_5xx)
+
+        resp = await client.get("/api/v1/broker-credentials/circuit-breaker", headers=_auth(token))
+        assert resp.status_code == 200
+        by_broker = {row["broker"]: row for row in resp.json()}
+        assert by_broker["zerodha"]["state"] == "open"
+        assert by_broker["zerodha"]["consecutive_failures"] == 3
+        assert by_broker["zerodha"]["cooldown_remaining_seconds"] > 0
+        # A broker whose breaker was never exercised in this test is
+        # unaffected -- proof the two brokers' state is genuinely
+        # independent, not a shared/global flag.
+        assert by_broker["upstox"]["state"] == "closed"
+    finally:
+        breaker_registry._BREAKERS.pop("zerodha", None)
+
+
+async def test_circuit_breaker_status_is_readable_by_every_role(client, make_user):
+    breaker_registry._BREAKERS.pop("zerodha", None)
+    try:
+        for i, role in enumerate(
+            [
+                Role.SYSTEM_ADMINISTRATOR,
+                Role.PORTFOLIO_MANAGER,
+                Role.RISK_MANAGER,
+                Role.READ_ONLY_AUDITOR,
+            ]
+        ):
+            email = f"cb3-{i}@example.com"
+            await make_user(email, "supersecret1", role)
+            token = await _login(client, email, "supersecret1")
+            resp = await client.get(
+                "/api/v1/broker-credentials/circuit-breaker", headers=_auth(token)
+            )
+            assert resp.status_code == 200, f"role {role} was denied read access"
+    finally:
+        breaker_registry._BREAKERS.pop("zerodha", None)

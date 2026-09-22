@@ -120,3 +120,26 @@ async def test_non_server_errors_do_not_affect_the_breaker():
 
     assert breaker.state == CircuitState.CLOSED
     assert breaker.consecutive_failures == 0
+
+
+async def test_cooldown_remaining_seconds_is_none_while_closed():
+    clock, _advance = _fake_clock()
+    breaker = BrokerCircuitBreaker(failure_threshold=3, cooldown_seconds=60.0, clock=clock)
+    assert breaker.cooldown_remaining_seconds() is None
+
+
+async def test_cooldown_remaining_seconds_counts_down_and_clamps_at_zero_once_open():
+    clock, advance = _fake_clock()
+    breaker = BrokerCircuitBreaker(failure_threshold=3, cooldown_seconds=60.0, clock=clock)
+    adapter = FakeBrokerAdapter(remaining_failures=3)
+
+    for _ in range(3):
+        with pytest.raises(BrokerServerError):
+            await breaker.call(adapter.send_order)
+    assert breaker.cooldown_remaining_seconds() == 60.0
+
+    advance(45.0)
+    assert breaker.cooldown_remaining_seconds() == 15.0
+
+    advance(1000.0)  # well past the cooldown -- never goes negative
+    assert breaker.cooldown_remaining_seconds() == 0.0

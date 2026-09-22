@@ -17,9 +17,11 @@ import {
   type MarketHours,
   type OrganizationRun,
   type SignoffSnapshot,
+  type TodaysPaperPnl,
   getAgents,
   getKillSwitch,
   getMarketHours,
+  getTodaysPaperPnl,
   listRuns,
   resetKillSwitch,
 } from '@/lib/api'
@@ -120,22 +122,25 @@ export default function Home() {
   const [signoff, setSignoff] = useState<SignoffSnapshot | null>(null)
   const [resettingMode, setResettingMode] = useState<KillSwitchMode | null>(null)
   const [resetError, setResetError] = useState<string | null>(null)
+  const [todaysPnl, setTodaysPnl] = useState<TodaysPaperPnl | null>(null)
 
   const canResetKillSwitch = role === 'SystemAdministrator' || role === 'RiskManager'
 
   const load = useCallback(async () => {
-    const [agentsRes, runsRes, paperKs, liveKs, hours] = await Promise.allSettled([
+    const [agentsRes, runsRes, paperKs, liveKs, hours, pnl] = await Promise.allSettled([
       getAgents(),
       listRuns(),
       getKillSwitch('paper'),
       getKillSwitch('live'),
       getMarketHours(),
+      getTodaysPaperPnl(),
     ])
     if (agentsRes.status === 'fulfilled') setAgents(agentsRes.value)
     if (runsRes.status === 'fulfilled') setRuns(runsRes.value)
     if (paperKs.status === 'fulfilled') setPaperKillSwitch(paperKs.value)
     if (liveKs.status === 'fulfilled') setLiveKillSwitch(liveKs.value)
     if (hours.status === 'fulfilled') setMarketHours(hours.value)
+    if (pnl.status === 'fulfilled') setTodaysPnl(pnl.value)
   }, [])
 
   useEffect(() => {
@@ -208,7 +213,7 @@ export default function Home() {
         <div><Bot /><span>ACTIVE AGENTS<strong>{activeAgentsCount} / {agents.length || 24}</strong></span></div>
         <div><Radio /><span>LIVE RUNS<strong>{liveRunsCount.toString().padStart(2, '0')}</strong></span></div>
         <div className={pendingSignoffs > 0 ? 'kpi-alert' : ''}><AlertTriangle /><span>PENDING SIGN-OFFS<strong>{pendingSignoffs.toString().padStart(2, '0')}</strong></span></div>
-        <div><TrendingUp /><span>TODAY'S PAPER P&L<strong className="text-muted-foreground">not exposed yet</strong></span></div>
+        <div><TrendingUp /><span>TODAY'S REALIZED P&L<strong className={todaysPnl === null ? 'text-muted-foreground' : todaysPnl.realized_pnl < 0 ? 'text-rose-300' : todaysPnl.realized_pnl > 0 ? 'text-emerald-300' : ''}>{todaysPnl === null ? '—' : `${todaysPnl.realized_pnl >= 0 ? '+' : '-'}₹${Math.abs(todaysPnl.realized_pnl).toFixed(0)}`}</strong></span></div>
         <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : 'OFF · ARMED'}</strong>
           {killSwitchTripped && canResetKillSwitch && (
             <span className="kill-switch-reset-controls">

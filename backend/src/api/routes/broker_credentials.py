@@ -13,10 +13,16 @@ src.security.secrets_store itself.
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from src.api.schemas import BrokerCredentialStatusResponse, WriteBrokerCredentialsRequest
+from src.api.schemas import (
+    BrokerCircuitBreakerStatusResponse,
+    BrokerCredentialStatusResponse,
+    WriteBrokerCredentialsRequest,
+)
 from src.brokers.base import BrokerCredentials
+from src.brokers.breaker_registry import get_all_broker_circuit_breakers
 from src.brokers.factory import KNOWN_BROKERS
 from src.core.rbac import Role, register_policy, require_role
+from src.engine.risk.circuit_breaker import DEFAULT_FAILURE_THRESHOLD, CircuitState
 from src.models.user import User
 from src.security.secrets_store import SecretsStore, SecretsStoreError, get_secrets_store
 
@@ -33,6 +39,7 @@ router = APIRouter(prefix="/broker-credentials", tags=["broker-credentials"])
 _WRITE_ROLES = [Role.SYSTEM_ADMINISTRATOR]
 
 register_policy("GET", "/api/v1/broker-credentials", roles=list(Role))
+register_policy("GET", "/api/v1/broker-credentials/circuit-breaker", roles=list(Role))
 register_policy("POST", "/api/v1/broker-credentials/{broker}", roles=_WRITE_ROLES)
 register_policy("DELETE", "/api/v1/broker-credentials/{broker}", roles=_WRITE_ROLES)
 
@@ -68,6 +75,47 @@ async def list_broker_credential_status_endpoint(
                 token_expires_at=creds.token_expires_at if creds else None,
                 redirect_uri=creds.redirect_uri if creds else None,
                 token_duration=creds.token_duration if creds else None,
+            )
+        )
+    return responses
+
+
+@router.get("/circuit-breaker")
+async def list_broker_circuit_breaker_status_endpoint(
+    _current_user: User = Depends(require_role),
+) -> list[BrokerCircuitBreakerStatusResponse]:
+    """Real breaker state, not a fabricated placeholder: `src.brokers.factory
+    .build_configured_adapter` now wraps every adapter it builds in the
+    same per-broker singleton (src.brokers.breaker_registry) instead of a
+    fresh, always-`CLOSED` instance on each call, so this reflects genuine
+    consecutive-failure history across every real caller. A broker with no
+    entry yet in the registry (no adapter has ever actually been built for
+    it -- e.g. no credentials configured) is reported as `closed`/`0`
+    rather than omitted, since that is the breaker's own true starting
+    state and there is nothing dishonest about reporting it before the
+    lazy singleton has been created."""
+    breakers = get_all_broker_circuit_breakers()
+    responses = []
+    for broker in KNOWN_BROKERS:
+        breaker = breakers.get(broker)
+        if breaker is None:
+            responses.append(
+                BrokerCircuitBreakerStatusResponse(
+                    broker=broker,
+                    state=CircuitState.CLOSED.value,
+                    consecutive_failures=0,
+                    failure_threshold=DEFAULT_FAILURE_THRESHOLD,
+                    cooldown_remaining_seconds=None,
+                )
+            )
+            continue
+        responses.append(
+            BrokerCircuitBreakerStatusResponse(
+                broker=broker,
+                state=breaker.state.value,
+                consecutive_failures=breaker.consecutive_failures,
+                failure_threshold=breaker.failure_threshold,
+                cooldown_remaining_seconds=breaker.cooldown_remaining_seconds(),
             )
         )
     return responses

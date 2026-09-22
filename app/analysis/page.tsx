@@ -1,17 +1,23 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { Bar, CartesianGrid, ComposedChart, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertTriangle, Cable, Clock3, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
+import { ChartContainer } from '@/components/ui/chart'
 import {
+  type BrokerCircuitBreakerStatus,
   type BrokerCredentialStatus,
   type FreshnessRecord,
+  type IndicatorSeries,
   type Instrument,
   type LlmProviderStatus,
   type MarketPulse,
   LLM_PROVIDER_LABELS,
   getFreshness,
+  getIndicators,
   getMarketPulse,
+  listBrokerCircuitBreakerStatus,
   listBrokerCredentialStatus,
   listInstruments,
   listLlmProviderStatus,
@@ -94,8 +100,104 @@ function PulseTab() {
   )
 }
 
+const OVERLAYS = [
+  { id: 'sma', label: 'SMA' },
+  { id: 'ema', label: 'EMA' },
+  { id: 'bollinger', label: 'Bollinger' },
+] as const
+type OverlayId = (typeof OVERLAYS)[number]['id']
+
 function TechnicalTab() {
-  return <Panel title="Technical Indicators" eyebrow="NOT AVAILABLE"><GapNotice>No backend endpoint computes technical indicators (SMA/EMA/RSI/MACD/Bollinger Bands) for arbitrary symbols — only the backtest engine computes signal-generation indicators internally, and doesn't expose a general-purpose indicator series API. Real OHLCV data exists in the data lake (see Data Freshness) but isn't served as a chartable time series here.</GapNotice></Panel>
+  const [instruments, setInstruments] = useState<Instrument[]>([])
+  const [symbol, setSymbol] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [series, setSeries] = useState<IndicatorSeries | null>(null)
+  const [overlays, setOverlays] = useState<OverlayId[]>(['sma', 'ema'])
+
+  useEffect(() => { listInstruments().then((data) => { setInstruments(data); setSymbol((prev) => prev ?? data[0]?.symbol ?? null) }) }, [])
+  useEffect(() => { if (symbol) getIndicators(symbol).then(setSeries) }, [symbol])
+
+  const filtered = instruments.filter((i) => i.symbol.toLowerCase().includes(query.toLowerCase())).slice(0, 50)
+  const toggleOverlay = (id: OverlayId) => setOverlays((prev) => prev.includes(id) ? prev.filter((o) => o !== id) : [...prev, id])
+
+  const chartData = useMemo(() => {
+    if (!series) return []
+    return series.dates.map((date, i) => ({
+      date,
+      close: series.close[i],
+      sma: series.sma[i],
+      ema: series.ema[i],
+      bollinger_upper: series.bollinger_upper[i],
+      bollinger_lower: series.bollinger_lower[i],
+      rsi: series.rsi[i],
+      macd: series.macd[i],
+      macd_signal: series.macd_signal[i],
+      macd_histogram: series.macd_histogram[i],
+    }))
+  }, [series])
+
+  const hasData = (series?.dates.length ?? 0) > 0
+
+  return (
+    <div className="technical-layout">
+      <Panel title="Symbol" eyebrow="SEARCH" className="symbol-panel">
+        <label className="symbol-search-box"><Search className="size-3.5" /><input placeholder="Search NSE / BSE symbol..." value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+        <div className="symbol-list">{filtered.map((i) => <button key={i.symbol} className={i.symbol === symbol ? 'symbol-chip active' : 'symbol-chip'} onClick={() => setSymbol(i.symbol)}>{i.symbol}</button>)}</div>
+      </Panel>
+      <Panel
+        title={`${symbol ?? '—'} · close · SMA(${series?.sma_window ?? 20}) · EMA(${series?.ema_span ?? 20}) · Bollinger`}
+        eyebrow="REAL OHLCV FROM THE DATA LAKE"
+        className="indicator-chart-panel"
+        actions={<div className="overlay-toggles">{OVERLAYS.map((o) => <button key={o.id} className={overlays.includes(o.id) ? 'active' : ''} onClick={() => toggleOverlay(o.id)}>{o.label}</button>)}</div>}
+      >
+        {!hasData ? <p className="p-4 text-xs text-muted-foreground">No ingested OHLCV history for this symbol yet — see Data Freshness. Real indicators need real bars from the data lake, not a live quote, so nothing is shown here until the pipeline has actually ingested this symbol.</p> : (
+          <ChartContainer config={{ close: { label: 'Close', color: 'var(--chart-1)' } }} className="h-[300px] w-full px-2">
+            <LineChart data={chartData} margin={{ left: 0, right: 8, top: 12, bottom: 0 }}>
+              <CartesianGrid stroke="rgba(148,163,184,.1)" vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={40} />
+              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} />
+              <Tooltip />
+              <Line type="monotone" dataKey="close" stroke="#e2e8f0" dot={false} strokeWidth={1.5} name="Close" />
+              {overlays.includes('sma') && <Line type="monotone" dataKey="sma" stroke="#22d3ee" dot={false} strokeWidth={1.25} name={`SMA(${series?.sma_window})`} connectNulls={false} />}
+              {overlays.includes('ema') && <Line type="monotone" dataKey="ema" stroke="#c084fc" dot={false} strokeWidth={1.25} name={`EMA(${series?.ema_span})`} connectNulls={false} />}
+              {overlays.includes('bollinger') && <Line type="monotone" dataKey="bollinger_upper" stroke="#fbbf24" dot={false} strokeWidth={1} strokeDasharray="3 3" name="Bollinger Upper" connectNulls={false} />}
+              {overlays.includes('bollinger') && <Line type="monotone" dataKey="bollinger_lower" stroke="#fbbf24" dot={false} strokeWidth={1} strokeDasharray="3 3" name="Bollinger Lower" connectNulls={false} />}
+            </LineChart>
+          </ChartContainer>
+        )}
+      </Panel>
+      <div className="sub-indicators">
+        <Panel title={`RSI(${series?.rsi_period ?? 14})`} eyebrow="MOMENTUM">
+          {!hasData ? <p className="p-4 text-xs text-muted-foreground">—</p> : (
+            <ChartContainer config={{ rsi: { label: 'RSI', color: 'var(--chart-2)' } }} className="h-[160px] w-full px-2">
+              <LineChart data={chartData} margin={{ left: 0, right: 8, top: 12, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(148,163,184,.1)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} minTickGap={60} />
+                <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="rsi" stroke="#f472b6" dot={false} strokeWidth={1.25} connectNulls={false} />
+              </LineChart>
+            </ChartContainer>
+          )}
+        </Panel>
+        <Panel title="MACD(12, 26, 9)" eyebrow="TREND">
+          {!hasData ? <p className="p-4 text-xs text-muted-foreground">—</p> : (
+            <ChartContainer config={{ macd: { label: 'MACD', color: 'var(--chart-3)' } }} className="h-[160px] w-full px-2">
+              <ComposedChart data={chartData} margin={{ left: 0, right: 8, top: 12, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(148,163,184,.1)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} minTickGap={60} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} />
+                <Tooltip />
+                <Bar dataKey="macd_histogram" fill="#475569" />
+                <Line type="monotone" dataKey="macd" stroke="#22d3ee" dot={false} strokeWidth={1.25} connectNulls={false} />
+                <Line type="monotone" dataKey="macd_signal" stroke="#fbbf24" dot={false} strokeWidth={1.25} connectNulls={false} />
+              </ComposedChart>
+            </ChartContainer>
+          )}
+        </Panel>
+      </div>
+    </div>
+  )
 }
 
 function FreshnessTab() {
@@ -125,11 +227,17 @@ function FreshnessTab() {
 function ProvidersTab() {
   const [providers, setProviders] = useState<LlmProviderStatus[]>([])
   const [brokers, setBrokers] = useState<BrokerCredentialStatus[]>([])
+  const [breakers, setBreakers] = useState<BrokerCircuitBreakerStatus[]>([])
 
   useEffect(() => {
     listLlmProviderStatus().then(setProviders)
     listBrokerCredentialStatus().then(setBrokers)
+    listBrokerCircuitBreakerStatus().then(setBreakers)
+    const interval = setInterval(() => listBrokerCircuitBreakerStatus().then(setBreakers), 10_000)
+    return () => clearInterval(interval)
   }, [])
+
+  const breakerByBroker = Object.fromEntries(breakers.map((b) => [b.broker, b]))
 
   return (
     <div className="technical-layout">
@@ -146,19 +254,29 @@ function ProvidersTab() {
           ))}
         </div>
       </Panel>
-      <Panel title="Broker connections" eyebrow="OAUTH TOKEN STATUS">
+      <Panel title="Broker connections" eyebrow="OAUTH TOKEN STATUS + LIVE CIRCUIT-BREAKER STATE">
         <div className="provider-status-list">
-          {brokers.map((b) => (
-            <div className="provider-status-row" key={b.broker}>
-              <span className={`provider-status-dot ${b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
-              <div className="min-w-0 flex-1">
-                <strong className="capitalize">{b.broker}</strong>
-                <small>{b.token_status === 'valid' ? 'token valid' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+          {brokers.map((b) => {
+            const breaker = breakerByBroker[b.broker]
+            const tripped = breaker?.state === 'open'
+            return (
+              <div className="provider-status-row" key={b.broker}>
+                <span className={`provider-status-dot ${tripped ? 'red' : b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
+                <div className="min-w-0 flex-1">
+                  <strong className="capitalize">{b.broker}</strong>
+                  <small>{b.token_status === 'valid' ? 'token valid' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+                  <small>
+                    {tripped
+                      ? `circuit OPEN — ${breaker.consecutive_failures} consecutive failures${breaker.cooldown_remaining_seconds != null ? `, retry in ${Math.ceil(breaker.cooldown_remaining_seconds)}s` : ''}`
+                      : breaker
+                        ? `circuit closed · ${breaker.consecutive_failures}/${breaker.failure_threshold} consecutive failures`
+                        : 'circuit closed · no dispatch attempts yet'}
+                  </small>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
-        <GapNotice>Real-time connectivity/latency (as opposed to whether a token is currently valid) isn't exposed: the broker circuit breaker (src/brokers/resilient.py) is constructed fresh per order dispatch rather than held as a persistent per-broker instance, so there is no live breaker state to surface yet.</GapNotice>
       </Panel>
     </div>
   )

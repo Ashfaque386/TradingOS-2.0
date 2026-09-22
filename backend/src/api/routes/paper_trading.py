@@ -7,10 +7,11 @@ runs itself without either endpoint ever being called.
 """
 
 import uuid
+from datetime import datetime
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
@@ -21,9 +22,11 @@ from src.api.schemas import (
     PaperTradingSubscriptionResponse,
     ProcessTickRequest,
     RunDailySignalRequest,
+    TodaysPaperPnlResponse,
 )
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
@@ -43,6 +46,7 @@ router = APIRouter(prefix="/paper-trading", tags=["paper-trading"])
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("POST", "/api/v1/paper-trading/subscriptions", roles=_OPERATOR_ROLES)
+register_policy("GET", "/api/v1/paper-trading/pnl/today", roles=list(Role))
 register_policy("GET", "/api/v1/paper-trading/subscriptions/{subscription_id}", roles=list(Role))
 register_policy(
     "GET", "/api/v1/paper-trading/subscriptions/{subscription_id}/position", roles=list(Role)
@@ -95,6 +99,34 @@ def _fill_response(fill: PaperFill) -> PaperFillResponse:
         fully_filled=fill.fully_filled,
         realized_pnl=fill.realized_pnl,
         created_at=fill.created_at.isoformat(),
+    )
+
+
+@router.get("/pnl/today")
+async def todays_paper_pnl_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> TodaysPaperPnlResponse:
+    """Realized P&L only -- a real, honest aggregate of `PaperFill.realized_pnl`
+    (the per-fill delta `_persist_fill` already writes alongside the
+    cumulative total it adds to `PaperPosition.realized_pnl`) for fills
+    created since IST midnight today. Deliberately does not attempt an
+    unrealized/mark-to-market figure: that would need a genuine current
+    price per open position, which this engine has no non-synthetic source
+    for outside of a configured broker's live quote -- see
+    docs/phase16-wiring-audit.md Follow-up F for the reasoning."""
+    start_of_day_ist = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    result = await db.execute(
+        select(
+            func.coalesce(func.sum(PaperFill.realized_pnl), 0.0),
+            func.count(PaperFill.id),
+        ).where(PaperFill.created_at >= start_of_day_ist)
+    )
+    total_realized, fill_count = result.one()
+    return TodaysPaperPnlResponse(
+        as_of_date=start_of_day_ist.date().isoformat(),
+        realized_pnl=float(total_realized),
+        fill_count=fill_count,
     )
 
 

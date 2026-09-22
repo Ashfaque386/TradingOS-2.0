@@ -224,6 +224,13 @@ export const getKillSwitch = (mode: KillSwitchMode) =>
 export const resetKillSwitch = (mode: KillSwitchMode, reason?: string) =>
   apiPost<KillSwitchState>(`/api/v1/kill-switch/${mode}/reset`, { reason })
 
+export type TodaysPaperPnl = {
+  as_of_date: string
+  realized_pnl: number
+  fill_count: number
+}
+export const getTodaysPaperPnl = () => apiGet<TodaysPaperPnl>('/api/v1/paper-trading/pnl/today')
+
 // ---- Orchestration runs ----
 export type TaskSummary = {
   id: string
@@ -601,6 +608,15 @@ export type BrokerCredentialStatus = {
 }
 export const KNOWN_BROKERS = ['zerodha', 'upstox'] as const
 export const listBrokerCredentialStatus = () => apiGet<BrokerCredentialStatus[]>('/api/v1/broker-credentials')
+export type BrokerCircuitBreakerStatus = {
+  broker: string
+  state: 'closed' | 'open'
+  consecutive_failures: number
+  failure_threshold: number
+  cooldown_remaining_seconds: number | null
+}
+export const listBrokerCircuitBreakerStatus = () =>
+  apiGet<BrokerCircuitBreakerStatus[]>('/api/v1/broker-credentials/circuit-breaker')
 export const writeBrokerCredentials = (broker: string, apiKey: string, apiSecret?: string, accessToken?: string) =>
   apiPost<void>(`/api/v1/broker-credentials/${broker}`, { api_key: apiKey, api_secret: apiSecret || null, access_token: accessToken || null })
 export const deleteBrokerCredentials = (broker: string) => apiDelete<void>(`/api/v1/broker-credentials/${broker}`)
@@ -767,6 +783,26 @@ export type FreshnessRecord = {
   ingested_at: string
 }
 export const getFreshness = (symbol: string) => apiGet<FreshnessRecord[]>(`/api/v1/market-data/freshness/${symbol}`)
+
+export type IndicatorSeries = {
+  symbol: string
+  dates: string[]
+  close: number[]
+  sma: (number | null)[]
+  sma_window: number
+  ema: (number | null)[]
+  ema_span: number
+  rsi: (number | null)[]
+  rsi_period: number
+  macd: (number | null)[]
+  macd_signal: (number | null)[]
+  macd_histogram: (number | null)[]
+  bollinger_upper: (number | null)[]
+  bollinger_middle: (number | null)[]
+  bollinger_lower: (number | null)[]
+}
+export const getIndicators = (symbol: string, lookbackDays = 250) =>
+  apiGet<IndicatorSeries>(`/api/v1/market-data/indicators/${symbol}?lookback_days=${lookbackDays}`)
 
 export type Instrument = {
   symbol: string
