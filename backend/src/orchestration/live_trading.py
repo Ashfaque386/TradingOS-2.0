@@ -116,6 +116,7 @@ __all__ = [
     "enroll_in_live_trading",
     "expire_stale_intents",
     "generate_live_order_intent",
+    "reconcile_pending_trades",
     "reject_live_order_intent",
     "run_live_daily_signal_generation",
 ]
@@ -697,3 +698,105 @@ async def expire_stale_intents(db: AsyncSession) -> int:
     result = await db.execute(stmt)
     await db.commit()
     return result.rowcount
+
+
+def _normalize_broker_order_status(raw_status: str) -> str | None:
+    """Translates a broker's own order-status vocabulary (passed through
+    unnormalized on `BrokerOrder.status` -- see
+    `src.brokers.base.BrokerAdapter.get_order_book`'s docstring; Zerodha
+    reports e.g. `"COMPLETE"`/`"REJECTED"`/`"OPEN"`, Upstox reports
+    `"complete"`/`"rejected"`/`"open"`) into this codebase's own terminal
+    `Trade.status` vocabulary. Returns `None` for anything not yet a
+    terminal outcome (open, trigger-pending, etc.) -- such a trade is left
+    at `pending_confirmation` for the next reconciliation pass to re-check,
+    exactly like a still-open order really is still unresolved."""
+    status = raw_status.strip().upper()
+    if status == "COMPLETE":
+        return "filled"
+    if status == "REJECTED":
+        return "rejected"
+    if status == "CANCELLED":
+        return "cancelled"
+    return None
+
+
+async def reconcile_pending_trades(db: AsyncSession, adapter: BrokerAdapter) -> int:
+    """The broker-fill reconciliation job (Phase 16 audit follow-up B):
+    closes the gap where `Trade.status` could never progress past
+    `pending_confirmation` because nothing ever polled the broker for a
+    real outcome. `Trade` carries no broker order id of its own, so this
+    joins through `Order.broker_order_id`/`Order.broker_name`; the adapter
+    layer exposes no per-order status lookup (only the bulk
+    `get_order_book()`), so this fetches that once and matches client-side
+    rather than doing one round-trip per pending trade. Only trades routed
+    through `adapter.broker_name` are considered -- this codebase only
+    ever has one broker configured at a time (`build_configured_adapter`),
+    so a trade left over from a previously-configured, now-unconfigured
+    broker has no adapter to reconcile it against and is correctly left
+    pending rather than guessed at.
+
+    Runs unconditionally, not gated by `is_market_open_ist()` -- like
+    `expire_stale_intents`, a fill can be confirmed by the broker shortly
+    after the market's new-order window closes, and this must keep
+    resolving those regardless of whether anyone is looking at the UI.
+    Safe to call repeatedly: a broker-lookup failure or an order not yet
+    appearing in the book leaves the trade untouched for the next pass,
+    never raises out of this function, and never partially commits (one
+    commit for the whole batch)."""
+    pending = (
+        await db.execute(
+            select(Trade, Order.broker_order_id)
+            .join(Order, Trade.order_id == Order.id)
+            .where(Trade.status == "pending_confirmation", Order.broker_name == adapter.broker_name)
+        )
+    ).all()
+    if not pending:
+        return 0
+
+    try:
+        broker_orders = await adapter.get_order_book()
+    except Exception:
+        logger.exception(
+            "live_trading.reconciliation_order_book_fetch_failed", broker=adapter.broker_name
+        )
+        return 0
+
+    by_broker_order_id = {bo.broker_order_id: bo for bo in broker_orders}
+
+    now = datetime.now(UTC)
+    reconciled = 0
+    for trade, broker_order_id in pending:
+        if not broker_order_id:
+            continue
+        broker_order = by_broker_order_id.get(broker_order_id)
+        if broker_order is None:
+            continue
+        outcome = _normalize_broker_order_status(broker_order.status)
+        if outcome is None:
+            continue
+
+        trade.status = outcome
+        trade.confirmed_at = now
+        if outcome == "filled" and broker_order.average_price is not None:
+            trade.fill_price = broker_order.average_price
+
+        await write_audit_entry(
+            db,
+            actor="system",
+            action="trade.reconciled",
+            entity_type="trade",
+            entity_id=str(trade.id),
+            details={
+                "symbol": trade.symbol,
+                "broker_name": adapter.broker_name,
+                "broker_order_id": broker_order_id,
+                "outcome": outcome,
+                "broker_status": broker_order.status,
+                "fill_price": broker_order.average_price,
+            },
+        )
+        reconciled += 1
+
+    if reconciled:
+        await db.commit()
+    return reconciled

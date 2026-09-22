@@ -40,6 +40,7 @@ from src.observability.correlation import with_job_correlation_id
 from src.orchestration.live_trading import (
     expire_stale_intents,
     generate_live_order_intent,
+    reconcile_pending_trades,
     run_live_daily_signal_generation,
 )
 
@@ -49,10 +50,12 @@ DAILY_SIGNAL_HOUR_IST = 8  # before the 09:15 IST market open
 DAILY_SIGNAL_MINUTE_IST = 0
 INTENT_GENERATION_INTERVAL_SECONDS = 5
 EXPIRY_SWEEP_INTERVAL_SECONDS = 10
+RECONCILIATION_INTERVAL_SECONDS = 15
 
 DAILY_SIGNAL_JOB_ID = "live_trading_daily_signal"
 INTENT_GENERATION_JOB_ID = "live_trading_intent_generation"
 EXPIRY_SWEEP_JOB_ID = "live_trading_expiry_sweep"
+RECONCILIATION_JOB_ID = "live_trading_reconciliation"
 
 
 async def run_live_daily_signal_job(
@@ -128,6 +131,21 @@ async def run_expiry_sweep_job(session_factory: async_sessionmaker[AsyncSession]
         logger.info("live_trading.intents_expired", count=expired_count)
 
 
+async def run_reconciliation_job(
+    session_factory: async_sessionmaker[AsyncSession], *, adapter: BrokerAdapter | None
+) -> None:
+    if adapter is None:
+        return
+    async with session_factory() as db:
+        try:
+            reconciled_count = await reconcile_pending_trades(db, adapter)
+        except Exception:  # noqa: BLE001 - one bad reconciliation pass must not kill the job's next tick
+            logger.exception("live_trading.reconciliation_failed")
+            return
+    if reconciled_count:
+        logger.info("live_trading.trades_reconciled", count=reconciled_count)
+
+
 def start_live_trading_scheduler(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -160,6 +178,15 @@ def start_live_trading_scheduler(
         seconds=EXPIRY_SWEEP_INTERVAL_SECONDS,
         args=[session_factory],
         id=EXPIRY_SWEEP_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        with_job_correlation_id(RECONCILIATION_JOB_ID, run_reconciliation_job),
+        "interval",
+        seconds=RECONCILIATION_INTERVAL_SECONDS,
+        args=[session_factory],
+        kwargs={"adapter": adapter},
+        id=RECONCILIATION_JOB_ID,
         replace_existing=True,
     )
 

@@ -6,10 +6,12 @@ import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
   type LiveOrderIntentDto,
+  type PositionByStrategy,
   type UnifiedExecution,
   ApiError,
   listLiveIntents,
   listOrders,
+  listPositionsByStrategy,
   submitOrderIntent,
 } from '@/lib/api'
 
@@ -22,6 +24,7 @@ export default function OrdersPage() {
   const canTrade = role === 'SystemAdministrator' || role === 'PortfolioManager'
   const [orders, setOrders] = useState<UnifiedExecution[]>([])
   const [intents, setIntents] = useState<LiveOrderIntentDto[]>([])
+  const [positions, setPositions] = useState<PositionByStrategy[]>([])
   const [mode, setMode] = useState('BOTH')
   const [status, setStatus] = useState('ALL')
   const [query, setQuery] = useState('')
@@ -39,9 +42,14 @@ export default function OrdersPage() {
   const [submitting, setSubmitting] = useState(false)
 
   async function reload() {
-    const [ordersData, intentsData] = await Promise.all([listOrders('both'), listLiveIntents()])
+    const [ordersData, intentsData, positionsData] = await Promise.all([
+      listOrders('both'),
+      listLiveIntents(),
+      listPositionsByStrategy(),
+    ])
     setOrders(ordersData)
     setIntents(intentsData)
+    setPositions(positionsData)
   }
 
   useEffect(() => {
@@ -99,7 +107,7 @@ export default function OrdersPage() {
       <div className="summary-stat"><span>TOTAL EXECUTIONS</span><strong>{orders.length}</strong><small>{paperCount} paper · {liveCount} live</small></div>
       <div className="summary-stat"><span>PENDING SIGN-OFFS</span><strong>{intents.filter(i => i.status === 'pending_approval').length}</strong><small>live order intents awaiting approval</small></div>
       <div className="summary-stat"><span>LATENCY</span><strong className="text-muted-foreground">Prometheus only</strong><small>tradingos_order_dispatch_latency_seconds · see Grafana</small></div>
-      <div className="summary-stat"><span>POSITIONS BY STRATEGY</span><strong className="text-muted-foreground">not exposed yet</strong><small>no aggregate positions endpoint</small></div>
+      <div className="summary-stat"><span>OPEN POSITIONS</span><strong>{positions.length}</strong><small>{positions.filter(p => p.mode === 'live').length} live · {positions.filter(p => p.mode === 'paper').length} paper</small></div>
     </section>
     <div className="orders-layout"><div className="orders-main">
       <div className="orders-tabs"><button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Orders &amp; Trades <b>{orders.length}</b></button><button className={tab === 'intents' ? 'active' : ''} onClick={() => setTab('intents')}>Live Order Intents <b className="amber-count">{intents.length}</b></button></div>
@@ -107,6 +115,9 @@ export default function OrdersPage() {
     </div>
     <aside className="orders-side">
       {canTrade ? <Panel title="Manual order entry" eyebrow="ROUTED THROUGH THE REAL RISK GATE"><form onSubmit={handleFormSubmit}><div className="mode-toggle"><button type="button" className={!live ? 'selected-paper' : ''} onClick={() => setLive(false)}>PAPER<small>Safe simulation</small></button><button type="button" className={live ? 'selected-live' : ''} onClick={() => setLive(true)}>LIVE<small>Requires confirmation</small></button></div>{live && <div className="live-warning"><ShieldAlert className="size-4" /><span><strong>LIVE ORDER</strong><small>This routes to the real risk gate and, if accepted, real broker exposure.</small></span></div>}{submitError && <div className="live-warning"><AlertTriangle className="size-4" /><span><small>{submitError}</small></span></div>}<label className="order-field">SYMBOL<input value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} /></label><div className="field-grid"><label className="order-field">SIDE<select value={side} onChange={e => setSide(e.target.value as 'buy' | 'sell')}><option value="buy">BUY</option><option value="sell">SELL</option></select></label><label className="order-field">QUANTITY<input type="number" value={qty} onChange={e => setQty(e.target.value)} /></label></div><div className="field-grid"><label className="order-field">PROPOSED PRICE<input type="number" value={price} onChange={e => setPrice(e.target.value)} /></label><label className="order-field">REFERENCE PRICE<input type="number" value={referencePrice} onChange={e => setReferencePrice(e.target.value)} /></label></div><label className="order-field">PORTFOLIO VALUE<input type="number" value={portfolioValue} onChange={e => setPortfolioValue(e.target.value)} /></label><button type="submit" disabled={submitting} className={live ? 'submit-live' : 'submit-paper'}>{live ? <><LockKeyhole className="size-4" />Review LIVE order</> : <><Zap className="size-4" />Submit PAPER intent</>}</button></form></Panel> : <Panel title="Manual order entry" eyebrow="READ-ONLY"><p className="p-4 text-xs text-muted-foreground">Your role does not have order-submission access.</p></Panel>}
+      <Panel title="Positions by strategy" eyebrow="LIVE + PAPER · CURRENT NET EXPOSURE">
+        {positions.length === 0 ? <p className="p-4 text-xs text-muted-foreground">No open positions — every position closes out to flat.</p> : <div className="position-list">{positions.map(p => <div className="position-row" key={`${p.mode}-${p.strategy_id}-${p.symbol}`}><div className="min-w-0"><strong>{p.strategy_name}</strong><small>{p.symbol} · {p.mode.toUpperCase()}</small></div><div className="text-right"><span className={p.quantity < 0 ? 'sell-badge' : 'buy-badge'}>{p.quantity > 0 ? '+' : ''}{p.quantity}</span><small className="block text-muted-foreground">avg ₹{p.avg_cost.toFixed(2)}</small></div></div>)}</div>}
+      </Panel>
       <Panel title="Gateway health" eyebrow="EXECUTION INFRA"><p className="p-4 text-xs text-muted-foreground"><History className="mr-1 inline size-3" />Per-gateway latency/session status isn't exposed via API yet — see the Prometheus/Grafana dashboards for real infra metrics.</p></Panel>
     </aside></div>
     {confirm && <div className="confirm-backdrop"><div className="confirm-modal"><button className="modal-close" onClick={() => setConfirm(false)}><X className="size-4" /></button><ShieldAlert className="modal-icon" /><p className="eyebrow">FINAL LIVE ORDER CONFIRMATION</p><h2>{side.toUpperCase()} {qty} {symbol}</h2><p>This order will be routed through the real risk gate at the proposed price. Type the symbol below to confirm deliberate intent.</p><input autoFocus placeholder={`Type ${symbol} to confirm`} onChange={e => { if (e.target.value.toUpperCase() === symbol) doSubmit() }} /><button className="submit-live" disabled={submitting} onClick={doSubmit}>Confirm and route LIVE order</button></div></div>}
