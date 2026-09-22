@@ -13,6 +13,7 @@ from datetime import date as date_type
 from pathlib import Path
 
 import pandas as pd
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +53,8 @@ from src.models.instrument import Instrument
 from src.models.market_data_provenance import MarketDataProvenance
 from src.models.user import User
 from src.orchestration import market_data as market_data_orch
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
 
@@ -261,7 +264,16 @@ async def live_option_chain_endpoint(
     state same as any other dispatch) -- Zerodha has no option-chain
     endpoint at all and its adapter honestly raises `NotImplementedError`,
     surfaced here as a real 422 naming the broker and reason rather than
-    a bare 500 or a silently empty list."""
+    a bare 500 or a silently empty list.
+
+    Phase 17 real-world testing pass: also marks the ATM strike using a
+    real spot-price lookup (`adapter.get_quote(underlying)`), not the
+    synced instrument master -- confirmed live that the instrument-master
+    sync pipeline's provider (`FakeMarketDataProvider.instrument_master`)
+    has never actually generated an options row for any underlying (see
+    docs/phase17-realworld-testing.md), so the broker's own live chain
+    response (already the source `entries` comes from) is the only real
+    strike source available and is reused for the spot lookup too."""
     if adapter is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -272,10 +284,29 @@ async def live_option_chain_endpoint(
         entries = await adapter.get_option_chain(underlying, expiry)
     except NotImplementedError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    underlying_ltp: float | None = None
+    atm_strike: float | None = None
+    if entries:
+        try:
+            spot = await adapter.get_quote(underlying)
+            underlying_ltp = spot.last_price
+        except Exception as exc:  # noqa: BLE001 - spot lookup is best-effort
+            logger.warning(
+                "market_data.option_chain_spot_lookup_failed",
+                broker=adapter.broker_name,
+                underlying=underlying,
+                error=str(exc),
+            )
+        if underlying_ltp is not None:
+            atm_strike = min(entries, key=lambda e: abs(e.strike - underlying_ltp)).strike
+
     return LiveOptionChainResponse(
         broker=adapter.broker_name,
         underlying=underlying,
         expiry=expiry,
+        underlying_ltp=underlying_ltp,
+        atm_strike=atm_strike,
         entries=[
             LiveOptionChainEntryResponse(
                 strike=e.strike,

@@ -85,6 +85,19 @@ class Settings(BaseSettings):
     # in-network hostname for the container.
     temporal_address: str = "localhost:7233"
 
+    # Phase 17 real-world testing pass: base URL for Prometheus's own HTTP
+    # query API (GET {prometheus_url}/api/v1/query), used by
+    # src.observability.vitals to compute a real trailing-window
+    # order-dispatch-latency percentile (histogram_quantile over
+    # rate(...)) at request time -- the same query Grafana itself would
+    # run, not a client-side re-derivation from raw bucket samples.
+    # Defaults to localhost for local `uvicorn` dev, same convention as
+    # temporal_address above; docker-compose.yml overrides this to the
+    # `prometheus` service's in-network hostname for the container. If
+    # Prometheus is unreachable, the vitals endpoint reports both
+    # percentiles as `None` rather than a fabricated number.
+    prometheus_url: str = "http://localhost:9090"
+
     # Phase 8 (Build Spec §3, §13, §20): encrypted local broker-credentials
     # store -- Vault is intentionally dropped for 2.0's self-hosted,
     # single-operator scale (see the Build Spec's Technology Stack table).

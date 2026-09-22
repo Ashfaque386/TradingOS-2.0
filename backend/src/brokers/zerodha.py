@@ -182,12 +182,21 @@ class ZerodhaKiteAdapter:
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         raise NotImplementedError(
-            "zerodha: option chain requires the NFO instrument master "
-            "(Phase 10, Build Spec §14); not available yet"
+            "zerodha: Kite Connect has no bulk option-chain endpoint (unlike "
+            "Upstox's /option/chain). Building this would require downloading "
+            "Kite Connect's own NFO instrument dump (GET /instruments/NFO) to "
+            "resolve per-strike tradingsymbols for this underlying/expiry, then "
+            "batch-quoting them via GET /quote -- real open interest is present "
+            "in that quote response, but Kite Connect has no options-greeks "
+            "field anywhere, so implied volatility would stay unavailable for "
+            "this broker regardless (Phase 17 real-world testing pass; see "
+            "docs/phase17-realworld-testing.md)"
         )
 
     async def get_expiries(self, underlying: str) -> list[str]:
         raise NotImplementedError(
-            "zerodha: expiries require the NFO instrument master "
-            "(Phase 10, Build Spec §14); not available yet"
+            "zerodha: Kite Connect has no dedicated option-expiries endpoint; "
+            "expiries would need to be derived from the same NFO instrument "
+            "dump get_option_chain would need (Phase 17 real-world testing "
+            "pass; see docs/phase17-realworld-testing.md)"
         )

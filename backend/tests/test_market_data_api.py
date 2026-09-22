@@ -291,13 +291,25 @@ async def test_live_option_chain_honestly_422s_for_zerodha_not_implemented(
         _clear_broker_adapter_override()
 
 
-async def test_live_option_chain_returns_real_upstox_oi_iv_ltp(client: AsyncClient, make_user):
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v2/option/chain"
+def _upstox_option_chain_response(request: httpx.Request) -> httpx.Response:
+    if request.url.path == "/v2/option/chain":
         return httpx.Response(
             200,
             json={
                 "data": [
+                    {
+                        "strike_price": 23500,
+                        "call_options": {
+                            "instrument_key": "NSE_FO|CALL_LOW",
+                            "market_data": {"ltp": 340.0, "oi": 12000.0},
+                            "option_greeks": {"iv": 13.1},
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|PUT_LOW",
+                            "market_data": {"ltp": 40.0, "oi": 22000.0},
+                            "option_greeks": {"iv": 13.5},
+                        },
+                    },
                     {
                         "strike_price": 24000,
                         "call_options": {
@@ -310,13 +322,35 @@ async def test_live_option_chain_returns_real_upstox_oi_iv_ltp(client: AsyncClie
                             "market_data": {"ltp": 95.0, "oi": 38000.0},
                             "option_greeks": {"iv": 15.9},
                         },
-                    }
+                    },
+                    {
+                        "strike_price": 24500,
+                        "call_options": {
+                            "instrument_key": "NSE_FO|CALL_HIGH",
+                            "market_data": {"ltp": 30.0, "oi": 30000.0},
+                            "option_greeks": {"iv": 14.9},
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|PUT_HIGH",
+                            "market_data": {"ltp": 350.0, "oi": 26000.0},
+                            "option_greeks": {"iv": 15.1},
+                        },
+                    },
                 ]
             },
         )
+    if request.url.path == "/v2/market-quote/quotes":
+        underlying = request.url.params["symbol"]
+        return httpx.Response(
+            200, json={"data": {underlying: {"last_price": 24080.35, "depth": {}}}}
+        )
+    raise AssertionError(f"unexpected request path {request.url.path}")
 
+
+async def test_live_option_chain_returns_real_upstox_oi_iv_ltp(client: AsyncClient, make_user):
     adapter = UpstoxAdapter(
-        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+        BrokerCredentials(api_key="k", access_token="t"),
+        transport=httpx.MockTransport(_upstox_option_chain_response),
     )
     app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
     try:
@@ -329,14 +363,49 @@ async def test_live_option_chain_returns_real_upstox_oi_iv_ltp(client: AsyncClie
         assert resp.status_code == 200
         body = resp.json()
         assert body["broker"] == "upstox"
-        assert len(body["entries"]) == 1
-        entry = body["entries"][0]
-        assert entry["strike"] == 24000.0
+        assert len(body["entries"]) == 3
+        entry = next(e for e in body["entries"] if e["strike"] == 24000.0)
         assert entry["call_ltp"] == 120.5
         assert entry["call_oi"] == 45000.0
         assert entry["call_iv"] == 14.2
         assert entry["put_oi"] == 38000.0
         assert entry["put_iv"] == 15.9
+        # Real spot lookup (Phase 17): 24080.35 is closer to strike 24000
+        # than to 23500 or 24500, so that's the honestly-computed ATM strike.
+        assert body["underlying_ltp"] == 24080.35
+        assert body["atm_strike"] == 24000.0
+    finally:
+        _clear_broker_adapter_override()
+
+
+async def test_live_option_chain_leaves_atm_null_when_spot_lookup_fails(
+    client: AsyncClient, make_user
+):
+    """A best-effort spot lookup failing must never fail the whole chain
+    response -- the real per-strike data is still worth returning, with
+    underlying_ltp/atm_strike honestly null rather than fabricated."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/option/chain":
+            return _upstox_option_chain_response(request)
+        return httpx.Response(500, text="upstox quote endpoint down")
+
+    adapter = UpstoxAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+    )
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
+    try:
+        await make_user("oc3b@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "oc3b@example.com", "supersecret1")
+        resp = await client.get(
+            "/api/v1/market-data/option-chain/NSE_INDEX|Nifty%2050?expiry=2026-12-31",
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["entries"]) == 3
+        assert body["underlying_ltp"] is None
+        assert body["atm_strike"] is None
     finally:
         _clear_broker_adapter_override()
 

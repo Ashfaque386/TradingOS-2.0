@@ -59,6 +59,11 @@ dependencies = [
     "duckdb>=1.1,<2.0",
     # Phase 11 (Build Spec §19): Prometheus metrics (src/observability/metrics.py).
     "prometheus-client>=0.20,<0.21",
+    # Phase 17 real-world testing pass: real host CPU/memory gauges for
+    # GET /api/v1/system/vitals (src/observability/vitals.py) -- read
+    # directly from the API process's own OS view, not derived from any
+    # Prometheus metric (none of the five this app tracks are host-level).
+    "psutil>=6.0,<7.0",
 ]
 
 [project.scripts]
