@@ -13,7 +13,7 @@ from datetime import date as date_type
 from pathlib import Path
 
 import pandas as pd
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,8 @@ from src.api.schemas import (
     FreshnessRecordResponse,
     IndicatorSeriesResponse,
     InstrumentResponse,
+    LiveOptionChainEntryResponse,
+    LiveOptionChainResponse,
     MarketDataProvenanceResponse,
     MarketHoursResponse,
     MarketPulseResponse,
@@ -30,6 +32,8 @@ from src.api.schemas import (
     RunInstrumentMasterSyncRequest,
     RunIntradayIngestionRequest,
 )
+from src.brokers.base import BrokerAdapter
+from src.brokers.factory import build_configured_adapter
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
@@ -58,6 +62,8 @@ register_policy("GET", "/api/v1/market-data/pulse", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/freshness/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/indicators/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/instruments", roles=list(Role))
+register_policy("GET", "/api/v1/market-data/option-chain/{underlying}", roles=list(Role))
+register_policy("GET", "/api/v1/market-data/option-expiries/{underlying}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/provenance", roles=list(Role))
 register_policy("POST", "/api/v1/market-data/ingest/daily", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/market-data/ingest/intraday", roles=_OPERATOR_ROLES)
@@ -70,6 +76,17 @@ register_policy("POST", "/api/v1/market-data/backup", roles=_OPERATOR_ROLES)
 # Module-level honest-stub provider -- the same instance
 # src.orchestration.market_data_scheduler uses via src.main's lifespan.
 _PROVIDER = FakeMarketDataProvider()
+
+
+def get_market_data_broker_adapter() -> BrokerAdapter | None:
+    """A thin `Depends`-wrapped seam around `build_configured_adapter`
+    (Phase 8), the same pattern `src.api.routes.live_trading
+    .get_live_broker_adapter` already established -- a read-only option
+    chain query is safe against the production-pointed adapter (no order
+    placement involved), and tests override this the same way that
+    dependency is overridden, injecting an `httpx.MockTransport`-backed
+    adapter without needing real broker credentials or network egress."""
+    return build_configured_adapter(sandbox=False)
 
 
 def get_data_lake_root() -> Path:
@@ -228,6 +245,70 @@ async def instruments_endpoint(
         )
         for row in result.scalars().all()
     ]
+
+
+@router.get("/option-chain/{underlying}")
+async def live_option_chain_endpoint(
+    underlying: str,
+    expiry: str,
+    _current_user: User = Depends(require_role),
+    adapter: BrokerAdapter | None = Depends(get_market_data_broker_adapter),
+) -> LiveOptionChainResponse:
+    """Phase 16 audit follow-up D: a real live option chain (OI/IV/LTP),
+    not the static instrument master alone. Reads through whichever
+    broker is actually configured (Phase 8's `ResilientBrokerAdapter`,
+    so a failing call counts against that broker's real circuit-breaker
+    state same as any other dispatch) -- Zerodha has no option-chain
+    endpoint at all and its adapter honestly raises `NotImplementedError`,
+    surfaced here as a real 422 naming the broker and reason rather than
+    a bare 500 or a silently empty list."""
+    if adapter is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no broker is configured -- live option chain requires a real "
+            "broker (Settings > Broker Config)",
+        )
+    try:
+        entries = await adapter.get_option_chain(underlying, expiry)
+    except NotImplementedError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return LiveOptionChainResponse(
+        broker=adapter.broker_name,
+        underlying=underlying,
+        expiry=expiry,
+        entries=[
+            LiveOptionChainEntryResponse(
+                strike=e.strike,
+                call_symbol=e.call_symbol,
+                put_symbol=e.put_symbol,
+                call_ltp=e.call_ltp,
+                put_ltp=e.put_ltp,
+                call_oi=e.call_oi,
+                put_oi=e.put_oi,
+                call_iv=e.call_iv,
+                put_iv=e.put_iv,
+            )
+            for e in entries
+        ],
+    )
+
+
+@router.get("/option-expiries/{underlying}")
+async def live_option_expiries_endpoint(
+    underlying: str,
+    _current_user: User = Depends(require_role),
+    adapter: BrokerAdapter | None = Depends(get_market_data_broker_adapter),
+) -> list[str]:
+    if adapter is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no broker is configured -- live option expiries require a real "
+            "broker (Settings > Broker Config)",
+        )
+    try:
+        return await adapter.get_expiries(underlying)
+    except NotImplementedError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 @router.get("/provenance")

@@ -833,4 +833,29 @@ export type SystemVitals = {
 }
 export const getSystemVitals = () => apiGet<SystemVitals>('/api/v1/observability/vitals')
 
+// ---- Live option chain (Phase 16 audit follow-up D) ----
+export type LiveOptionChainEntry = {
+  strike: number
+  call_symbol: string | null
+  put_symbol: string | null
+  call_ltp: number | null
+  put_ltp: number | null
+  call_oi: number | null
+  put_oi: number | null
+  call_iv: number | null
+  put_iv: number | null
+}
+export type LiveOptionChain = {
+  broker: string
+  underlying: string
+  expiry: string
+  entries: LiveOptionChainEntry[]
+}
+export const getLiveOptionChain = (underlying: string, expiry: string) =>
+  apiGet<LiveOptionChain>(
+    `/api/v1/market-data/option-chain/${encodeURIComponent(underlying)}?expiry=${encodeURIComponent(expiry)}`
+  )
+export const getLiveOptionExpiries = (underlying: string) =>
+  apiGet<string[]>(`/api/v1/market-data/option-expiries/${encodeURIComponent(underlying)}`)
+
 export { API_BASE_URL }

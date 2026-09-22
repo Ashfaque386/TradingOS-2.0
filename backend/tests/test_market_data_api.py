@@ -3,11 +3,19 @@ freshness/instrument/provenance reads, plus every manual ingestion trigger
 -- through the actual HTTP routes, RBAC included.
 """
 
+import httpx
 import pandas as pd
 import pytest
 from httpx import AsyncClient
 
-from src.api.routes.market_data import get_data_lake_backup_root, get_data_lake_root
+from src.api.routes.market_data import (
+    get_data_lake_backup_root,
+    get_data_lake_root,
+    get_market_data_broker_adapter,
+)
+from src.brokers.base import BrokerCredentials
+from src.brokers.upstox import UpstoxAdapter
+from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.roles import Role
 from src.data import lake
 from src.main import app
@@ -245,3 +253,136 @@ async def test_indicators_endpoint_accessible_to_every_role(client: AsyncClient,
         token = await _login(client, email, "supersecret1")
         resp = await client.get("/api/v1/market-data/indicators/ANYSTOCK", headers=_auth(token))
         assert resp.status_code == 200, f"role {role} was denied read access to indicators"
+
+
+def _clear_broker_adapter_override():
+    app.dependency_overrides.pop(get_market_data_broker_adapter, None)
+
+
+async def test_live_option_chain_returns_503_when_no_broker_configured(
+    client: AsyncClient, make_user
+):
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: None
+    try:
+        await make_user("oc1@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "oc1@example.com", "supersecret1")
+        resp = await client.get(
+            "/api/v1/market-data/option-chain/NIFTY?expiry=2026-12-31", headers=_auth(token)
+        )
+        assert resp.status_code == 503
+    finally:
+        _clear_broker_adapter_override()
+
+
+async def test_live_option_chain_honestly_422s_for_zerodha_not_implemented(
+    client: AsyncClient, make_user
+):
+    adapter = ZerodhaKiteAdapter(BrokerCredentials(api_key="k", access_token="t"))
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
+    try:
+        await make_user("oc2@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "oc2@example.com", "supersecret1")
+        resp = await client.get(
+            "/api/v1/market-data/option-chain/NIFTY?expiry=2026-12-31", headers=_auth(token)
+        )
+        assert resp.status_code == 422
+        assert "zerodha" in resp.json()["detail"].lower()
+    finally:
+        _clear_broker_adapter_override()
+
+
+async def test_live_option_chain_returns_real_upstox_oi_iv_ltp(client: AsyncClient, make_user):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/option/chain"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "strike_price": 24000,
+                        "call_options": {
+                            "instrument_key": "NSE_FO|CALL1",
+                            "market_data": {"ltp": 120.5, "oi": 45000.0},
+                            "option_greeks": {"iv": 14.2},
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|PUT1",
+                            "market_data": {"ltp": 95.0, "oi": 38000.0},
+                            "option_greeks": {"iv": 15.9},
+                        },
+                    }
+                ]
+            },
+        )
+
+    adapter = UpstoxAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+    )
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
+    try:
+        await make_user("oc3@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "oc3@example.com", "supersecret1")
+        resp = await client.get(
+            "/api/v1/market-data/option-chain/NSE_INDEX|Nifty%2050?expiry=2026-12-31",
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["broker"] == "upstox"
+        assert len(body["entries"]) == 1
+        entry = body["entries"][0]
+        assert entry["strike"] == 24000.0
+        assert entry["call_ltp"] == 120.5
+        assert entry["call_oi"] == 45000.0
+        assert entry["call_iv"] == 14.2
+        assert entry["put_oi"] == 38000.0
+        assert entry["put_iv"] == 15.9
+    finally:
+        _clear_broker_adapter_override()
+
+
+async def test_live_option_expiries_returns_real_data_for_upstox(client: AsyncClient, make_user):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"data": [{"expiry": "2026-12-31"}, {"expiry": "2026-11-26"}]}
+        )
+
+    adapter = UpstoxAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+    )
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
+    try:
+        await make_user("oc4@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "oc4@example.com", "supersecret1")
+        resp = await client.get(
+            "/api/v1/market-data/option-expiries/NSE_INDEX|Nifty%2050", headers=_auth(token)
+        )
+        assert resp.status_code == 200
+        assert resp.json() == ["2026-11-26", "2026-12-31"]
+    finally:
+        _clear_broker_adapter_override()
+
+
+async def test_live_option_chain_readable_by_every_role(client: AsyncClient, make_user):
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: None
+    try:
+        for i, role in enumerate(
+            [
+                Role.SYSTEM_ADMINISTRATOR,
+                Role.PORTFOLIO_MANAGER,
+                Role.RISK_MANAGER,
+                Role.READ_ONLY_AUDITOR,
+            ]
+        ):
+            email = f"oc5-{i}@example.com"
+            await make_user(email, "supersecret1", role)
+            token = await _login(client, email, "supersecret1")
+            # 503 (no broker configured) is a real, RBAC-passed response --
+            # a 403 would mean the role was denied access to the route
+            # itself, which is what this test actually checks.
+            resp = await client.get(
+                "/api/v1/market-data/option-chain/NIFTY?expiry=2026-12-31", headers=_auth(token)
+            )
+            assert resp.status_code == 503, f"role {role} was denied read access"
+    finally:
+        _clear_broker_adapter_override()

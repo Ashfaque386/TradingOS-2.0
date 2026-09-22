@@ -20,14 +20,14 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
 - **5 real gaps found and fixed this pass** (below).
 - **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
-  Five of those six (Follow-up A, broker circuit-breaker state; Follow-up B,
-  broker-fill reconciliation; Follow-up C, technical indicators; Follow-up E,
-  System Vitals token-usage/dispatch-latency JSON summary; Follow-up F,
-  today's realized P&L) were subsequently picked up in follow-up passes — A,
-  B, and C fully resolved, E and F partially resolved by design (E covers
+  All six were subsequently picked up in follow-up passes: Follow-up A
+  (broker circuit-breaker state), Follow-up B (broker-fill reconciliation),
+  Follow-up C (technical indicators), and Follow-up D (live option chain
+  OI/IV/LTP) fully resolved; Follow-up E (System Vitals JSON summary) and
+  Follow-up F (today's paper P&L) partially resolved by design (E covers
   token usage/dispatch latency only, never host CPU/memory, which was never
-  tracked anywhere in this codebase; F is realized-only) — see their entries
-  below. One (D) remains open.
+  tracked anywhere in this codebase; F is realized-only) — see each entry
+  below for the full reasoning. No follow-up remains open.
 
 ## Gaps found and fixed
 
@@ -313,10 +313,60 @@ history" fallback message correctly does *not* show, and toggling the
 Bollinger overlay button adds exactly 2 more chart lines. Screenshot
 confirmed visually correct. Spec deleted after use, not committed.
 
-**D. Live Option Chain has no live OI/IV/LTP feed** (`app/analysis/page.tsx`,
-already labeled with a `GapNotice`). Only the static instrument master
-(strike, expiry, lot size, tick size) is served; there is no live
-options-chain data source wired in. Confirmed accurate, left as-is.
+**D. Live Option Chain has no live OI/IV/LTP feed — RESOLVED (post-audit follow-up).**
+(`app/analysis/page.tsx`, was labeled with a `GapNotice`). Only the static
+instrument master (strike, expiry, lot size, tick size) was served; there
+was no live options-chain data source wired in.
+
+**Correction to the original finding**, discovered while implementing the
+fix: this was never actually blocked on "a real market-data vendor this
+sandbox doesn't have" as first assumed. Phase 8 already built a real,
+working `get_option_chain`/`get_expiries` implementation on
+`UpstoxAdapter` (Upstox's v2 API genuinely has dedicated option-chain
+endpoints) — it was simply never wired to any frontend-facing endpoint.
+Zerodha's adapter honestly raises `NotImplementedError` for both methods
+(Kite Connect has no option-chain endpoint at all), which the original
+audit's `GapNotice` copy didn't distinguish from "no vendor integration
+exists anywhere."
+
+Fixed in a follow-up pass: `OptionChainEntry` (`backend/src/brokers/base.py`)
+gained `call_oi`/`put_oi`/`call_iv`/`put_iv` (all genuinely optional, `None`
+when a broker's response doesn't carry them, never a fabricated `0.0`) —
+`UpstoxAdapter.get_option_chain` now extracts these from the real
+`market_data.oi`/`option_greeks.iv` fields Upstox's v2 API returns. New
+`GET /api/v1/market-data/option-chain/{underlying}` and
+`GET /api/v1/market-data/option-expiries/{underlying}` (all 4 roles,
+read-only) read through whichever broker is actually configured
+(`build_configured_adapter`, the same per-broker circuit-breaker singleton
+Follow-up A made persistent) — no broker configured returns a real `503`;
+Zerodha's `NotImplementedError` is caught and surfaced as a real `422`
+naming the broker and reason, never a bare `500` or a silently empty list.
+`app/analysis/page.tsx`'s Option Chain tab gained a "Live option chain"
+panel (broker-instrument-key input, expiry picker, real OI/Call LTP/Strike/
+Put LTP/IV/OI table) above the unchanged static instrument-master table,
+with the `GapNotice` narrowed to instructing the operator on the real input
+format needed rather than claiming the feature doesn't exist.
+
+6 new tests (`test_brokers_upstox.py`'s new OI/IV extraction case,
+5 new cases in `test_market_data_api.py`) cover: no-broker → 503, Zerodha →
+422 with the real message, Upstox → real OI/IV/LTP values parsed from a
+mocked v2 response, real expiries parsing, and RBAC read access for all 4
+roles.
+
+**Live-verified:** hit the endpoint with no broker configured over real
+HTTP and got the honest `503`; configured real (fake but present) Zerodha
+credentials and got the real `422` naming Zerodha and the reason;
+configured real Upstox credentials and the endpoint genuinely attempted a
+live network call to `api.upstox.com`, failing only with
+`httpx.ProxyError: 403 Forbidden` from this sandbox's own egress policy —
+the same "real attempt, sandbox-blocked" proof already established in
+Phases 8/9's own live-verification passes, and no different a failure mode
+from any other unhandled network exception already accepted elsewhere in
+this codebase (no route anywhere catches raw `httpx` errors specially).
+Loaded the real Overview → Market Analysis → Live Option Chain tab via
+Playwright and confirmed the honest `503` message renders correctly in the
+browser rather than crashing or showing a fabricated table. Screenshot
+confirmed visually correct. Spec deleted after use, not committed.
 
 **E. Host CPU/memory, token usage, and order-dispatch-latency remain
 Prometheus-only — PARTIALLY RESOLVED (post-audit follow-up, token
