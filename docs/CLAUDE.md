@@ -38,6 +38,7 @@ The full design is captured in two documents in `docs/` (read them before starti
 | Deployment | Docker Compose, self-hosted, no Kubernetes |
 | Sandbox | gVisor or Firecracker microVM for strategy code execution |
 | Brokers | Zerodha Kite Connect (primary), Upstox (fallback) |
+| Local dev/test machine path | `D:\TradingOS-2.0\TradingOS-2.0` (Windows) — the canonical local checkout for real-credential Docker testing; see Development & Testing Workflow below |
 
 ## Repository structure
 
@@ -60,6 +61,13 @@ See Build Specification §4 for the full layout. High points:
 - Structured logging via `structlog` with a correlation ID threaded from HTTP request → orchestration run → agent action → order.
 - When a phase's prompt (in the Build Prompt Pack) says to write tests for a specific behavior, write them — don't defer "we'll add tests later."
 - If you find a spec ambiguity or something in the Build Specification that doesn't quite fit once you're actually writing code, stop and ask rather than silently deciding — flag it plainly (this is a solo project; there's no one else reviewing the diff).
+
+## Development & Testing Workflow
+
+- Development happens wherever the active session runs today — that doesn't change.
+- Nothing counts as done until it's been tested against the real local Docker stack: after a phase's work is committed and merged to the main branch, pull the latest merged code onto `D:\TradingOS-2.0\TradingOS-2.0` (`git fetch && git pull`), then bring the stack up fresh (`docker compose down && docker compose up --build`, or `pnpm docker:up` / `scripts/docker-up.cmd` per the Phase 1 notes below) and re-run that phase's acceptance criteria there — not wherever the code was originally written.
+- Real credentials (broker OAuth, LLM provider keys, notification channels) only get exercised during this local pass at `D:\TradingOS-2.0\TradingOS-2.0`. Never commit real secrets — supply them through the Settings UI or a local, gitignored `.env` on this machine only.
+- A phase is not complete until it has passed this pull-and-test cycle at `D:\TradingOS-2.0\TradingOS-2.0`, in addition to whatever automated tests ran during development.
 
 ## Current build status
 
