@@ -18,8 +18,10 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
   in Phase 13; `grep -rn "mock-data\|MOCK_\|SAMPLE_\|Math.random()"` across
   `app/`, `components/`, `lib/` returns no hits anywhere in the app.
 - **5 real gaps found and fixed this pass** (below).
-- **5 gaps confirmed genuine and already honestly labeled by the frontend**,
+- **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
+  One of those six (Follow-up B, broker-fill reconciliation) was subsequently
+  picked up and resolved in a follow-up pass — see its entry below.
 
 ## Gaps found and fixed
 
@@ -189,16 +191,43 @@ can't be fixed by adding an endpoint alone; it needs the breaker to become a
 per-broker singleton held in application state first. Left as an explicitly
 scoped follow-up rather than attempted here.
 
-**B. `Trade.status` can never progress past `pending_confirmation`**
+**B. `Trade.status` can never progress past `pending_confirmation` — RESOLVED (post-audit follow-up).**
 (Orders & Trades page, "Live Order Intents" tab). Confirmed via
 `grep -rn "\.status = \|status=.*confirm\|reconcil" src/orchestration/live_trading.py
 src/models/trade.py`: the only call site that creates a `Trade`
-(`live_trading.py:558`) always sets `status="pending_confirmation"`, and
-nothing anywhere transitions it further — there is no broker-fill
-reconciliation job. The frontend renders whatever status string comes back
-verbatim, so this is not a frontend lie, but a real, currently-permanent
-backend limitation. Building a reconciliation poller is a new module, out of
-scope for a wiring-only pass.
+(`live_trading.py:558`) always set `status="pending_confirmation"`, and
+nothing anywhere transitioned it further — there was no broker-fill
+reconciliation job. The frontend rendered whatever status string came back
+verbatim, so this was not a frontend lie, but a real backend limitation.
+
+Fixed in a follow-up pass: added `reconcile_pending_trades` to
+`backend/src/orchestration/live_trading.py`, a new scheduled job
+(`live_trading_reconciliation`, 15s interval, registered in
+`live_trading_scheduler.py` alongside the existing expiry sweep — ungated by
+`is_market_open_ist()` for the same reason the expiry sweep is: a fill can be
+confirmed by the broker shortly after the new-order window closes). Since the
+adapter layer exposes no per-order status lookup (only the bulk
+`get_order_book()`), the job fetches that once per pass and matches
+client-side against each pending `Trade`'s `Order.broker_order_id` — the
+broker's own status vocabulary (Zerodha's `COMPLETE`/`REJECTED`/`CANCELLED`,
+Upstox's lowercase equivalents) is normalized into `Trade.status`'s own
+`filled`/`rejected`/`cancelled` terminal states. `Trade` gained `fill_price`
+and `confirmed_at` columns (migration `5fb9d5f828c6`) so the real confirmed
+fill price is never confused with the pre-fill reference `price` column;
+`GET /api/v1/orders` now surfaces `fill_price` once known instead of always
+the stale reference price. Each reconciliation writes a `trade.reconciled`
+audit entry. 10 new tests (`test_orchestration_trade_reconciliation.py`,
+plus 2 added to `test_orchestration_live_trading_scheduler.py`) using a
+minimal fake adapter, covering filled/rejected/still-open/missing-from-book/
+wrong-broker/fetch-failure/no-broker-order-id cases. Live-verified via
+`alembic upgrade head`/`downgrade -1`/`upgrade head` round-trip against the
+dev DB and a direct schema inspection confirming the widened check
+constraint. The one thing still not built: a real broker-fill reconciliation
+job needs a persistent per-broker adapter to poll against, same as Follow-up
+A below — this reconciliation job reuses the existing single
+`build_configured_adapter()`-selected adapter already passed to the live
+trading scheduler, so it inherits that same "only one broker configured at a
+time" constraint rather than solving it.
 
 **C. Technical Indicators tab has no backend** (`app/analysis/page.tsx`,
 already labeled `NOT AVAILABLE`). No endpoint computes SMA/EMA/RSI/MACD/

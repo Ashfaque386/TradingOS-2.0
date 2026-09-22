@@ -70,7 +70,7 @@ async def _live_executions(db: AsyncSession) -> list[UnifiedExecutionResponse]:
             symbol=trade.symbol,
             side=trade.side,
             quantity=trade.quantity,
-            price=trade.price,
+            price=trade.fill_price if trade.fill_price is not None else trade.price,
             status=trade.status,
             strategy_id=strategy_id,
         )

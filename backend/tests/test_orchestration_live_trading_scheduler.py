@@ -205,6 +205,81 @@ async def test_expiry_sweep_job_runs_even_when_the_market_is_closed(
     assert row.status == "expired"
 
 
+async def test_reconciliation_job_is_a_noop_with_no_broker_configured(db_session_factory):
+    """No adapter (no broker credentials configured) must not raise --
+    this mirrors every other broker-dependent job in this scheduler, which
+    all accept `adapter=None` and degrade to a no-op rather than crash."""
+    await scheduler_module.run_reconciliation_job(db_session_factory, adapter=None)
+
+
+async def test_reconciliation_job_updates_a_pending_trade_via_the_real_adapter(
+    db_session_factory,
+):
+    from src.brokers.base import BrokerOrder, OrderSide
+    from src.models.live_order_intent import LiveOrderIntent
+    from src.models.order import Order
+    from src.models.trade import Trade
+
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        intent = LiveOrderIntent(
+            strategy_id=strategy_id,
+            symbol="SCHEDLIVESTOCK3",
+            side="buy",
+            quantity=1,
+            intent_type="entry",
+            expires_at=datetime.now(UTC) + timedelta(seconds=60),
+            status="approved",
+        )
+        db.add(intent)
+        await db.flush()
+        order = Order(
+            live_order_intent_id=intent.id,
+            strategy_id=strategy_id,
+            symbol="SCHEDLIVESTOCK3",
+            side="buy",
+            quantity=1,
+            broker_name="zerodha",
+            broker_order_id="SCHED-OID1",
+            status="submitted",
+        )
+        db.add(order)
+        await db.flush()
+        trade = Trade(
+            order_id=order.id,
+            symbol="SCHEDLIVESTOCK3",
+            side="buy",
+            quantity=1,
+            price=100.0,
+            status="pending_confirmation",
+        )
+        db.add(trade)
+        await db.commit()
+        trade_id = trade.id
+
+    class _FakeAdapter:
+        broker_name = "zerodha"
+
+        async def get_order_book(self) -> list[BrokerOrder]:
+            return [
+                BrokerOrder(
+                    broker_order_id="SCHED-OID1",
+                    symbol="SCHEDLIVESTOCK3",
+                    side=OrderSide.BUY,
+                    quantity=1,
+                    status="COMPLETE",
+                    average_price=101.25,
+                )
+            ]
+
+    await scheduler_module.run_reconciliation_job(db_session_factory, adapter=_FakeAdapter())
+
+    async with db_session_factory() as db:
+        row = await db.get(Trade, trade_id)
+    assert row.status == "filled"
+    assert row.fill_price == 101.25
+
+
 async def test_start_live_trading_scheduler_registers_and_runs_all_jobs(
     db_session_factory, redis_client, monkeypatch
 ):
@@ -233,6 +308,7 @@ async def test_start_live_trading_scheduler_registers_and_runs_all_jobs(
             scheduler_module.DAILY_SIGNAL_JOB_ID,
             scheduler_module.INTENT_GENERATION_JOB_ID,
             scheduler_module.EXPIRY_SWEEP_JOB_ID,
+            scheduler_module.RECONCILIATION_JOB_ID,
         }
 
         # The intent-generation job fires every 5s; give it time to run at
