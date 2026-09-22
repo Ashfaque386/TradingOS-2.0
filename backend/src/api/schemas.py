@@ -384,6 +384,12 @@ class PaperFillResponse(BaseModel):
     created_at: str
 
 
+class TodaysPaperPnlResponse(BaseModel):
+    as_of_date: str
+    realized_pnl: float
+    fill_count: int
+
+
 class DailySignalResponse(BaseModel):
     id: uuid.UUID
     subscription_id: uuid.UUID

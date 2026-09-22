@@ -157,3 +157,100 @@ async def test_get_unknown_subscription_404s(client, make_user):
         headers=_auth(token),
     )
     assert resp.status_code == 404
+
+
+async def test_todays_pnl_endpoint_is_zero_with_no_fills(client, make_user):
+    await make_user("pnl1@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "pnl1@example.com", "supersecret1")
+
+    resp = await client.get("/api/v1/paper-trading/pnl/today", headers=_auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["realized_pnl"] == 0.0
+    assert body["fill_count"] == 0
+
+
+async def test_todays_pnl_endpoint_sums_real_realized_pnl_across_a_stop_loss_exit(
+    client, make_user
+):
+    await make_user("pnl2@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
+    token = await _login(client, "pnl2@example.com", "supersecret1")
+    version_id = await _create_strategy_version(client, token)
+
+    enroll_resp = await client.post(
+        "/api/v1/paper-trading/subscriptions",
+        json={
+            "strategy_version_id": version_id,
+            # Known from FakeDailyPriceProvider's fixed default-seeded
+            # series (per-symbol seeded, see the full-cycle test above):
+            # "DEMOSTOCK" genuinely has a flat->long SMA-crossover BUY
+            # signal on 2026-09-09.
+            "symbol": "DEMOSTOCK",
+            "builtin_strategy": "sma_crossover",
+            "sma_window": 15,
+            "initial_capital": 100000,
+            "stop_loss_pct": 3.0,
+        },
+        headers=_auth(token),
+    )
+    subscription_id = enroll_resp.json()["id"]
+
+    signal_resp = await client.post(
+        "/api/v1/paper-trading/daily-signal-run",
+        json={"as_of": "2026-09-09"},
+        headers=_auth(token),
+    )
+    signals = [s for s in signal_resp.json() if s["subscription_id"] == subscription_id]
+    reference_price = signals[0]["reference_price"]
+
+    # Open the position -- an opening fill always has realized_pnl == 0.0
+    # (src.engine.paper_trading.position_ledger.apply_fill).
+    open_resp = await client.post(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/tick",
+        json={"tick_price": reference_price},
+        headers=_auth(token),
+    )
+    open_fill = open_resp.json()
+    assert open_fill["realized_pnl"] == 0.0
+
+    # A real HTTP baseline check before the loss: the endpoint is global
+    # (portfolio-wide), so confirm it already reflects the opening fill
+    # (0.0, 1 fill) before triggering the closing one.
+    mid_resp = await client.get("/api/v1/paper-trading/pnl/today", headers=_auth(token))
+    mid_body = mid_resp.json()
+    assert mid_body["realized_pnl"] == 0.0
+    assert mid_body["fill_count"] == 1
+
+    # A tick 10% below avg cost is well past the 3% stop-loss threshold --
+    # a real universal-stop-loss exit, not a fabricated closing trade.
+    exit_resp = await client.post(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/tick",
+        json={"tick_price": reference_price * 0.9},
+        headers=_auth(token),
+    )
+    exit_fill = exit_resp.json()
+    assert exit_fill is not None
+    assert exit_fill["side"] == "sell"
+    assert exit_fill["realized_pnl"] < 0.0
+
+    pnl_resp = await client.get("/api/v1/paper-trading/pnl/today", headers=_auth(token))
+    assert pnl_resp.status_code == 200
+    body = pnl_resp.json()
+    assert body["fill_count"] == 2
+    assert body["realized_pnl"] == exit_fill["realized_pnl"]
+
+
+async def test_todays_pnl_endpoint_readable_by_every_role(client, make_user):
+    for i, role in enumerate(
+        [
+            Role.SYSTEM_ADMINISTRATOR,
+            Role.PORTFOLIO_MANAGER,
+            Role.RISK_MANAGER,
+            Role.READ_ONLY_AUDITOR,
+        ]
+    ):
+        email = f"pnl3-{i}@example.com"
+        await make_user(email, "supersecret1", role)
+        token = await _login(client, email, "supersecret1")
+        resp = await client.get("/api/v1/paper-trading/pnl/today", headers=_auth(token))
+        assert resp.status_code == 200, f"role {role} was denied read access"

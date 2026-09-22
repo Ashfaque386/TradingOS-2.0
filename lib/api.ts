@@ -224,6 +224,13 @@ export const getKillSwitch = (mode: KillSwitchMode) =>
 export const resetKillSwitch = (mode: KillSwitchMode, reason?: string) =>
   apiPost<KillSwitchState>(`/api/v1/kill-switch/${mode}/reset`, { reason })
 
+export type TodaysPaperPnl = {
+  as_of_date: string
+  realized_pnl: number
+  fill_count: number
+}
+export const getTodaysPaperPnl = () => apiGet<TodaysPaperPnl>('/api/v1/paper-trading/pnl/today')
+
 // ---- Orchestration runs ----
 export type TaskSummary = {
   id: string

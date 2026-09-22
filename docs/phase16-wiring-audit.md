@@ -20,9 +20,11 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
 - **5 real gaps found and fixed this pass** (below).
 - **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
-  Two of those six (Follow-up B, broker-fill reconciliation; Follow-up C,
-  technical indicators) were subsequently picked up and resolved in
-  follow-up passes — see their entries below. Four (A, D, E, F) remain open.
+  Three of those six (Follow-up B, broker-fill reconciliation; Follow-up C,
+  technical indicators; Follow-up F, today's realized P&L) were subsequently
+  picked up in follow-up passes — B and C fully resolved, F partially
+  resolved (realized-only by design, see its entry below) — see their
+  entries below. Three (A, D, E) remain open.
 
 ## Gaps found and fixed
 
@@ -286,14 +288,57 @@ building that quickly risked introducing exactly the "looks real, quietly
 wrong" failure mode this audit exists to catch. Left as an honest gap
 pending a deliberate design pass, not a rushed fix.
 
-**F. "Today's Paper P&L" not exposed** (Overview KPI strip, already labeled
-"not exposed yet"). `PaperPosition.realized_pnl` is cumulative-to-date, not
-scoped to a trading day, and unrealized P&L would additionally require a
-current market price per symbol that isn't stored on the position row.
-Computing a true "today's" figure needs either a per-day rollup derived from
-`paper_fills` timestamps or a new daily-snapshot job — not a cheap join like
-Gap 3's positions-by-strategy endpoint was. Confirmed accurate, left as a
-follow-up rather than attempted here.
+**F. "Today's Paper P&L" not exposed — PARTIALLY RESOLVED (post-audit follow-up, realized-only by design).**
+(Overview KPI strip, was labeled "not exposed yet"). `PaperPosition.realized_pnl`
+is cumulative-to-date, not scoped to a trading day, and unrealized P&L would
+additionally require a current market price per symbol that isn't stored on
+the position row.
+
+**Correction to the original finding**, discovered while implementing the
+fix: the per-fill realized P&L delta was **not** actually discarded as first
+assumed — `PaperFill` already carries its own `realized_pnl` column (the
+exact per-fill delta `apply_fill` computes, written by
+`_persist_fill` alongside the cumulative total it adds to
+`PaperPosition.realized_pnl`), and `PaperFill.created_at` is already a real
+timestamp. So "today's realized P&L" turned out to be a trivial aggregate
+query (`SUM(PaperFill.realized_pnl) WHERE created_at >= IST midnight today`),
+not the harder per-day rollup or snapshot job originally assumed.
+
+Fixed: new `GET /api/v1/paper-trading/pnl/today` endpoint (all 4 roles,
+read-only, portfolio-wide — not scoped to one subscription, matching the
+KPI's own portfolio-wide framing), Overview's KPI relabeled from "TODAY'S
+PAPER P&L" to **"TODAY'S REALIZED P&L"** to be honest about scope. 5 new
+tests (`test_paper_trading_api.py`) covering the zero-fills baseline, a real
+open+stop-loss-exit cycle where the aggregate is asserted to exactly match
+the closing fill's own `realized_pnl` (the opening fill's `realized_pnl` is
+always `0.0`, per `apply_fill`'s accounting), and RBAC access for all 4
+roles.
+
+**Deliberately not attempted in this pass: unrealized (mark-to-market)
+P&L.** This still needs a genuine current price per open position, which
+this engine has no non-fabricated source for outside of a configured
+broker's live quote. The one real, already-running candidate — the last
+tick on each symbol's `paper:ticks:{symbol}` Redis stream — is only a real
+market price when a broker is actually configured; otherwise it's
+`MockTickSource`'s synthetic random walk, and conflating the two under one
+undifferentiated "P&L" number would be exactly the kind of ambiguous,
+possibly-synthetic-looking-real figure this audit exists to catch (the same
+reasoning that kept Follow-up E's Prometheus metrics out of a JSON
+endpoint). Left as an explicitly scoped, honestly-labeled follow-up rather
+than rushed.
+
+**Live-verified:** enrolled a real paper-trading subscription on a known
+BUY-signal day, confirmed the endpoint reads `0.0`/`0` fills before any
+activity, opened a real position via a real tick (`realized_pnl: 0.0`, as
+expected for an opening fill), drove a real stop-loss exit via a tick 10%
+below the 3%-threshold entry price, and confirmed the aggregate endpoint's
+`realized_pnl` matched the exit fill's own `realized_pnl` to the cent
+(`-503.84`) with `fill_count: 2`. Confirmed the same number renders on the
+Overview KPI strip in a real browser via Playwright (`-₹504`, correctly
+colored rose for a loss) — this also caught and fixed a real cosmetic
+formatting bug (the currency symbol was rendering before the minus sign,
+`₹-504`, instead of the conventional `-₹504`). Spec deleted after use, not
+committed.
 
 ## Acceptance criteria status
 
