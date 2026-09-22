@@ -19,7 +19,7 @@ without ever sending it, for a broker with no sandbox to send it to.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -57,11 +57,24 @@ class BrokerCredentials:
     src.security.secrets_store's at-rest encryption; both exist because
     Build Spec §20 requires secrets "never logged, never returned in API
     responses except as write-only fields", not just encrypted on disk.
+
+    `redirect_uri`/`token_expires_at`/`token_duration` are OAuth metadata
+    (src.api.routes.broker_oauth), not secrets themselves -- safe to echo
+    back in a status response, unlike api_secret/access_token. Added on top
+    of the original api_key/api_secret/access_token trio (still the only
+    fields a hand-pasted-token POST ever sets) so a stored row round-trips
+    through SecretsStore.set_credentials's already-existing
+    "keep whatever's non-None" behavior without needing a schema migration.
     """
 
     api_key: str
     api_secret: str | None = None
     access_token: str | None = None
+    redirect_uri: str | None = None
+    token_expires_at: str | None = None  # ISO 8601, UTC
+    # Upstox only ("standard" | "extended"); irrelevant to Zerodha, whose
+    # access-token lifetime isn't caller-selectable.
+    token_duration: str | None = None
 
     def __repr__(self) -> str:
         present = ["api_key"]
@@ -69,7 +82,30 @@ class BrokerCredentials:
             present.append("api_secret")
         if self.access_token:
             present.append("access_token")
+        if self.token_expires_at:
+            present.append("token_expires_at")
         return f"BrokerCredentials(<redacted: {', '.join(present)}>)"
+
+    @property
+    def token_status(self) -> str:
+        """Derived, not stored -- "expired" is a function of wall-clock
+        time relative to token_expires_at, so persisting it as its own
+        field would just go stale. "never-connected": no access_token at
+        all (only a hand-pasted api_key/api_secret, or nothing). "valid":
+        has a token and (no known expiry, or expiry still in the future).
+        "expired": has a token whose known expiry has passed.
+        """
+        if not self.access_token:
+            return "never-connected"
+        if self.token_expires_at is None:
+            return "valid"
+        try:
+            expires_at = datetime.fromisoformat(self.token_expires_at)
+        except ValueError:
+            return "valid"
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return "valid" if datetime.now(UTC) < expires_at else "expired"
 
 
 @dataclass(frozen=True, slots=True)

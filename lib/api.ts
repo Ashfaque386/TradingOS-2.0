@@ -578,12 +578,82 @@ export const rollbackGatewayConfig = (versionId: number) =>
   apiPost<ApplyResult>(`/api/v1/gateway/config/versions/${versionId}/rollback`)
 
 // ---- Broker credentials (write-only) ----
-export type BrokerCredentialStatus = { broker: string; configured: boolean }
+export type BrokerTokenStatus = 'valid' | 'expired' | 'never-connected'
+export type BrokerCredentialStatus = {
+  broker: string
+  configured: boolean
+  token_status: BrokerTokenStatus
+  token_expires_at: string | null
+  redirect_uri: string | null
+  token_duration: string | null
+}
 export const KNOWN_BROKERS = ['zerodha', 'upstox'] as const
 export const listBrokerCredentialStatus = () => apiGet<BrokerCredentialStatus[]>('/api/v1/broker-credentials')
 export const writeBrokerCredentials = (broker: string, apiKey: string, apiSecret?: string, accessToken?: string) =>
   apiPost<void>(`/api/v1/broker-credentials/${broker}`, { api_key: apiKey, api_secret: apiSecret || null, access_token: accessToken || null })
 export const deleteBrokerCredentials = (broker: string) => apiDelete<void>(`/api/v1/broker-credentials/${broker}`)
+
+// ---- Broker OAuth (real Zerodha/Upstox login completion) ----
+export type BrokerOAuthLoginUrl = { login_url: string; redirect_uri: string }
+export const getBrokerLoginUrl = (broker: string, duration?: 'standard' | 'extended') =>
+  apiGet<BrokerOAuthLoginUrl>(
+    `/api/v1/broker-credentials/${broker}/login-url${duration ? `?duration=${duration}` : ''}`
+  )
+
+// ---- LLM provider credentials (write-only) + real test/discovery ----
+export type LlmProviderName =
+  | 'anthropic'
+  | 'openai'
+  | 'gemini'
+  | 'deepseek'
+  | 'ollama'
+  | 'custom'
+export const LLM_PROVIDERS: LlmProviderName[] = [
+  'anthropic',
+  'openai',
+  'gemini',
+  'deepseek',
+  'ollama',
+  'custom',
+]
+export const LLM_PROVIDER_LABELS: Record<LlmProviderName, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  deepseek: 'DeepSeek',
+  ollama: 'Ollama (local)',
+  custom: 'Custom / Local',
+}
+export type LlmProviderStatus = {
+  provider: string
+  configured: boolean
+  base_url: string | null
+  in_fallback_order: boolean
+}
+export type LlmProviderTestResult = {
+  provider: string
+  ok: boolean
+  detail: string
+  latency_ms: number | null
+}
+export type LlmProviderModel = { id: string; label: string | null }
+export const listLlmProviderStatus = () =>
+  apiGet<LlmProviderStatus[]>('/api/v1/settings/llm-providers')
+export const writeLlmProviderCredentials = (provider: string, apiKey?: string, baseUrl?: string) =>
+  apiPost<void>(`/api/v1/settings/llm-providers/${provider}`, {
+    api_key: apiKey || null,
+    base_url: baseUrl || null,
+  })
+export const deleteLlmProviderCredentials = (provider: string) =>
+  apiDelete<void>(`/api/v1/settings/llm-providers/${provider}`)
+export const testLlmProvider = (provider: string, model?: string) =>
+  apiPost<LlmProviderTestResult>(
+    `/api/v1/settings/llm-providers/${provider}/test${model ? `?model=${encodeURIComponent(model)}` : ''}`
+  )
+export const listLlmProviderModels = (provider: string) =>
+  apiGet<{ provider: string; models: LlmProviderModel[] }>(
+    `/api/v1/settings/llm-providers/${provider}/models`
+  )
 
 // ---- Notification channels (write-only secrets) ----
 export type NotificationChannelName = 'telegram' | 'discord' | 'slack'
@@ -612,6 +682,32 @@ export const listNotificationChannels = () => apiGet<NotificationChannelStatus[]
 export const writeNotificationChannel = (channel: string, body: WriteNotificationChannelInput) =>
   apiPost<void>(`/api/v1/notification-channels/${channel}`, body)
 export const deleteNotificationChannel = (channel: string) => apiDelete<void>(`/api/v1/notification-channels/${channel}`)
+export type TestNotificationChannelResult = {
+  channel: string
+  ok: boolean
+  status_code: number | null
+  error: string | null
+  tested_at: string
+}
+export const testNotificationChannel = (
+  channel: string,
+  overrides?: { bot_token?: string; chat_id?: string; webhook_url?: string }
+) =>
+  apiPost<TestNotificationChannelResult>(`/api/v1/notification-channels/${channel}/test`, {
+    bot_token: overrides?.bot_token || null,
+    chat_id: overrides?.chat_id || null,
+    webhook_url: overrides?.webhook_url || null,
+  })
+export type DetectTelegramChatIdResult = {
+  ok: boolean
+  chat_id: string | null
+  chat_label: string | null
+  detail: string
+}
+export const detectTelegramChatId = (botToken: string) =>
+  apiPost<DetectTelegramChatIdResult>('/api/v1/notification-channels/telegram/detect-chat-id', {
+    bot_token: botToken,
+  })
 
 // ---- Dual-control risk limits ----
 export type RiskLimit = { name: string; value: number }

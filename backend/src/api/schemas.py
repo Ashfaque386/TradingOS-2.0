@@ -413,8 +413,21 @@ class WriteBrokerCredentialsRequest(BaseModel):
 
 
 class BrokerCredentialStatusResponse(BaseModel):
+    """token_status/token_expires_at/redirect_uri/token_duration are all
+    OAuth metadata, never secrets -- safe to echo back, unlike
+    api_key/api_secret/access_token, which this response never carries."""
+
     broker: str
     configured: bool
+    token_status: str = "never-connected"  # "never-connected" | "valid" | "expired"
+    token_expires_at: str | None = None
+    redirect_uri: str | None = None
+    token_duration: str | None = None
+
+
+class BrokerOAuthLoginUrlResponse(BaseModel):
+    login_url: str
+    redirect_uri: str
 
 
 class ShadowModeCheckRequest(BaseModel):
@@ -672,6 +685,74 @@ class NotificationChannelStatusResponse(BaseModel):
     enabled: bool
     allowed_sender_ids: list[str]
     alert_levels: list[str]
+
+
+class DetectTelegramChatIdRequest(BaseModel):
+    bot_token: str = Field(min_length=1)
+
+
+class DetectTelegramChatIdResponse(BaseModel):
+    ok: bool
+    chat_id: str | None = None
+    chat_label: str | None = None
+    detail: str
+
+
+class TestNotificationChannelRequest(BaseModel):
+    """All fields optional and override-only: an empty body tests whatever
+    is already saved for this channel; any field set here is used in place
+    of the saved value for this one test call without persisting it --
+    "test before you save" for a wizard step, per WriteNotificationChannelRequest's
+    same fields."""
+
+    bot_token: str | None = None
+    chat_id: str | None = None
+    webhook_url: str | None = None
+
+
+class TestNotificationChannelResponse(BaseModel):
+    channel: str
+    ok: bool
+    status_code: int | None = None
+    error: str | None = None
+    tested_at: str
+
+
+# --- Settings redesign: LLM provider credentials + test/discovery ----------
+
+
+class WriteLlmProviderCredentialsRequest(BaseModel):
+    """Write-only by design, same posture as WriteBrokerCredentialsRequest
+    above -- api_key is never echoed back. base_url is required for
+    "custom" (no api_key needed there); optional for every hosted provider
+    (only meaningful as an override, e.g. an OpenAI-compatible proxy)."""
+
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+class LlmProviderStatusResponse(BaseModel):
+    provider: str
+    configured: bool
+    base_url: str | None = None
+    in_fallback_order: bool
+
+
+class LlmProviderTestResult(BaseModel):
+    provider: str
+    ok: bool
+    detail: str
+    latency_ms: float | None = None
+
+
+class LlmProviderModel(BaseModel):
+    id: str
+    label: str | None = None
+
+
+class LlmProviderModelsResponse(BaseModel):
+    provider: str
+    models: list[LlmProviderModel]
 
 
 # --- Phase 12: In-app chat (Build Spec §18) ---------------------------------

@@ -97,6 +97,28 @@ class Settings(BaseSettings):
     secrets_store_path: str = "secrets/broker_credentials.enc"
     secrets_encryption_key: str | None = None
 
+    # Settings redesign (broker OAuth, src.api.routes.broker_oauth): the
+    # public origin this app is actually reachable at, used to build the
+    # broker OAuth redirect/callback URL an operator pastes into their
+    # Zerodha/Upstox developer console. Left unset by default and derived
+    # from the live request's own Host/X-Forwarded-* headers instead --
+    # correct for the common case (direct exposure, or a reverse proxy
+    # that forwards those headers, e.g. Dockerfile.allinone's bundled
+    # nginx). Set this explicitly only when that derivation is wrong for a
+    # given deployment (a proxy that doesn't forward the original
+    # scheme/host), the same escape hatch NEXT_PUBLIC_API_URL/CORS_ORIGINS
+    # already are for their own analogous problem.
+    public_base_url: str | None = None
+
+    # LLM provider credentials (Settings redesign): a sibling encrypted
+    # store to secrets_store_path above, same Fernet key, same
+    # write-only/never-logged contract -- kept as its own file rather than
+    # reusing the broker one so the two domains (broker vs. LLM provider
+    # secrets) stay independently readable/rotatable, matching this
+    # codebase's existing convention of one store per secret domain (see
+    # notification_channel_store_path below).
+    llm_provider_credentials_store_path: str = "secrets/llm_provider_credentials.enc"
+
     # Phase 11 (Build Spec §19): WORM-style local append-only audit
     # archive (src/audit/archive.py) -- see that module's docstring for
     # why this is a local file store rather than MinIO. Relative to CWD,

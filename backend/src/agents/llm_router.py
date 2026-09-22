@@ -30,6 +30,7 @@ from src.core.config import get_settings
 from src.gateway.schema import LlmProvider
 from src.gateway.state import get_state
 from src.observability.metrics import llm_token_usage_total
+from src.security.llm_provider_store import get_llm_provider_store
 
 logger = structlog.get_logger(__name__)
 
@@ -193,22 +194,95 @@ class OllamaClient:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CustomProviderClient:
+    """Any self-hosted/local model server that speaks the OpenAI-compatible
+    chat-completions wire format at an operator-supplied base_url (Settings
+    redesign's "Custom / Local" provider) -- Ollama itself, LM Studio,
+    vLLM's OpenAI-compatible server, etc. all implement this same surface.
+    api_key is optional: most local servers need none; Authorization is
+    only sent when one is configured.
+    """
+
+    base_url: str
+    api_key: str | None = None
+
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        if not self.base_url:
+            raise LlmProviderError("custom: no base URL configured")
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{self.base_url.rstrip('/')}/v1/chat/completions",
+                headers=headers,
+                json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+            )
+        if resp.status_code != 200:
+            raise LlmProviderError(f"custom: HTTP {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise LlmProviderError(f"custom: unexpected response shape: {data!r}") from exc
+        usage = data.get("usage") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+
+
 def default_clients() -> dict[LlmProvider, LlmProviderClient]:
+    """Credentials come from src.security.llm_provider_store (a real,
+    runtime-editable, encrypted store -- Settings redesign) when a provider
+    has a row there, falling back to the original env-var-backed Settings
+    fields otherwise so an existing env-only deployment keeps working
+    unchanged. The store itself being unavailable (no
+    SECRETS_ENCRYPTION_KEY configured at all) degrades the same way --
+    silently falls back to env vars -- rather than failing router
+    construction, matching src.brokers.factory.build_configured_adapter's
+    same graceful-degradation posture for the analogous broker case.
+    """
     settings = get_settings()
+    try:
+        store = get_llm_provider_store()
+        stored = {p: store.get_credentials(p.value) for p in LlmProvider}
+    except Exception:  # noqa: BLE001 - store unavailable is not a router failure
+        stored = {}
+
+    def _api_key(provider: LlmProvider, env_value: str | None) -> str | None:
+        row = stored.get(provider)
+        return row.api_key if row and row.api_key else env_value
+
+    def _base_url(provider: LlmProvider, env_value: str) -> str:
+        row = stored.get(provider)
+        return row.base_url if row and row.base_url else env_value
+
+    custom_creds = stored.get(LlmProvider.CUSTOM)
     return {
-        LlmProvider.ANTHROPIC: AnthropicClient(api_key=settings.anthropic_api_key),
+        LlmProvider.ANTHROPIC: AnthropicClient(
+            api_key=_api_key(LlmProvider.ANTHROPIC, settings.anthropic_api_key)
+        ),
         LlmProvider.OPENAI: OpenAiCompatibleClient(
-            api_key=settings.openai_api_key,
+            api_key=_api_key(LlmProvider.OPENAI, settings.openai_api_key),
             base_url="https://api.openai.com/v1/chat/completions",
             provider_name="openai",
         ),
-        LlmProvider.GEMINI: GeminiClient(api_key=settings.gemini_api_key),
+        LlmProvider.GEMINI: GeminiClient(
+            api_key=_api_key(LlmProvider.GEMINI, settings.gemini_api_key)
+        ),
         LlmProvider.DEEPSEEK: OpenAiCompatibleClient(
-            api_key=settings.deepseek_api_key,
+            api_key=_api_key(LlmProvider.DEEPSEEK, settings.deepseek_api_key),
             base_url="https://api.deepseek.com/chat/completions",
             provider_name="deepseek",
         ),
-        LlmProvider.OLLAMA: OllamaClient(base_url=settings.ollama_base_url),
+        LlmProvider.OLLAMA: OllamaClient(
+            base_url=_base_url(LlmProvider.OLLAMA, settings.ollama_base_url)
+        ),
+        LlmProvider.CUSTOM: CustomProviderClient(
+            base_url=(custom_creds.base_url if custom_creds else "") or "",
+            api_key=custom_creds.api_key if custom_creds else None,
+        ),
     }
 
 

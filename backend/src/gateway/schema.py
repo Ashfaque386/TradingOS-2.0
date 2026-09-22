@@ -32,6 +32,11 @@ class LlmProvider(StrEnum):
     GEMINI = "gemini"
     DEEPSEEK = "deepseek"
     OLLAMA = "ollama"
+    # Settings redesign: any OpenAI-compatible endpoint identified only by
+    # a base URL (no API key) -- a self-hosted/local model server that
+    # isn't literally Ollama, or Ollama reached at a non-default URL under
+    # a name the operator wants distinct from the built-in "ollama" entry.
+    CUSTOM = "custom"
 
 
 class BrokerId(StrEnum):
