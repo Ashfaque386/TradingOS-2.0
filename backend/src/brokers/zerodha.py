@@ -15,12 +15,30 @@ adapter simply uses whatever `access_token` its `BrokerCredentials`
 carries at call time; a stale token surfaces as an ordinary
 `BrokerRequestError(401, ...)`, the same as any other 4xx.
 
-Kite Connect has no single "option chain" endpoint -- building one
-requires downloading and filtering the full NFO instruments dump, which
-is Phase 10's instrument-master-sync territory, not this adapter's job.
-`get_option_chain`/`get_expiries` raise `NotImplementedError` with a
-clear reason rather than silently returning an empty list, which would
-read as "no options exist" instead of "not wired up yet".
+Kite Connect has no single "option chain" endpoint. `get_option_chain`/
+`get_expiries` build one the way Kite Connect's own real API actually
+supports it (Phase 17 real-world testing pass, following up on the
+originally-deferred gap documented in docs/phase17-realworld-testing.md):
+download and filter the real NFO instruments dump (`GET
+/instruments/NFO`, a CSV of every tradingsymbol/strike/expiry Kite
+Connect lists) to resolve per-strike tradingsymbols for the requested
+underlying/expiry, then batch-quote them via `GET /quote` (which accepts
+multiple `i=` params and, for F&O instruments, returns a real `oi`
+field). Kite Connect has no options-greeks field anywhere in either
+response, so `call_iv`/`put_iv` stay genuinely `None` for this broker
+always -- not a temporary gap, a permanent one, unlike Upstox (whose
+`get_option_chain` does report real IV). The NFO dump is large (every
+F&O instrument Kite Connect lists, not just one underlying) and doesn't
+change intraday, so it's cached at module level for
+`_NFO_INSTRUMENTS_CACHE_TTL_SECONDS` -- same "single uvicorn process, no
+`--workers N`, a module-level singleton genuinely is the one shared
+instance every caller sees" reasoning as `src.brokers.breaker_registry`.
+The CSV column layout and quote response shape below follow Kite
+Connect's own publicly documented API from training knowledge; this
+sandbox has no live Zerodha credentials and no egress to api.kite.trade
+to verify them against a real response, the same caveat Follow-up D's
+original Upstox implementation carried and later confirmed correct via
+a genuine (sandbox-blocked) live attempt.
 
 This sandbox has no live Zerodha credentials and no egress to
 api.kite.trade, so this adapter is exercised in tests only against an
@@ -29,6 +47,9 @@ in CI, same honest-stub posture as src.agents.llm_router's provider
 clients.
 """
 
+import csv
+import io
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -50,6 +71,19 @@ from src.engine.risk.circuit_breaker import BrokerServerError
 
 DEFAULT_BASE_URL = "https://api.kite.trade"
 DEFAULT_TIMEOUT_SECONDS = 10.0
+
+# 15 minutes -- the NFO instrument dump (strikes/expiries/tradingsymbols)
+# doesn't change intraday, so re-downloading the full CSV on every single
+# option-chain/expiries call would be wasteful. Module-level, not
+# per-instance: a fresh ZerodhaKiteAdapter is constructed on every call to
+# src.brokers.factory.build_configured_adapter, so an instance attribute
+# would never actually get reused. The cache holds public exchange data
+# (not personalized to a specific API key), so it's safe to share across
+# whichever credentials happen to be configured for this single-operator
+# deployment.
+_NFO_INSTRUMENTS_CACHE_TTL_SECONDS = 900
+_nfo_instruments_cache: list[dict] | None = None
+_nfo_instruments_cache_at: float = 0.0
 
 
 class ZerodhaKiteAdapter:
@@ -180,23 +214,107 @@ class ZerodhaKiteAdapter:
             timestamp=datetime.now(UTC),
         )
 
+    async def _get_nfo_instruments(self) -> list[dict]:
+        global _nfo_instruments_cache, _nfo_instruments_cache_at
+        now = time.monotonic()
+        if (
+            _nfo_instruments_cache is not None
+            and (now - _nfo_instruments_cache_at) < _NFO_INSTRUMENTS_CACHE_TTL_SECONDS
+        ):
+            return _nfo_instruments_cache
+
+        async with httpx.AsyncClient(
+            base_url=self._base_url, transport=self._transport, timeout=self._timeout
+        ) as client:
+            resp = await client.get("/instruments/NFO", headers=self._headers())
+        if resp.status_code >= 500:
+            raise BrokerServerError(
+                resp.status_code, f"zerodha GET /instruments/NFO: {resp.text[:200]}"
+            )
+        if resp.status_code >= 400:
+            raise BrokerRequestError(
+                resp.status_code, f"zerodha GET /instruments/NFO: {resp.text[:200]}"
+            )
+
+        rows = list(csv.DictReader(io.StringIO(resp.text)))
+        _nfo_instruments_cache = rows
+        _nfo_instruments_cache_at = now
+        return rows
+
+    async def _batch_quote(self, tradingsymbols: list[str]) -> dict[str, dict]:
+        """Kite Connect's real `/quote` endpoint accepts multiple `i=`
+        params in one call (documented cap: 500 instruments) -- an option
+        chain's CE+PE legs across every strike for one expiry is well
+        within that, so no chunking is needed for this call site."""
+        if not tradingsymbols:
+            return {}
+        params = [("i", f"NFO:{symbol}") for symbol in tradingsymbols]
+        data = await self._request("GET", "/quote", params=params)
+        return data.get("data", {})
+
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
-        raise NotImplementedError(
-            "zerodha: Kite Connect has no bulk option-chain endpoint (unlike "
-            "Upstox's /option/chain). Building this would require downloading "
-            "Kite Connect's own NFO instrument dump (GET /instruments/NFO) to "
-            "resolve per-strike tradingsymbols for this underlying/expiry, then "
-            "batch-quoting them via GET /quote -- real open interest is present "
-            "in that quote response, but Kite Connect has no options-greeks "
-            "field anywhere, so implied volatility would stay unavailable for "
-            "this broker regardless (Phase 17 real-world testing pass; see "
-            "docs/phase17-realworld-testing.md)"
-        )
+        """Real Kite Connect data end to end: strikes/tradingsymbols
+        resolved from the real NFO instrument dump, LTP/OI from a real
+        batch `/quote` call. `call_iv`/`put_iv` are always `None` for this
+        broker -- not a gap in this implementation, a genuine absence in
+        Kite Connect's own API (no options-greeks field anywhere), unlike
+        Upstox's `get_option_chain`."""
+        instruments = await self._get_nfo_instruments()
+        strikes: dict[float, dict[str, dict]] = {}
+        for row in instruments:
+            if row.get("name") != underlying or row.get("expiry") != expiry:
+                continue
+            option_type = row.get("instrument_type")
+            if option_type not in ("CE", "PE"):
+                continue
+            try:
+                strike = float(row.get("strike") or 0.0)
+            except ValueError:
+                continue
+            strikes.setdefault(strike, {})[option_type] = row
+
+        if not strikes:
+            return []
+
+        tradingsymbols = [
+            row["tradingsymbol"] for legs in strikes.values() for row in legs.values()
+        ]
+        quotes = await self._batch_quote(tradingsymbols)
+
+        entries = []
+        for strike in sorted(strikes):
+            legs = strikes[strike]
+            call_row = legs.get("CE")
+            put_row = legs.get("PE")
+            call_symbol = call_row["tradingsymbol"] if call_row else None
+            put_symbol = put_row["tradingsymbol"] if put_row else None
+            call_quote = quotes.get(f"NFO:{call_symbol}") if call_symbol else None
+            put_quote = quotes.get(f"NFO:{put_symbol}") if put_symbol else None
+            entries.append(
+                OptionChainEntry(
+                    strike=strike,
+                    call_symbol=call_symbol,
+                    put_symbol=put_symbol,
+                    call_ltp=call_quote.get("last_price") if call_quote else None,
+                    put_ltp=put_quote.get("last_price") if put_quote else None,
+                    call_oi=call_quote.get("oi") if call_quote else None,
+                    put_oi=put_quote.get("oi") if put_quote else None,
+                    call_iv=None,
+                    put_iv=None,
+                )
+            )
+        return entries
 
     async def get_expiries(self, underlying: str) -> list[str]:
-        raise NotImplementedError(
-            "zerodha: Kite Connect has no dedicated option-expiries endpoint; "
-            "expiries would need to be derived from the same NFO instrument "
-            "dump get_option_chain would need (Phase 17 real-world testing "
-            "pass; see docs/phase17-realworld-testing.md)"
-        )
+        """Derived from the same real NFO instrument dump
+        `get_option_chain` uses -- Kite Connect has no dedicated
+        expiries endpoint of its own."""
+        instruments = await self._get_nfo_instruments()
+        expiries = {
+            row["expiry"]
+            for row in instruments
+            if row.get("name") == underlying
+            and row.get("instrument_type") in ("CE", "PE")
+            and row.get("expiry")
+        }
+        return sorted(expiries)

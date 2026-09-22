@@ -82,45 +82,49 @@ prepared for this and left unused, same discovery Follow-up C made for
 - **Upstox: no gap.** OI and IV are both real and already wired
   (`market_data.oi` / `option_greeks.iv` from Upstox's v2 API), confirmed
   live in Follow-up D's own pass and unchanged here.
-- **Zerodha: a real, buildable, but not-yet-built gap**, more precise than
-  the adapter's previous error message claimed. Kite Connect has no bulk
+- **Zerodha: RESOLVED (follow-up pass immediately after this one), OI real,
+  IV permanently unavailable.** The original gap was more precise than
+  the adapter's previous error message claimed: Kite Connect has no bulk
   option-chain or options-greeks endpoint at all — confirmed by Zerodha's
   own public API documentation as read from training knowledge, and by
-  this adapter's own `NotImplementedError`, both before and after this
-  pass. The adapter's message *before* this pass blamed "the NFO
-  instrument master... not available yet", implying the blocker was
-  Phase 10 infrastructure this codebase lacks — that framing was
+  this adapter's own (then-`NotImplementedError`) message. That message
+  used to blame "the NFO instrument master... not available yet",
+  implying the blocker was Phase 10 infrastructure this codebase lacks —
   misleading in exactly the way this pass's own instructions warned
-  against, so it's corrected in `backend/src/brokers/zerodha.py`: Kite
-  Connect *does* publish a real NFO instrument dump
-  (`GET /instruments/NFO`, a downloadable CSV of every tradingsymbol,
-  strike, and expiry) and a real batch quote endpoint (`GET /quote`,
-  which accepts multiple `i=` params and — for F&O instruments — returns
-  a real `oi` field). Building Zerodha's option chain the same way is
-  genuinely possible: parse that dump to resolve strikes/expiries to
-  Zerodha tradingsymbols, batch-quote them, extract `oi`. **What would
-  still be permanently missing even after that work**: implied
-  volatility. Kite Connect's quote response has no IV or options-greeks
-  field of any kind, and this codebase has no options-pricing model
-  (e.g. a Black-Scholes solver) to compute one from LTP — so a Zerodha
-  option chain would always show real strike/LTP/OI with `call_iv`/
-  `put_iv` honestly `None`, never Upstox-parity.
-
-This was **not built in this pass**: it needs a new CSV-dump-parsing path
-in `ZerodhaKiteAdapter` (a materially different shape than any other
-method on that adapter), and validating the parse against Zerodha's real
-dump format needs real credentials this sandbox doesn't have and can't
-reach — building it blind, with no way to confirm the CSV column layout
-against a real response, risked exactly the kind of unverified,
-possibly-wrong implementation this codebase's live-verification
-discipline exists to catch. Left as a precisely-scoped, honestly-labeled
-follow-up rather than rushed.
+  against. Fixed in the immediate follow-up: `ZerodhaKiteAdapter.
+  get_option_chain`/`get_expiries` now download and cache the real NFO
+  instrument dump (`GET /instruments/NFO`, a CSV of every tradingsymbol/
+  strike/expiry, cached at module level for 15 minutes since it doesn't
+  change intraday and a fresh adapter is constructed per call), resolve
+  per-strike tradingsymbols for the requested underlying/expiry, and
+  batch-quote them via `GET /quote` (multiple `i=` params in one call,
+  well within Kite Connect's documented 500-instrument cap for a single
+  expiry's CE+PE legs) to get real LTP and OI. **What remains permanently
+  missing**: implied volatility. Kite Connect's quote response has no IV
+  or options-greeks field of any kind, and this codebase has no
+  options-pricing model (e.g. a Black-Scholes solver) to compute one from
+  LTP — so `call_iv`/`put_iv` are always `None` for this broker, not a
+  temporary gap, never Upstox-parity. 10 new/updated backend tests
+  (`backend/tests/test_brokers_zerodha.py`,
+  `backend/tests/test_market_data_api.py`) cover: real LTP/OI extraction,
+  IV always null, an unmatched underlying/expiry returning an honestly
+  empty list, a strike with only one leg listed, sorted/deduplicated
+  expiries excluding futures and other underlyings, the module-level
+  cache genuinely being reused across calls (one CSV download for three
+  calls in the same process), and a real `BrokerServerError` surfacing
+  correctly from the instrument-dump fetch. **Live-verified** the same
+  way as Upstox above: saved real-shaped (fake) Zerodha credentials via
+  the real `POST /api/v1/broker-credentials/zerodha` endpoint and hit the
+  option-chain endpoint — a genuine outbound HTTPS request to
+  `api.kite.trade/instruments/NFO`, failing only with
+  `httpx.ProxyError: 403 Forbidden` from this sandbox's own egress
+  policy, the identical evidence pattern already established for Upstox.
 
 6 new/updated backend tests (`backend/tests/test_market_data_api.py`)
-cover: real Upstox OI/IV/LTP across three strikes with a real spot lookup
-correctly picking the middle strike as ATM, and a spot-lookup failure
-leaving `underlying_ltp`/`atm_strike` null without failing the chain
-itself.
+cover the ATM-marking work itself: real Upstox OI/IV/LTP across three
+strikes with a real spot lookup correctly picking the middle strike as
+ATM, and a spot-lookup failure leaving `underlying_ltp`/`atm_strike` null
+without failing the chain itself.
 
 **Live-verified** against a real `uvicorn` + local Postgres/Redis (this
 sandbox's only viable verification path): hit the endpoint with no broker
