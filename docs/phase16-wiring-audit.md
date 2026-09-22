@@ -20,11 +20,14 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
 - **5 real gaps found and fixed this pass** (below).
 - **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
-  Four of those six (Follow-up A, broker circuit-breaker state; Follow-up B,
-  broker-fill reconciliation; Follow-up C, technical indicators; Follow-up F,
+  Five of those six (Follow-up A, broker circuit-breaker state; Follow-up B,
+  broker-fill reconciliation; Follow-up C, technical indicators; Follow-up E,
+  System Vitals token-usage/dispatch-latency JSON summary; Follow-up F,
   today's realized P&L) were subsequently picked up in follow-up passes — A,
-  B, and C fully resolved, F partially resolved (realized-only by design, see
-  its entry below) — see their entries below. Two (D, E) remain open.
+  B, and C fully resolved, E and F partially resolved by design (E covers
+  token usage/dispatch latency only, never host CPU/memory, which was never
+  tracked anywhere in this codebase; F is realized-only) — see their entries
+  below. One (D) remains open.
 
 ## Gaps found and fixed
 
@@ -316,15 +319,68 @@ already labeled with a `GapNotice`). Only the static instrument master
 options-chain data source wired in. Confirmed accurate, left as-is.
 
 **E. Host CPU/memory, token usage, and order-dispatch-latency remain
-Prometheus-only** (Overview "System Vitals" panel, already labeled "not
-exposed yet" / "Prometheus only"). `backend/src/observability/metrics.py`
-exposes exactly 5 Counters/Histograms via `/metrics` text format, consumed by
-Grafana. Deliberately **not** wrapped in a new JSON summary endpoint this
-pass: a Prometheus Counter's "since process start" semantics would need
-careful UI framing to avoid implying a "today" figure that isn't what it is —
-building that quickly risked introducing exactly the "looks real, quietly
-wrong" failure mode this audit exists to catch. Left as an honest gap
-pending a deliberate design pass, not a rushed fix.
+Prometheus-only — PARTIALLY RESOLVED (post-audit follow-up, token
+usage/dispatch latency only, by design).** (Overview "System Vitals" panel,
+was labeled "not exposed yet" / "Prometheus only"). `backend/src/observability/
+metrics.py` exposes exactly 5 Counters/Histograms via `/metrics` text format,
+consumed by Grafana. Deliberately not wrapped in a new JSON summary endpoint
+in the original audit pass: a Prometheus Counter's "since process start"
+semantics would need careful UI framing to avoid implying a "today" figure
+that isn't what it is — building that quickly risked introducing exactly the
+"looks real, quietly wrong" failure mode this audit exists to catch.
+
+Fixed in a follow-up pass, now that the deliberate design pass has actually
+happened: new `backend/src/observability/metrics.py::build_vitals_summary()`
+reads the *same* `Counter`/`Histogram` objects `/metrics` already exposes
+(via each metric's own `.collect()`, not a second independently-tracked
+value) and returns a JSON-friendly summary for exactly two of the three
+items named above — LLM token usage and broker order-dispatch latency, both
+real Prometheus metrics with real data flowing into them. Every figure is
+explicitly anchored to `since` (a real timestamp captured at process start),
+never framed as "today" — the honesty distinction the original pass refused
+to rush. New `GET /api/v1/observability/vitals` (all 4 roles, read-only,
+ordinary RBAC posture, not the unauthenticated `/metrics` scrape convention)
+serves it. A broker with zero dispatches reports `avg_latency_ms: null`,
+never a fabricated `0.0` — the same never-fabricate-a-metric rule this
+codebase applies everywhere else.
+
+**Host CPU/memory is deliberately still not included** and the frontend
+tile still honestly says "not exposed yet" — it was never one of Build Spec
+§19's five tracked metrics and nothing in this codebase computes it
+anywhere; fabricating a value to fill out the response would have been the
+exact failure mode this whole exercise was built to avoid. Per-provider LLM
+health is likewise still genuinely not exposed and stays labeled as such.
+This is why the title above says "PARTIALLY RESOLVED, by design" rather than
+"RESOLVED" — two of the three named items are real now, one (host
+CPU/memory) was never real anywhere in this codebase and isn't fabricated
+here either.
+
+7 new backend tests (`test_api_observability.py`) exercise the real,
+process-global Prometheus singletons directly (not mocks) using distinct
+made-up label values (`vitals-test-provider`, `vitals-test-*-broker`) to get
+deterministic assertions without a before/after diff against labels other
+tests in the suite also touch (`zerodha`/`upstox`) — covering the honest
+`since` timestamp, real token-usage aggregation, the never-fabricated
+zero-dispatch case, a real weighted-average-latency computation, the same
+shape over real HTTP, and RBAC read access for all 4 roles.
+
+**Live-verified:** registered+promoted a demo `SystemAdministrator`, hit the
+endpoint over real HTTP before any real dispatch/LLM call had happened and
+confirmed an honestly empty response (`llm_token_usage: []`,
+`order_dispatch: []` — no fabricated zero-value entries for a broker/provider
+that's never actually been touched), then loaded the real Overview page via
+Playwright and confirmed the Token Usage and Dispatch Latency tiles render
+real data with the "since server start ... not 'today'" framing while the
+LLM Provider Health and Host Metrics tiles still honestly read "not exposed
+yet" — screenshot confirmed visually correct. Did not additionally drive a
+real order through `ResilientBrokerAdapter.place_order` this round (that
+would need a full live-trading subscription → Go-Live-eligible strategy →
+intent-approval scaffold just to increment one counter); that exact
+code path — the `finally` block that always records the latency metric
+regardless of success/failure — already has dedicated, passing unit coverage
+in `test_brokers_resilient.py` from Phase 11, and Phase 9's own original live
+pass already confirmed a real (sandbox-egress-blocked) submission attempt
+through it. Spec deleted after use, not committed.
 
 **F. "Today's Paper P&L" not exposed — PARTIALLY RESOLVED (post-audit follow-up, realized-only by design).**
 (Overview KPI strip, was labeled "not exposed yet"). `PaperPosition.realized_pnl`

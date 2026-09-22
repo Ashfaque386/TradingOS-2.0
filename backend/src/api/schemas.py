@@ -836,3 +836,28 @@ class ChatMessageResponse(BaseModel):
 
 class SendChatMessageRequest(BaseModel):
     content: str = Field(min_length=1)
+
+
+class LlmTokenUsageEntry(BaseModel):
+    provider: str
+    token_type: str
+    count: int
+
+
+class OrderDispatchVitals(BaseModel):
+    broker: str
+    dispatch_count: int
+    avg_latency_ms: float | None
+    budget_breaches: int
+
+
+class SystemVitalsResponse(BaseModel):
+    """Cumulative since `since` (process start), never "today" -- see
+    src.observability.metrics.build_vitals_summary's own docstring for
+    why. Host CPU/memory and per-provider LLM health are deliberately
+    absent, not omitted by accident -- neither is tracked anywhere in
+    this codebase."""
+
+    since: str
+    llm_token_usage: list[LlmTokenUsageEntry]
+    order_dispatch: list[OrderDispatchVitals]

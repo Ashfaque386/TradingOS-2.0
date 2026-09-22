@@ -818,4 +818,19 @@ export type Instrument = {
 }
 export const listInstruments = () => apiGet<Instrument[]>('/api/v1/market-data/instruments')
 
+// ---- System vitals (Phase 16 audit follow-up E) ----
+export type LlmTokenUsageEntry = { provider: string; token_type: string; count: number }
+export type OrderDispatchVitals = {
+  broker: string
+  dispatch_count: number
+  avg_latency_ms: number | null
+  budget_breaches: number
+}
+export type SystemVitals = {
+  since: string
+  llm_token_usage: LlmTokenUsageEntry[]
+  order_dispatch: OrderDispatchVitals[]
+}
+export const getSystemVitals = () => apiGet<SystemVitals>('/api/v1/observability/vitals')
+
 export { API_BASE_URL }
