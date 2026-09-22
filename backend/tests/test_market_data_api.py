@@ -274,21 +274,70 @@ async def test_live_option_chain_returns_503_when_no_broker_configured(
         _clear_broker_adapter_override()
 
 
-async def test_live_option_chain_honestly_422s_for_zerodha_not_implemented(
+async def test_live_option_chain_returns_real_zerodha_ltp_and_oi_never_iv(
     client: AsyncClient, make_user
 ):
-    adapter = ZerodhaKiteAdapter(BrokerCredentials(api_key="k", access_token="t"))
+    """Phase 17 follow-up: Zerodha's option chain is now real (NFO
+    instrument dump + batch quote), not a NotImplementedError -- OI is
+    real, IV is always null (Kite Connect has no greeks field), same as
+    the dedicated adapter-level coverage in test_brokers_zerodha.py. This
+    exercises it through the actual API route rather than the adapter in
+    isolation."""
+    nfo_csv = (
+        "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,"
+        "tick_size,lot_size,instrument_type,segment,exchange\n"
+        "1,1,NIFTY25JAN24000CE,NIFTY,0,2025-01-30,24000.000000,0.05,50,CE,NFO-OPT,NFO\n"
+        "2,1,NIFTY25JAN24000PE,NIFTY,0,2025-01-30,24000.000000,0.05,50,PE,NFO-OPT,NFO\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/instruments/NFO":
+            return httpx.Response(200, text=nfo_csv)
+        if request.url.path == "/quote":
+            requested = request.url.params.get_list("i")
+            data = {
+                "NFO:NIFTY25JAN24000CE": {"last_price": 120.5, "oi": 45000},
+                "NFO:NIFTY25JAN24000PE": {"last_price": 95.0, "oi": 38000},
+                "NIFTY": {"last_price": 24010.0, "depth": {}},
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {key: value for key, value in data.items() if key in requested},
+                },
+            )
+        raise AssertionError(f"unexpected request path {request.url.path}")
+
+    import src.brokers.zerodha as zerodha_module
+
+    zerodha_module._nfo_instruments_cache = None
+    zerodha_module._nfo_instruments_cache_at = 0.0
+    adapter = ZerodhaKiteAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+    )
     app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
     try:
         await make_user("oc2@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
         token = await _login(client, "oc2@example.com", "supersecret1")
         resp = await client.get(
-            "/api/v1/market-data/option-chain/NIFTY?expiry=2026-12-31", headers=_auth(token)
+            "/api/v1/market-data/option-chain/NIFTY?expiry=2025-01-30", headers=_auth(token)
         )
-        assert resp.status_code == 422
-        assert "zerodha" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["broker"] == "zerodha"
+        assert len(body["entries"]) == 1
+        entry = body["entries"][0]
+        assert entry["call_ltp"] == 120.5
+        assert entry["call_oi"] == 45000
+        assert entry["call_iv"] is None
+        assert entry["put_iv"] is None
+        assert body["underlying_ltp"] == 24010.0
+        assert body["atm_strike"] == 24000.0
     finally:
         _clear_broker_adapter_override()
+        zerodha_module._nfo_instruments_cache = None
+        zerodha_module._nfo_instruments_cache_at = 0.0
 
 
 def _upstox_option_chain_response(request: httpx.Request) -> httpx.Response:

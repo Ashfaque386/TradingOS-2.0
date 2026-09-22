@@ -374,14 +374,22 @@ that the instrument-master sync pipeline's only real provider
 an options row for any underlying — the `instruments` table's schema
 supports them (Phase 10), but nothing populates them, a provider gap, not
 a schema gap. Added real ATM-strike marking (a best-effort spot-price
-lookup via `adapter.get_quote(underlying)`) and corrected Zerodha's
-`NotImplementedError` message, which previously blamed a nonexistent
-"NFO instrument master... not available yet" gap — the real, more
-precise reason is that Kite Connect has no bulk option-chain endpoint at
-all; building one would need its NFO instrument dump plus batch quoting
-(real open interest, but genuinely never real IV, since Kite Connect has
-no options-greeks field anywhere). See `docs/phase17-realworld-testing.md`
-for the full reasoning and live-verification detail.
+lookup via `adapter.get_quote(underlying)`).
+
+**Phase 17 follow-up, immediately after: Zerodha option chain also
+resolved.** Corrected Zerodha's `NotImplementedError` message, which
+previously blamed a nonexistent "NFO instrument master... not available
+yet" gap, then built the real thing the corrected message named as
+possible: `ZerodhaKiteAdapter.get_option_chain`/`get_expiries` now
+download and parse Kite Connect's real NFO instrument dump (`GET
+/instruments/NFO`, cached at module level for 15 minutes) to resolve
+per-strike tradingsymbols, then batch-quote them via `GET /quote` for
+real LTP and open interest. `call_iv`/`put_iv` stay permanently `None`
+for this broker — not a temporary gap, a genuine one: Kite Connect has no
+options-greeks field anywhere and this codebase has no pricing model to
+compute IV from LTP. See `docs/phase17-realworld-testing.md` for the full
+reasoning and live-verification detail on both the ATM-marking and
+Zerodha work.
 
 **E. Host CPU/memory, token usage, and order-dispatch-latency remain
 Prometheus-only — PARTIALLY RESOLVED (post-audit follow-up, token
