@@ -27,9 +27,11 @@ import httpx
 import structlog
 
 from src.core.config import get_settings
+from src.core.redis_client import get_redis
 from src.gateway.schema import LlmProvider
 from src.gateway.state import get_state
 from src.observability.metrics import llm_token_usage_total
+from src.observability.vitals import record_token_usage_today
 from src.security.llm_provider_store import get_llm_provider_store
 
 logger = structlog.get_logger(__name__)
@@ -349,6 +351,30 @@ class LlmRouter:
     def health_for(self, provider: LlmProvider) -> ProviderHealth:
         return self._health[provider]
 
+    async def _record_usage(
+        self, provider: LlmProvider, prompt_tokens: int | None, completion_tokens: int | None
+    ) -> None:
+        """The one choke point every real completion's usage counts pass
+        through -- feeds both the long-lived Prometheus counter (`/metrics`,
+        Grafana) and, as of the Phase 17 real-world testing pass, the
+        purpose-built Redis per-provider-per-day total GET
+        /api/v1/system/vitals reads for "today's" token usage (never
+        derived from the Prometheus counter itself -- see
+        src.observability.vitals's docstring for why)."""
+        total = 0
+        if prompt_tokens is not None:
+            llm_token_usage_total.labels(provider=provider.value, token_type="prompt").inc(
+                prompt_tokens
+            )
+            total += prompt_tokens
+        if completion_tokens is not None:
+            llm_token_usage_total.labels(provider=provider.value, token_type="completion").inc(
+                completion_tokens
+            )
+            total += completion_tokens
+        if total > 0:
+            await record_token_usage_today(get_redis(), provider.value, total)
+
     def _fallback_order(self, preferred_provider: LlmProvider | None = None) -> list[LlmProvider]:
         config = get_state().get_config()
         if config is None:
@@ -407,14 +433,7 @@ class LlmRouter:
                     agent_id=agent_id,
                     failed_providers=[p.value for p, _ in errors],
                 )
-            if payload.prompt_tokens is not None:
-                llm_token_usage_total.labels(provider=provider.value, token_type="prompt").inc(
-                    payload.prompt_tokens
-                )
-            if payload.completion_tokens is not None:
-                llm_token_usage_total.labels(provider=provider.value, token_type="completion").inc(
-                    payload.completion_tokens
-                )
+            await self._record_usage(provider, payload.prompt_tokens, payload.completion_tokens)
             return LlmCompletionResult(
                 provider=provider,
                 text=payload.text,
@@ -491,14 +510,7 @@ class LlmRouter:
 
             self._health[provider].last_success_at = time.time()
             self._health[provider].served_as_fallback = used_fallback
-            if prompt_tokens is not None:
-                llm_token_usage_total.labels(provider=provider.value, token_type="prompt").inc(
-                    prompt_tokens
-                )
-            if completion_tokens is not None:
-                llm_token_usage_total.labels(provider=provider.value, token_type="completion").inc(
-                    completion_tokens
-                )
+            await self._record_usage(provider, prompt_tokens, completion_tokens)
             yield LlmStreamChunk(
                 text="",
                 done=True,
@@ -582,3 +594,18 @@ def get_llm_router() -> LlmRouter:
     if _router is None:
         _router = LlmRouter()
     return _router
+
+
+def active_llm_provider() -> str | None:
+    """The provider genuinely first in the router's real fallback order
+    right now (Agent Gateway config, hot-reloadable) -- for GET
+    /api/v1/system/vitals's `llm.active_provider` field. `None` only when
+    no Gateway config has loaded yet (very early boot), never a guessed
+    default -- same "no config -> honestly absent" posture `_fallback_order`
+    itself falls back to declaration order for, just surfaced here instead
+    of silently substituted."""
+    config = get_state().get_config()
+    if config is None:
+        return None
+    order = config.infra.llm_providers.order
+    return order[0].value if order else None

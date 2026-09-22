@@ -35,6 +35,14 @@ services:
       # by service name, not localhost.
       REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
+      # Phase 17 real-world testing pass: GET /api/v1/system/vitals queries
+      # Prometheus's own HTTP API for a real order-dispatch-latency
+      # percentile (src.observability.vitals) -- in-network hostname, same
+      # convention as TEMPORAL_ADDRESS above. Prometheus isn't in `backend`'s
+      # own depends_on (it depends the other way, on `backend` being
+      # healthy) -- the vitals endpoint tolerates that ordering and reports
+      # both percentiles as null until Prometheus is actually reachable.
+      PROMETHEUS_URL: http://prometheus:9090
       # Opt-in: unset by default, so a stock deployment never gets a
       # hardcoded credential baked in. Set both in .env to have the
       # container ensure this SystemAdministrator user exists on every

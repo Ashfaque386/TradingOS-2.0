@@ -635,9 +635,17 @@ class LiveOptionChainEntryResponse(BaseModel):
 
 
 class LiveOptionChainResponse(BaseModel):
+    """`underlying_ltp`/`atm_strike` are best-effort: a failed spot-quote
+    lookup (e.g. the underlying's own instrument key doesn't resolve to a
+    quotable symbol) leaves both `None` rather than failing the whole
+    chain response, which already has real per-strike data worth
+    returning on its own."""
+
     broker: str
     underlying: str
     expiry: str
+    underlying_ltp: float | None = None
+    atm_strike: float | None = None
     entries: list[LiveOptionChainEntryResponse]
 
 
@@ -862,26 +870,47 @@ class SendChatMessageRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
-class LlmTokenUsageEntry(BaseModel):
-    provider: str
-    token_type: str
-    count: int
+class HostVitals(BaseModel):
+    cpu_percent: float
+    memory_percent: float
+    memory_used_mb: float
+    uptime_seconds: float
 
 
-class OrderDispatchVitals(BaseModel):
-    broker: str
-    dispatch_count: int
-    avg_latency_ms: float | None
-    budget_breaches: int
+class LlmVitals(BaseModel):
+    """`token_usage_today` only ever contains a provider once it has
+    genuinely been called today (Asia/Kolkata calendar day) -- a provider
+    absent from the dict is honestly "no calls yet today", never a
+    fabricated `0`."""
+
+    active_provider: str | None
+    token_usage_today: dict[str, int]
+
+
+class LatencyVitals(BaseModel):
+    """A real trailing-`window` percentile queried from Prometheus at
+    request time (src.observability.vitals), not a since-start average --
+    `None` when Prometheus is unreachable or the window has no samples yet,
+    never a fabricated `0.0`."""
+
+    order_dispatch_p50_ms: float | None
+    order_dispatch_p95_ms: float | None
+    window: str
+    budget_ms: float
+
+
+class MarketVitals(BaseModel):
+    is_open: bool
+    next_event_at: str
 
 
 class SystemVitalsResponse(BaseModel):
-    """Cumulative since `since` (process start), never "today" -- see
-    src.observability.metrics.build_vitals_summary's own docstring for
-    why. Host CPU/memory and per-provider LLM health are deliberately
-    absent, not omitted by accident -- neither is tracked anywhere in
-    this codebase."""
+    """See src.observability.vitals's module docstring for why each of
+    these three groups is read a genuinely different way rather than all
+    forced through one shared "since process start" shape."""
 
-    since: str
-    llm_token_usage: list[LlmTokenUsageEntry]
-    order_dispatch: list[OrderDispatchVitals]
+    host: HostVitals
+    llm: LlmVitals
+    latency: LatencyVitals
+    market: MarketVitals
+    as_of: str

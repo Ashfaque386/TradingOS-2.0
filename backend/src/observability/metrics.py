@@ -76,90 +76,9 @@ trading_holiday_gauge = Gauge(
 
 TRADING_HOLIDAY_GAUGE_UPDATE_INTERVAL_SECONDS = 300
 
-# Captured once at import time -- the honest anchor for the vitals summary
-# below. A Prometheus Counter/Histogram has no calendar-day boundary built
-# in; every figure `build_vitals_summary()` reports is cumulative since
-# this timestamp (process start), never "today" -- this is exactly the
-# distinction Phase 16's wiring audit (Follow-up E) refused to paper over
-# with a rushed JSON wrapper.
-_PROCESS_STARTED_AT = datetime.now(UTC)
-
 
 def render_latest_metrics() -> tuple[bytes, str]:
     return generate_latest(), CONTENT_TYPE_LATEST
-
-
-def build_vitals_summary() -> dict:
-    """A JSON-friendly summary of exactly two of this module's five real
-    Prometheus metrics -- LLM token usage and broker order-dispatch
-    latency -- for the Overview "System Vitals" panel, which previously
-    could only say "Prometheus only" and send an operator to Grafana.
-
-    Deliberately narrow: this reads the *same* `Counter`/`Histogram`
-    objects `/metrics` already exposes (via each metric's own `.collect()`,
-    not a second, independently-tracked value), so there is no risk of
-    this JSON view and the Prometheus scrape ever disagreeing. Host
-    CPU/memory and per-provider LLM health are NOT included here --
-    neither is one of Build Spec §19's five tracked metrics, and nothing
-    in this codebase computes either value anywhere; fabricating one to
-    fill out this response would be exactly the "looks real, quietly
-    wrong" failure mode this audit exists to catch. Those two vitals stay
-    honestly labeled "not exposed" in the frontend.
-
-    A broker with zero dispatches (`dispatch_count == 0`) reports
-    `avg_latency_ms: None`, never a fabricated `0.0` -- the same
-    never-fabricate-a-metric rule this codebase applies everywhere else
-    (null correlations, honest partial fills, null indicator warm-up
-    periods).
-    """
-    token_usage: list[dict] = []
-    for metric_family in llm_token_usage_total.collect():
-        for sample in metric_family.samples:
-            if sample.name == "tradingos_llm_token_usage_total":
-                token_usage.append(
-                    {
-                        "provider": sample.labels["provider"],
-                        "token_type": sample.labels["token_type"],
-                        "count": int(sample.value),
-                    }
-                )
-
-    dispatch_stats: dict[str, dict[str, float]] = {}
-    for metric_family in order_dispatch_latency_seconds.collect():
-        for sample in metric_family.samples:
-            broker = sample.labels.get("broker")
-            if broker is None:
-                continue
-            entry = dispatch_stats.setdefault(broker, {"count": 0.0, "sum_seconds": 0.0})
-            if sample.name == "tradingos_order_dispatch_latency_seconds_count":
-                entry["count"] = sample.value
-            elif sample.name == "tradingos_order_dispatch_latency_seconds_sum":
-                entry["sum_seconds"] = sample.value
-
-    budget_breaches: dict[str, int] = {}
-    for metric_family in order_dispatch_budget_breached_total.collect():
-        for sample in metric_family.samples:
-            if sample.name == "tradingos_order_dispatch_budget_breached_total":
-                budget_breaches[sample.labels["broker"]] = int(sample.value)
-
-    order_dispatch: list[dict] = []
-    for broker, entry in sorted(dispatch_stats.items()):
-        count = int(entry["count"])
-        avg_latency_ms = (entry["sum_seconds"] / count) * 1000.0 if count > 0 else None
-        order_dispatch.append(
-            {
-                "broker": broker,
-                "dispatch_count": count,
-                "avg_latency_ms": round(avg_latency_ms, 2) if avg_latency_ms is not None else None,
-                "budget_breaches": budget_breaches.get(broker, 0),
-            }
-        )
-
-    return {
-        "since": _PROCESS_STARTED_AT.isoformat(),
-        "llm_token_usage": token_usage,
-        "order_dispatch": order_dispatch,
-    }
 
 
 def _update_trading_holiday_gauge() -> None:

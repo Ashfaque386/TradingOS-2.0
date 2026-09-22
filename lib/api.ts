@@ -818,20 +818,20 @@ export type Instrument = {
 }
 export const listInstruments = () => apiGet<Instrument[]>('/api/v1/market-data/instruments')
 
-// ---- System vitals (Phase 16 audit follow-up E) ----
-export type LlmTokenUsageEntry = { provider: string; token_type: string; count: number }
-export type OrderDispatchVitals = {
-  broker: string
-  dispatch_count: number
-  avg_latency_ms: number | null
-  budget_breaches: number
-}
+// ---- System vitals (Phase 17 real-world testing pass) ----
 export type SystemVitals = {
-  since: string
-  llm_token_usage: LlmTokenUsageEntry[]
-  order_dispatch: OrderDispatchVitals[]
+  host: { cpu_percent: number; memory_percent: number; memory_used_mb: number; uptime_seconds: number }
+  llm: { active_provider: string | null; token_usage_today: Record<string, number> }
+  latency: {
+    order_dispatch_p50_ms: number | null
+    order_dispatch_p95_ms: number | null
+    window: string
+    budget_ms: number
+  }
+  market: { is_open: boolean; next_event_at: string }
+  as_of: string
 }
-export const getSystemVitals = () => apiGet<SystemVitals>('/api/v1/observability/vitals')
+export const getSystemVitals = () => apiGet<SystemVitals>('/api/v1/system/vitals')
 
 // ---- Live option chain (Phase 16 audit follow-up D) ----
 export type LiveOptionChainEntry = {
@@ -849,6 +849,8 @@ export type LiveOptionChain = {
   broker: string
   underlying: string
   expiry: string
+  underlying_ltp: number | null
+  atm_strike: number | null
   entries: LiveOptionChainEntry[]
 }
 export const getLiveOptionChain = (underlying: string, expiry: string) =>

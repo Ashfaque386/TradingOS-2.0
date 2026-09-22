@@ -368,6 +368,21 @@ Playwright and confirmed the honest `503` message renders correctly in the
 browser rather than crashing or showing a fabricated table. Screenshot
 confirmed visually correct. Spec deleted after use, not committed.
 
+**Phase 17 real-world testing pass, further precision:** confirmed live
+that the instrument-master sync pipeline's only real provider
+(`FakeMarketDataProvider.instrument_master`) has never actually generated
+an options row for any underlying — the `instruments` table's schema
+supports them (Phase 10), but nothing populates them, a provider gap, not
+a schema gap. Added real ATM-strike marking (a best-effort spot-price
+lookup via `adapter.get_quote(underlying)`) and corrected Zerodha's
+`NotImplementedError` message, which previously blamed a nonexistent
+"NFO instrument master... not available yet" gap — the real, more
+precise reason is that Kite Connect has no bulk option-chain endpoint at
+all; building one would need its NFO instrument dump plus batch quoting
+(real open interest, but genuinely never real IV, since Kite Connect has
+no options-greeks field anywhere). See `docs/phase17-realworld-testing.md`
+for the full reasoning and live-verification detail.
+
 **E. Host CPU/memory, token usage, and order-dispatch-latency remain
 Prometheus-only — PARTIALLY RESOLVED (post-audit follow-up, token
 usage/dispatch latency only, by design).** (Overview "System Vitals" panel,
@@ -431,6 +446,19 @@ regardless of success/failure — already has dedicated, passing unit coverage
 in `test_brokers_resilient.py` from Phase 11, and Phase 9's own original live
 pass already confirmed a real (sandbox-egress-blocked) submission attempt
 through it. Spec deleted after use, not committed.
+
+**Phase 17 real-world testing pass, superseding design:** `GET
+/api/v1/system/vitals` (replacing this endpoint's original
+`/api/v1/observability/vitals` outright, not running alongside it) now
+reads each figure the way its own semantics actually require instead of
+forcing all three through this endpoint's original since-process-start
+Counter shape — real host CPU/memory via `psutil` (never tracked before
+this pass), LLM token usage "today" from a new purpose-built Redis
+per-provider-per-IST-day counter (not derived from the Prometheus
+counter, which is untouched and keeps serving Grafana), and order-dispatch
+latency as a real trailing-5-minute p50/p95 queried from Prometheus's own
+HTTP API at request time. See `docs/phase17-realworld-testing.md` for the
+full design and live-verification detail.
 
 **F. "Today's Paper P&L" not exposed — PARTIALLY RESOLVED (post-audit follow-up, realized-only by design).**
 (Overview KPI strip, was labeled "not exposed yet"). `PaperPosition.realized_pnl`

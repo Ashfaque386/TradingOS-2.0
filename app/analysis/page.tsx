@@ -360,16 +360,19 @@ function LiveOptionChainPanel() {
       {error && <GapNotice>{error}</GapNotice>}
       {chain && (
         <div className="overflow-x-auto mt-4">
-          <p className="mb-2 text-[10px] text-muted-foreground">Broker: <span className="font-mono text-foreground">{chain.broker}</span> · {chain.underlying} · {chain.expiry}</p>
+          <p className="mb-2 text-[10px] text-muted-foreground">
+            Broker: <span className="font-mono text-foreground">{chain.broker}</span> · {chain.underlying} · {chain.expiry}
+            {chain.underlying_ltp !== null && <> · Spot: <span className="font-mono text-foreground">{chain.underlying_ltp}</span></>}
+          </p>
           <table className="option-chain-table">
             <thead><tr><th>Call OI</th><th>Call IV</th><th>Call LTP</th><th>Strike</th><th>Put LTP</th><th>Put IV</th><th>Put OI</th></tr></thead>
             <tbody>
               {chain.entries.map((e) => (
-                <tr key={e.strike}>
+                <tr key={e.strike} className={chain.atm_strike !== null && e.strike === chain.atm_strike ? 'atm-row' : undefined}>
                   <td className="mono">{e.call_oi ?? '—'}</td>
                   <td className="mono">{e.call_iv ?? '—'}</td>
                   <td className="mono">{e.call_ltp ?? '—'}</td>
-                  <td className="strike-cell">{e.strike}</td>
+                  <td className="strike-cell">{e.strike}{chain.atm_strike !== null && e.strike === chain.atm_strike && <span className="atm-tag">ATM</span>}</td>
                   <td className="mono">{e.put_ltp ?? '—'}</td>
                   <td className="mono">{e.put_iv ?? '—'}</td>
                   <td className="mono">{e.put_oi ?? '—'}</td>
