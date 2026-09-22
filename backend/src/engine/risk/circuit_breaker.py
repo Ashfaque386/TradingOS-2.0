@@ -98,6 +98,30 @@ class BrokerCircuitBreaker:
     def consecutive_failures(self) -> int:
         return self._consecutive_failures
 
+    @property
+    def opened_at(self) -> float | None:
+        return self._opened_at
+
+    @property
+    def cooldown_seconds(self) -> float:
+        return self._cooldown_seconds
+
+    @property
+    def failure_threshold(self) -> int:
+        return self._failure_threshold
+
+    def cooldown_remaining_seconds(self) -> float | None:
+        """`None` while `CLOSED` (nothing counting down); a monotonic-clock
+        elapsed-time computation while `OPEN`, clamped to >=0 so a status
+        read taken right at (or fractionally past) the cooldown boundary
+        never reports a negative remainder -- `call()` itself is the only
+        thing that actually flips state back to `CLOSED` on the next real
+        call past this point, this is read-only and has no side effect."""
+        if self._state != CircuitState.OPEN or self._opened_at is None:
+            return None
+        elapsed = self._clock() - self._opened_at
+        return max(0.0, self._cooldown_seconds - elapsed)
+
     async def call(self, fn: Callable[[], Awaitable]):
         if self._state == CircuitState.OPEN:
             elapsed = self._clock() - self._opened_at

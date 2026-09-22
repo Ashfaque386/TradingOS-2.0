@@ -608,6 +608,15 @@ export type BrokerCredentialStatus = {
 }
 export const KNOWN_BROKERS = ['zerodha', 'upstox'] as const
 export const listBrokerCredentialStatus = () => apiGet<BrokerCredentialStatus[]>('/api/v1/broker-credentials')
+export type BrokerCircuitBreakerStatus = {
+  broker: string
+  state: 'closed' | 'open'
+  consecutive_failures: number
+  failure_threshold: number
+  cooldown_remaining_seconds: number | null
+}
+export const listBrokerCircuitBreakerStatus = () =>
+  apiGet<BrokerCircuitBreakerStatus[]>('/api/v1/broker-credentials/circuit-breaker')
 export const writeBrokerCredentials = (broker: string, apiKey: string, apiSecret?: string, accessToken?: string) =>
   apiPost<void>(`/api/v1/broker-credentials/${broker}`, { api_key: apiKey, api_secret: apiSecret || null, access_token: accessToken || null })
 export const deleteBrokerCredentials = (broker: string) => apiDelete<void>(`/api/v1/broker-credentials/${broker}`)

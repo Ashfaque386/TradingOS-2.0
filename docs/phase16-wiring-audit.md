@@ -20,11 +20,11 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
 - **5 real gaps found and fixed this pass** (below).
 - **6 gaps confirmed genuine and already honestly labeled by the frontend**,
   left as explicit follow-ups with reasoning (below) rather than papered over.
-  Three of those six (Follow-up B, broker-fill reconciliation; Follow-up C,
-  technical indicators; Follow-up F, today's realized P&L) were subsequently
-  picked up in follow-up passes — B and C fully resolved, F partially
-  resolved (realized-only by design, see its entry below) — see their
-  entries below. Three (A, D, E) remain open.
+  Four of those six (Follow-up A, broker circuit-breaker state; Follow-up B,
+  broker-fill reconciliation; Follow-up C, technical indicators; Follow-up F,
+  today's realized P&L) were subsequently picked up in follow-up passes — A,
+  B, and C fully resolved, F partially resolved (realized-only by design, see
+  its entry below) — see their entries below. Two (D, E) remain open.
 
 ## Gaps found and fixed
 
@@ -185,14 +185,52 @@ These are all cases where the frontend is **already honest** about the gap
 where fixing them properly requires new backend engineering beyond what a
 wiring pass should do speculatively.
 
-**A. Broker circuit-breaker / connectivity health not exposed**
-(`app/analysis/page.tsx` Provider Status tab, narrowed `GapNotice`).
+**A. Broker circuit-breaker / connectivity health not exposed — RESOLVED (post-audit follow-up).**
+(`app/analysis/page.tsx` Provider Status tab, was a narrowed `GapNotice`).
 `ResilientBrokerAdapter`/`BrokerCircuitBreaker` (`backend/src/brokers/resilient.py`,
-`factory.py`) exist, but `build_configured_adapter()` constructs a fresh
-breaker on every call — there is no persistent, queryable breaker state. This
-can't be fixed by adding an endpoint alone; it needs the breaker to become a
-per-broker singleton held in application state first. Left as an explicitly
-scoped follow-up rather than attempted here.
+`factory.py`) existed, but `build_configured_adapter()` constructed a fresh,
+zero-state breaker on every single call — including once per HTTP request via
+`src.api.routes.live_trading.get_live_broker_adapter`. Three consecutive 5xx
+responses spread across different real callers (the tick source, the
+live-trading scheduler, one-off API-route adapters) could each independently
+see only 1 or 2 failures and never actually trip; the breaker's whole purpose
+silently didn't work against the app's real call pattern, and there was no
+live state anywhere to query even if it had.
+
+Fixed in a follow-up pass: new `backend/src/brokers/breaker_registry.py`
+holds exactly one `BrokerCircuitBreaker` per broker name for the process's
+lifetime (a plain module-level dict, not a DB row — unlike Phase 6's Kill
+Switch, breaker state losing itself on restart is fine, and this app runs as
+a single uvicorn process with no `--workers N`, so a module-level singleton
+genuinely is the one shared instance every caller sees, matching this
+codebase's existing in-process-singleton precedent: `src.gateway`'s
+`GatewayState`, `src.agents.llm_router`'s per-provider `ProviderHealth`).
+`build_configured_adapter()` now passes `get_broker_circuit_breaker(broker)`
+into every `ResilientBrokerAdapter` it builds instead of leaving the breaker
+argument to default to a fresh instance. `BrokerCircuitBreaker` gained public
+`opened_at`/`cooldown_seconds`/`failure_threshold` properties and a
+`cooldown_remaining_seconds()` method (clamped to >=0, `None` while closed) so
+real state is externally readable without exposing a raw, meaningless
+monotonic timestamp. New `GET /api/v1/broker-credentials/circuit-breaker`
+(all 4 roles, read-only) reports real `state`/`consecutive_failures`/
+`failure_threshold`/`cooldown_remaining_seconds` per broker — a broker with no
+entry yet in the registry (no adapter ever built for it) is honestly reported
+as `closed`/`0` rather than omitted, since that is the breaker's own true
+starting state. The Provider Status tab's broker-connection rows now show
+real circuit-breaker state alongside OAuth token status (a red dot + failure
+count + countdown when open, polled every 10s), and the `GapNotice` that used
+to sit under them was removed since the gap it named no longer exists.
+
+9 new backend tests (`test_brokers_breaker_registry.py`,
+`test_brokers_factory.py`, 2 new in `test_engine_circuit_breaker.py`, 3 new in
+`test_broker_credentials_api.py`) proving the singleton behavior directly
+(repeated `build_configured_adapter()` calls for the same broker share one
+`.breaker` object; different brokers get independent instances) and the API
+endpoint reflecting a genuinely tripped breaker end to end (3 real
+`BrokerServerError`s against the shared instance → `state: "open"` over
+HTTP, with the *other* broker's row unaffected, proving independence, not a
+shared flag). `ruff check`/`ruff format --check`/`tsc --noEmit` clean; full
+backend suite green with zero regressions.
 
 **B. `Trade.status` can never progress past `pending_confirmation` — RESOLVED (post-audit follow-up).**
 (Orders & Trades page, "Live Order Intents" tab). Confirmed via

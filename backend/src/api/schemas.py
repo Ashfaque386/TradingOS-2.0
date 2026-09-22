@@ -431,6 +431,22 @@ class BrokerCredentialStatusResponse(BaseModel):
     token_duration: str | None = None
 
 
+class BrokerCircuitBreakerStatusResponse(BaseModel):
+    """Real, queryable state from the one persistent `BrokerCircuitBreaker`
+    instance src.brokers.breaker_registry holds per broker -- `state`
+    reflects genuine consecutive-5xx-failure history across every real
+    caller (tick source, live-trading scheduler, API-route adapters),
+    not a per-call snapshot that resets itself the instant the request
+    handling it returns. `cooldown_remaining_seconds` is `None` whenever
+    `state == "closed"` (there is nothing counting down)."""
+
+    broker: str
+    state: str  # "closed" | "open"
+    consecutive_failures: int
+    failure_threshold: int
+    cooldown_remaining_seconds: float | None = None
+
+
 class BrokerOAuthLoginUrlResponse(BaseModel):
     login_url: str
     redirect_uri: str

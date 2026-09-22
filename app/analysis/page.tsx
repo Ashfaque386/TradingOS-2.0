@@ -6,6 +6,7 @@ import { Activity, AlertTriangle, Cable, Clock3, Globe2, LineChart as LineChartI
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { ChartContainer } from '@/components/ui/chart'
 import {
+  type BrokerCircuitBreakerStatus,
   type BrokerCredentialStatus,
   type FreshnessRecord,
   type IndicatorSeries,
@@ -16,6 +17,7 @@ import {
   getFreshness,
   getIndicators,
   getMarketPulse,
+  listBrokerCircuitBreakerStatus,
   listBrokerCredentialStatus,
   listInstruments,
   listLlmProviderStatus,
@@ -225,11 +227,17 @@ function FreshnessTab() {
 function ProvidersTab() {
   const [providers, setProviders] = useState<LlmProviderStatus[]>([])
   const [brokers, setBrokers] = useState<BrokerCredentialStatus[]>([])
+  const [breakers, setBreakers] = useState<BrokerCircuitBreakerStatus[]>([])
 
   useEffect(() => {
     listLlmProviderStatus().then(setProviders)
     listBrokerCredentialStatus().then(setBrokers)
+    listBrokerCircuitBreakerStatus().then(setBreakers)
+    const interval = setInterval(() => listBrokerCircuitBreakerStatus().then(setBreakers), 10_000)
+    return () => clearInterval(interval)
   }, [])
+
+  const breakerByBroker = Object.fromEntries(breakers.map((b) => [b.broker, b]))
 
   return (
     <div className="technical-layout">
@@ -246,19 +254,29 @@ function ProvidersTab() {
           ))}
         </div>
       </Panel>
-      <Panel title="Broker connections" eyebrow="OAUTH TOKEN STATUS">
+      <Panel title="Broker connections" eyebrow="OAUTH TOKEN STATUS + LIVE CIRCUIT-BREAKER STATE">
         <div className="provider-status-list">
-          {brokers.map((b) => (
-            <div className="provider-status-row" key={b.broker}>
-              <span className={`provider-status-dot ${b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
-              <div className="min-w-0 flex-1">
-                <strong className="capitalize">{b.broker}</strong>
-                <small>{b.token_status === 'valid' ? 'token valid' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+          {brokers.map((b) => {
+            const breaker = breakerByBroker[b.broker]
+            const tripped = breaker?.state === 'open'
+            return (
+              <div className="provider-status-row" key={b.broker}>
+                <span className={`provider-status-dot ${tripped ? 'red' : b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
+                <div className="min-w-0 flex-1">
+                  <strong className="capitalize">{b.broker}</strong>
+                  <small>{b.token_status === 'valid' ? 'token valid' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+                  <small>
+                    {tripped
+                      ? `circuit OPEN — ${breaker.consecutive_failures} consecutive failures${breaker.cooldown_remaining_seconds != null ? `, retry in ${Math.ceil(breaker.cooldown_remaining_seconds)}s` : ''}`
+                      : breaker
+                        ? `circuit closed · ${breaker.consecutive_failures}/${breaker.failure_threshold} consecutive failures`
+                        : 'circuit closed · no dispatch attempts yet'}
+                  </small>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
-        <GapNotice>Real-time connectivity/latency (as opposed to whether a token is currently valid) isn't exposed: the broker circuit breaker (src/brokers/resilient.py) is constructed fresh per order dispatch rather than held as a persistent per-broker instance, so there is no live breaker state to surface yet.</GapNotice>
       </Panel>
     </div>
   )
