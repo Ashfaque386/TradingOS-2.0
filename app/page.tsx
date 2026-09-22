@@ -17,10 +17,12 @@ import {
   type MarketHours,
   type OrganizationRun,
   type SignoffSnapshot,
+  type SystemVitals,
   type TodaysPaperPnl,
   getAgents,
   getKillSwitch,
   getMarketHours,
+  getSystemVitals,
   getTodaysPaperPnl,
   listRuns,
   resetKillSwitch,
@@ -104,7 +106,26 @@ function PulseScene({ state, reduceMotion }: { state: PulseState; reduceMotion: 
 }
 
 function Vitals() {
-  return <section className="pulse-panel p-5"><div className="flex items-center justify-between"><div><p className="eyebrow">SYSTEM VITALS</p><p className="mt-1 text-xs text-muted-foreground">Infrastructure telemetry</p></div><Wifi className="size-4 text-emerald-300" /></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="vital-tile"><div className="flex justify-between text-xs"><span>LLM provider health</span><span className="text-muted-foreground">not exposed yet</span></div><p className="mt-3 text-[10px] text-muted-foreground">No backend endpoint reports per-provider health — see docs/CLAUDE.md gaps.</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Token usage</span><span className="text-muted-foreground">not exposed yet</span></div><p className="mt-3 text-[10px] text-muted-foreground">No aggregate token-budget endpoint exists.</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Dispatch latency</span><span className="text-muted-foreground">Prometheus only</span></div><p className="mt-2 font-mono text-[10px] text-muted-foreground">tradingos_order_dispatch_latency_seconds via Grafana</p></div><div className="vital-tile"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2"><Cpu className="size-3 text-violet-300" /> Host metrics</span><span className="text-muted-foreground">not exposed yet</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><MemoryStick className="size-3 text-cyan-300" />No CPU/memory API — see Grafana host dashboard</div></div></div></section>
+  const [vitals, setVitals] = useState<SystemVitals | null>(null)
+
+  useEffect(() => {
+    const load = () => getSystemVitals().then(setVitals).catch(() => {})
+    load()
+    const interval = setInterval(load, 15_000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const totalTokens = vitals ? vitals.llm_token_usage.reduce((sum, e) => sum + e.count, 0) : null
+  const dispatchesWithData = vitals ? vitals.order_dispatch.filter((d) => d.dispatch_count > 0) : []
+  const totalDispatches = dispatchesWithData.reduce((sum, d) => sum + d.dispatch_count, 0)
+  const weightedAvgLatencyMs =
+    totalDispatches > 0
+      ? dispatchesWithData.reduce((sum, d) => sum + (d.avg_latency_ms ?? 0) * d.dispatch_count, 0) / totalDispatches
+      : null
+  const totalBudgetBreaches = vitals ? vitals.order_dispatch.reduce((sum, d) => sum + d.budget_breaches, 0) : 0
+  const sinceLabel = vitals ? relativeTime(vitals.since) : null
+
+  return <section className="pulse-panel p-5"><div className="flex items-center justify-between"><div><p className="eyebrow">SYSTEM VITALS</p><p className="mt-1 text-xs text-muted-foreground">Infrastructure telemetry</p></div><Wifi className="size-4 text-emerald-300" /></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="vital-tile"><div className="flex justify-between text-xs"><span>LLM provider health</span><span className="text-muted-foreground">not exposed yet</span></div><p className="mt-3 text-[10px] text-muted-foreground">No backend endpoint reports per-provider health — see docs/CLAUDE.md gaps.</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Token usage</span><span className="text-foreground">{totalTokens === null ? '—' : totalTokens.toLocaleString()}</span></div><p className="mt-3 text-[10px] text-muted-foreground">{sinceLabel ? `Cumulative since server start (${sinceLabel}) — not "today"` : 'Loading…'}</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Dispatch latency</span><span className="text-foreground">{weightedAvgLatencyMs === null ? 'no dispatches yet' : `${weightedAvgLatencyMs.toFixed(0)}ms avg`}</span></div><p className="mt-2 font-mono text-[10px] text-muted-foreground">{totalDispatches} dispatch{totalDispatches === 1 ? '' : 'es'}{totalBudgetBreaches > 0 ? ` · ${totalBudgetBreaches} over budget` : ''} since server start</p></div><div className="vital-tile"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2"><Cpu className="size-3 text-violet-300" /> Host metrics</span><span className="text-muted-foreground">not exposed yet</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><MemoryStick className="size-3 text-cyan-300" />No CPU/memory API — see Grafana host dashboard</div></div></div></section>
 }
 
 export default function Home() {

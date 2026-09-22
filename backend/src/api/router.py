@@ -16,6 +16,7 @@ from src.api.routes import (
     llm_providers,
     market_data,
     notification_channels,
+    observability,
     orchestration,
     orders,
     paper_trading,
@@ -51,4 +52,5 @@ api_router.include_router(chat.router)
 api_router.include_router(orders.router)
 api_router.include_router(gateway.router)
 api_router.include_router(llm_providers.router)
+api_router.include_router(observability.router)
 api_router.include_router(websockets.router)
