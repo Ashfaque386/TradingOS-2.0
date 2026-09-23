@@ -46,6 +46,16 @@ if [ -n "$DEFAULT_ADMIN_EMAIL" ] && [ -n "$DEFAULT_ADMIN_PASSWORD" ]; then
     python -m scripts.create_admin "$DEFAULT_ADMIN_EMAIL" "$DEFAULT_ADMIN_PASSWORD"
 fi
 
+# Non-fatal by design: SECRETS_ENCRYPTION_KEY only gates the Settings UI's
+# Broker Config/LLM Providers/Notification Channels panels (they all share
+# this one Fernet key) -- everything else, paper trading included, runs
+# fine without it, so this warns loudly instead of refusing to boot.
+if [ -z "$SECRETS_ENCRYPTION_KEY" ]; then
+    echo "[api] WARNING: SECRETS_ENCRYPTION_KEY is not set -- Broker Config, LLM Providers, and Notification Channels will all fail with 503 until you set it."
+    echo "[api]   Generate one:  python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+    echo "[api]   Then add it to your .env as SECRETS_ENCRYPTION_KEY=<value> and restart."
+fi
+
 echo "[api] starting uvicorn..."
 # UVICORN_HOST defaults to 0.0.0.0 -- required for backend/Dockerfile's own
 # multi-container use (docker-compose publishes this container's 8000

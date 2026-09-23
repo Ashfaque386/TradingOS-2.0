@@ -177,11 +177,21 @@ class OllamaClient:
     base_url: str
 
     async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
-            )
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": model, "prompt": prompt, "stream": False},
+                )
+        except httpx.HTTPError as exc:
+            # A bare `localhost` base URL inside the backend's own Docker
+            # container is the single most common way to hit this -- it
+            # refers to the container itself, not the host machine running
+            # Ollama. Caught here rather than left to propagate as an
+            # unhandled 500, same `except httpx.HTTPError` pattern already
+            # used by every other outbound call in this codebase
+            # (src.notifications.senders, src.api.routes.broker_oauth).
+            raise LlmProviderError(f"ollama: connection failed: {exc}") from exc
         if resp.status_code != 200:
             raise LlmProviderError(f"ollama: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
@@ -213,12 +223,17 @@ class CustomProviderClient:
         if not self.base_url:
             raise LlmProviderError("custom: no base URL configured")
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{self.base_url.rstrip('/')}/v1/chat/completions",
-                headers=headers,
-                json={"model": model, "messages": [{"role": "user", "content": prompt}]},
-            )
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{self.base_url.rstrip('/')}/v1/chat/completions",
+                    headers=headers,
+                    json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+                )
+        except httpx.HTTPError as exc:
+            # Same "localhost means the container, not the host" trap as
+            # OllamaClient above -- see its comment.
+            raise LlmProviderError(f"custom: connection failed: {exc}") from exc
         if resp.status_code != 200:
             raise LlmProviderError(f"custom: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()

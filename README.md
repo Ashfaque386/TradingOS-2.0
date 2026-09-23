@@ -28,6 +28,14 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 `docker compose up` builds and runs the frontend (this Next.js app) and the backend together — see the repo-root `Dockerfile` and `docker-compose.yml`, and `docs/CLAUDE.md` for the full architecture.
 
+**First-time setup — Settings UI (Broker Config, LLM Providers, Notification Channels):** copy `.env.example` to `.env` and set `SECRETS_ENCRYPTION_KEY`, or those three panels will all fail with a 503 (the rest of the app, including paper trading, works fine without it):
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Paste the output into `.env` as `SECRETS_ENCRYPTION_KEY=<value>`. The backend logs a startup warning if this is left unset — it won't fail to boot, but those three Settings panels won't work until you set it and restart.
+
 If port 8000 or 3000 is already taken by something else on your machine, use:
 
 ```bash

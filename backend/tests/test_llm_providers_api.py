@@ -294,6 +294,40 @@ async def test_models_discovery_custom_provider_openai_compatible_shape(
         _clear_overrides()
 
 
+async def test_models_discovery_connection_failure_is_502_not_an_unhandled_500(
+    client, make_user, tmp_path, monkeypatch
+):
+    """The Docker-networking trap this test exists to catch: a base URL
+    nothing is listening on must come back as a real 502 with a real
+    message, never an unhandled 500 -- see
+    test_agents_llm_router.py's matching test for OllamaClient/
+    CustomProviderClient.complete() directly."""
+    from src.agents.llm_router import OllamaClient
+
+    _override_store(tmp_path, monkeypatch)
+
+    def fake_default_clients():
+        return {LlmProvider.OLLAMA: OllamaClient(base_url="http://fake-ollama:11434")}
+
+    monkeypatch.setattr("src.api.routes.llm_providers.default_clients", fake_default_clients)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _override_discovery_client(handler)
+    try:
+        await make_user("admin12@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
+        token = await _login(client, "admin12@example.com", "supersecret1")
+
+        resp = await client.get(
+            "/api/v1/settings/llm-providers/ollama/models", headers=_auth(token)
+        )
+        assert resp.status_code == 502
+        assert "connection refused" in resp.json()["detail"].lower()
+    finally:
+        _clear_overrides()
+
+
 async def test_models_discovery_custom_provider_without_base_url_is_502(
     client, make_user, tmp_path, monkeypatch
 ):

@@ -10,10 +10,12 @@ import pytest
 
 from src.agents.llm_router import (
     AnthropicClient,
+    CustomProviderClient,
     LlmCompletionPayload,
     LlmProviderError,
     LlmRouter,
     LlmRouterExhaustedError,
+    OllamaClient,
 )
 from src.gateway.apply import apply_config_text
 from src.gateway.schema import LlmProvider
@@ -244,3 +246,24 @@ async def test_stream_complete_real_anthropic_client_with_no_key_falls_back_befo
 
     assert chunks[-1].provider == LlmProvider.OPENAI
     assert "".join(c.text for c in chunks) == "real fallback"
+
+
+async def test_ollama_client_reports_a_graceful_error_on_connection_failure():
+    """The Docker-networking trap this test exists to catch: a bare
+    `localhost`/loopback base URL that nothing is listening on (exactly
+    what `http://localhost:11434` resolves to from inside the backend's
+    own container when Ollama actually runs on the host) must surface as
+    a real LlmProviderError, never an unhandled httpx exception -- a
+    genuine connection attempt against an unreachable loopback port,
+    same "real attempt" posture as this codebase's other network tests,
+    no mock transport needed since loopback traffic never goes through
+    this sandbox's egress proxy."""
+    client = OllamaClient(base_url="http://127.0.0.1:1")
+    with pytest.raises(LlmProviderError, match="ollama: connection failed"):
+        await client.complete(model="llama3", prompt="hi")
+
+
+async def test_custom_provider_client_reports_a_graceful_error_on_connection_failure():
+    client = CustomProviderClient(base_url="http://127.0.0.1:1")
+    with pytest.raises(LlmProviderError, match="custom: connection failed"):
+        await client.complete(model="local-model", prompt="hi")
