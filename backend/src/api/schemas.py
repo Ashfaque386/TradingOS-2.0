@@ -642,7 +642,16 @@ class LiveOptionChainEntryResponse(BaseModel):
     """Mirrors src.brokers.base.OptionChainEntry -- a real per-strike row
     from whichever broker is configured (Phase 16 audit follow-up D).
     Every optional field is genuinely `None`, never a fabricated `0.0`,
-    when the broker's own response didn't carry it."""
+    when the broker's own response didn't carry it.
+
+    `call_iv`/`put_iv` are only ever a real, broker-reported figure
+    (Upstox). `call_iv_computed`/`put_iv_computed` are a *modeled*
+    Black-Scholes estimate (`src.engine.options_pricing`), filled in by
+    the route only when the broker itself reported no IV (Zerodha,
+    whose API has no options-greeks field at all) and enough real data
+    (LTP, spot, time to expiry) exists to solve for one -- the two are
+    never merged into a single field, so a client can never mistake a
+    modeled number for a broker-reported one."""
 
     strike: float
     call_symbol: str | None
@@ -653,6 +662,8 @@ class LiveOptionChainEntryResponse(BaseModel):
     put_oi: float | None
     call_iv: float | None
     put_iv: float | None
+    call_iv_computed: float | None = None
+    put_iv_computed: float | None = None
 
 
 class LiveOptionChainResponse(BaseModel):

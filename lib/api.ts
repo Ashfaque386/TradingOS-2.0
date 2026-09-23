@@ -864,6 +864,8 @@ export type LiveOptionChainEntry = {
   put_oi: number | null
   call_iv: number | null
   put_iv: number | null
+  call_iv_computed: number | null
+  put_iv_computed: number | null
 }
 export type LiveOptionChain = {
   broker: string

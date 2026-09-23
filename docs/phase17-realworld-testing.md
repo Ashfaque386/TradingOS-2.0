@@ -101,11 +101,12 @@ prepared for this and left unused, same discovery Follow-up C made for
   well within Kite Connect's documented 500-instrument cap for a single
   expiry's CE+PE legs) to get real LTP and OI. **What remains permanently
   missing**: implied volatility. Kite Connect's quote response has no IV
-  or options-greeks field of any kind, and this codebase has no
-  options-pricing model (e.g. a Black-Scholes solver) to compute one from
-  LTP — so `call_iv`/`put_iv` are always `None` for this broker, not a
-  temporary gap, never Upstox-parity. 10 new/updated backend tests
-  (`backend/tests/test_brokers_zerodha.py`,
+  or options-greeks field of any kind — `call_iv`/`put_iv` stay `None`
+  for this broker forever, never Upstox-parity, and this adapter itself
+  never invents one. A separate, later pass (below) fills that specific
+  gap at the API layer with a clearly-labeled *computed* estimate, never
+  by changing what this adapter itself honestly reports. 10 new/updated
+  backend tests (`backend/tests/test_brokers_zerodha.py`,
   `backend/tests/test_market_data_api.py`) cover: real LTP/OI extraction,
   IV always null, an unmatched underlying/expiry returning an honestly
   empty list, a strike with only one leg listed, sorted/deduplicated
@@ -179,6 +180,67 @@ that panel now genuinely renders real rows instead of the empty-state
 message it always showed before. Full backend suite: 849 passed;
 `ruff format --check`/`ruff check` clean. Rows, provenance record, and
 demo user deleted afterward.
+
+### Zerodha's permanently-missing IV — closed with a labeled, computed estimate
+
+The one gap named as permanent above (Kite Connect has no options-
+greeks field at all, so `call_iv`/`put_iv` stay `None` for Zerodha
+forever) is now filled, without touching that honesty at all: a wholly
+new `src.engine.options_pricing` module (no Black-Scholes code, risk-
+free-rate setting, or time-to-expiry helper existed anywhere in this
+codebase before this) solves for implied volatility by bisection over
+the real Black-Scholes-Merton price formula — dependency-free (a hand-
+rolled normal CDF via `math.erf`, no new `scipy` dependency), since
+Black-Scholes price is strictly increasing in volatility so bisection
+needs no vega/derivative computation and is always well-behaved.
+`GET /api/v1/market-data/option-chain/{underlying}`
+(`backend/src/api/routes/market_data.py`) computes it only when the
+broker itself reported no IV and a real spot price + forward-looking
+expiry are both available, filling two **new, separate** response
+fields — `call_iv_computed`/`put_iv_computed` — never overwriting or
+blending with `call_iv`/`put_iv` themselves, so a client can never
+mistake a modeled number for Upstox's real broker-reported one. A new
+`risk_free_rate` setting (default 7%, `backend/src/core/config.py`) is
+the one necessary modeling assumption every IV solver needs — documented
+as exactly that, a configurable input, never presented as a measured
+figure. Every genuinely un-computable case (non-positive price/spot/
+strike, an already-elapsed or same-day expiry, a market price outside
+what any volatility in a sane 0.1%–500% range can produce, or a solve
+that doesn't converge) returns `None`, never a guessed number.
+`app/analysis/page.tsx`'s Live Option Chain table shows a computed value
+with a small "CALC" tag and a tooltip explaining it's Black-Scholes-
+derived, not broker-reported (reusing the existing `.atm-tag` CSS class)
+— real IV cells render exactly as before, unchanged.
+
+15 new/updated backend tests
+(`backend/tests/test_engine_options_pricing.py`,
+`backend/tests/test_market_data_api.py`) cover: a full round-trip
+(pick a known volatility, compute its real Black-Scholes price, solve
+IV back from that price, confirm it recovers the original volatility)
+across a wide range of moneyness and volatility levels, a real put-call
+parity identity check independent of the round-trip, every un-computable
+case honestly returning `None`, the live HTTP route computing a real
+Zerodha IV that round-trips through the exact same math end to end, the
+existing already-elapsed-expiry Zerodha test now also asserting the
+computed fields stay `None`, and Upstox's real-IV test now asserting the
+computed fields stay `None` too (the solver must never run, let alone
+override, when a real value already exists). Full backend suite: 874
+passed; `ruff format --check`/`ruff check` clean; `tsc --noEmit` clean.
+
+**Live-verified** against a real `uvicorn` + local Postgres/Redis: the
+app started and routed requests correctly with the new module/route
+wired in (no import or startup errors), and a real-shaped (fake)
+Zerodha credential's option-chain request reached exactly as far as the
+NFO instrument-dump fetch before failing with the same
+`httpx.ProxyError: 403 Forbidden` this sandbox's own egress policy has
+produced for every other Zerodha network attempt in this project
+(Phases 8/9/16 and this same Phase 17 pass) — a pre-existing sandbox
+limitation this pass didn't introduce or need to work around, confirming
+the new code executes correctly right up to the same real network
+boundary. The actual IV computation itself is verified by the mocked-
+transport tests above, the same "real math against a mocked broker
+response, real network attempt to prove the wiring" split this project
+uses throughout. Demo user and saved credentials deleted afterward.
 
 ## Part 3 — System Vitals
 

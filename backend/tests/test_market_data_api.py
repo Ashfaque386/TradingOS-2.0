@@ -334,6 +334,116 @@ async def test_live_option_chain_returns_real_zerodha_ltp_and_oi_never_iv(
         assert entry["put_iv"] is None
         assert body["underlying_ltp"] == 24010.0
         assert body["atm_strike"] == 24000.0
+        # The requested expiry (2025-01-30) has already elapsed relative
+        # to "now" -- no forward-looking IV can be computed from it, so
+        # the computed fields must honestly stay None too, not a stale
+        # or nonsensical number.
+        assert entry["call_iv_computed"] is None
+        assert entry["put_iv_computed"] is None
+    finally:
+        _clear_broker_adapter_override()
+        zerodha_module._nfo_instruments_cache = None
+        zerodha_module._nfo_instruments_cache_at = 0.0
+
+
+async def test_live_option_chain_computes_zerodha_iv_from_ltp_via_black_scholes(
+    client: AsyncClient, make_user
+):
+    """The gap this pass closes: Kite Connect never reports IV, so
+    call_iv/put_iv stay None (confirmed above) -- but call_iv_computed/
+    put_iv_computed now fill in a real Black-Scholes-solved estimate
+    whenever a spot price and a forward-looking expiry are both
+    available. Builds the mocked quote's last_price from
+    black_scholes_price itself (not a hand-picked number), so this is a
+    real round-trip against the exact same math the route uses, not a
+    coincidence."""
+    from datetime import UTC, date, datetime
+
+    from src.core.config import get_settings
+    from src.engine.options_pricing import black_scholes_price, year_fraction
+
+    expiry = date(2030, 12, 31)
+    today = datetime.now(UTC).date()
+    time_to_expiry = year_fraction(expiry, today)
+    rate = get_settings().risk_free_rate
+    true_vol = 0.35
+    spot = 1000.0
+    strike = 1000.0
+
+    call_price = round(
+        black_scholes_price(
+            option_type="CE",
+            spot=spot,
+            strike=strike,
+            time_to_expiry=time_to_expiry,
+            rate=rate,
+            vol=true_vol,
+        ),
+        2,
+    )
+    put_price = round(
+        black_scholes_price(
+            option_type="PE",
+            spot=spot,
+            strike=strike,
+            time_to_expiry=time_to_expiry,
+            rate=rate,
+            vol=true_vol,
+        ),
+        2,
+    )
+
+    month_code = expiry.strftime("%y%b").upper()
+    call_symbol = f"TESTIDX{month_code}1000CE"
+    put_symbol = f"TESTIDX{month_code}1000PE"
+    nfo_csv = (
+        "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,"
+        "tick_size,lot_size,instrument_type,segment,exchange\n"
+        f"1,1,{call_symbol},TESTIDX,0,{expiry.isoformat()},1000.000000,0.05,50,CE,NFO-OPT,NFO\n"
+        f"2,1,{put_symbol},TESTIDX,0,{expiry.isoformat()},1000.000000,0.05,50,PE,NFO-OPT,NFO\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/instruments/NFO":
+            return httpx.Response(200, text=nfo_csv)
+        if request.url.path == "/quote":
+            requested = request.url.params.get_list("i")
+            data = {
+                f"NFO:{call_symbol}": {"last_price": call_price, "oi": 1000},
+                f"NFO:{put_symbol}": {"last_price": put_price, "oi": 900},
+                "TESTIDX": {"last_price": spot, "depth": {}},
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {key: value for key, value in data.items() if key in requested},
+                },
+            )
+        raise AssertionError(f"unexpected request path {request.url.path}")
+
+    import src.brokers.zerodha as zerodha_module
+
+    zerodha_module._nfo_instruments_cache = None
+    zerodha_module._nfo_instruments_cache_at = 0.0
+    adapter = ZerodhaKiteAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+    )
+    app.dependency_overrides[get_market_data_broker_adapter] = lambda: adapter
+    try:
+        await make_user("oc-iv@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "oc-iv@example.com", "supersecret1")
+        resp = await client.get(
+            f"/api/v1/market-data/option-chain/TESTIDX?expiry={expiry.isoformat()}",
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        entry = body["entries"][0]
+        assert entry["call_iv"] is None  # never a fabricated broker-real value
+        assert entry["put_iv"] is None
+        assert entry["call_iv_computed"] == pytest.approx(true_vol, abs=0.01)
+        assert entry["put_iv_computed"] == pytest.approx(true_vol, abs=0.01)
     finally:
         _clear_broker_adapter_override()
         zerodha_module._nfo_instruments_cache = None
@@ -419,6 +529,11 @@ async def test_live_option_chain_returns_real_upstox_oi_iv_ltp(client: AsyncClie
         assert entry["call_iv"] == 14.2
         assert entry["put_oi"] == 38000.0
         assert entry["put_iv"] == 15.9
+        # Upstox already reports a real IV -- the Black-Scholes solver
+        # must never run (let alone override it) when a real value
+        # already exists.
+        assert entry["call_iv_computed"] is None
+        assert entry["put_iv_computed"] is None
         # Real spot lookup (Phase 17): 24080.35 is closer to strike 24000
         # than to 23500 or 24500, so that's the honestly-computed ATM strike.
         assert body["underlying_ltp"] == 24080.35

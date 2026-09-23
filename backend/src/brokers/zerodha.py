@@ -258,7 +258,11 @@ class ZerodhaKiteAdapter:
         batch `/quote` call. `call_iv`/`put_iv` are always `None` for this
         broker -- not a gap in this implementation, a genuine absence in
         Kite Connect's own API (no options-greeks field anywhere), unlike
-        Upstox's `get_option_chain`."""
+        Upstox's `get_option_chain`. `GET /api/v1/market-data/option-chain`
+        (src.api.routes.market_data) fills that gap at the API layer with
+        a Black-Scholes-computed estimate (src.engine.options_pricing)
+        whenever a spot price and forward-looking expiry are available --
+        this adapter itself stays broker-honest and never invents one."""
         instruments = await self._get_nfo_instruments()
         strikes: dict[float, dict[str, dict]] = {}
         for row in instruments:
