@@ -205,9 +205,44 @@ export type AgentSummary = {
   capabilities: string[]
   skills: string[]
   heartbeat_enabled: boolean
+  identity_name: string
+  emoji: string | null
+  avatar: string | null
+  theme: string | null
+  voice: string | null
 }
 
 export const getAgents = () => apiGet<AgentSummary[]>('/api/v1/agents')
+
+export type SetAgentIdentityInput = {
+  name?: string
+  emoji?: string
+  avatar?: string
+  theme?: string
+  voice?: string
+}
+
+export const putAgentIdentity = (agentId: string, body: SetAgentIdentityInput) =>
+  apiPut<ApplyResult>(`/api/v1/agents/${agentId}/identity`, body)
+
+export type PromptVersion = {
+  id: string
+  agent_id: string
+  version_number: number
+  content: string
+  status: 'draft' | 'active' | 'superseded'
+  diff_from_previous: string | null
+  created_by: string | null
+  created_at: string
+  activated_at: string | null
+}
+
+export const listPromptVersions = (agentId: string) =>
+  apiGet<PromptVersion[]>(`/api/v1/agents/${agentId}/prompt-versions`)
+export const createPromptVersion = (agentId: string, content: string) =>
+  apiPost<PromptVersion>(`/api/v1/agents/${agentId}/prompt-versions`, { content })
+export const activatePromptVersion = (agentId: string, versionId: string) =>
+  apiPost<PromptVersion>(`/api/v1/agents/${agentId}/prompt-versions/${versionId}/activate`)
 
 // ---- Kill switch ----
 export type KillSwitchMode = 'live' | 'paper'
