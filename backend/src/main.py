@@ -119,15 +119,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tick_source=build_tick_source(),
     )
 
-    # Human-Gated LiveExecutionPipeline (Build Spec §12) -- always
-    # started, regardless of whether a broker is configured: intent
-    # GENERATION and the expiry sweep are useful (and safe) with no
-    # broker at all, they just can never reach submission
-    # (src.orchestration.live_trading.approve_live_order_intent raises
-    # NoBrokerConfiguredError). `build_configured_adapter(sandbox=False)`
-    # is the same credential-lookup path build_tick_source() uses,
-    # always pointed at production -- live trading must never share a
-    # code path with Shadow Mode's dedicated sandbox-pointed adapter.
+    # Autonomous LiveExecutionPipeline (Build Spec §12, Phase 18) --
+    # always started, regardless of whether a broker is configured or any
+    # subscription has autonomy enabled: intent GENERATION and the expiry
+    # sweep are useful (and safe) with no broker at all, and every real
+    # gate (master switch, Kill Switch, standing caps) is enforced inside
+    # `generate_live_order_intent` itself before submission is ever
+    # attempted. `build_configured_adapter(sandbox=False)` is the same
+    # credential-lookup path build_tick_source() uses, always pointed at
+    # production -- live trading must never share a code path with Shadow
+    # Mode's dedicated sandbox-pointed adapter.
     live_trading_scheduler = start_live_trading_scheduler(
         AsyncSessionLocal,
         redis=redis,

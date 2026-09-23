@@ -19,14 +19,15 @@ from src.models.base import Base
 
 
 class LiveTradingSubscription(Base):
-    """One Strategy enrolled in the human-gated LiveExecutionPipeline
-    (Build Spec §12) against a single symbol/broker, using the same
-    deterministic builtin signal generators as Phase 7's paper engine
-    (src.engine.backtest.signals). Keyed by `strategy_id` (not
-    `strategy_version_id`, unlike PaperTradingSubscription) because
-    live-eligibility (Strategy.status == LiveEligible/Live) is itself a
-    Strategy-level, not version-level, property -- and `live_order_intents`
-    (Build Spec §12.3) is likewise keyed by `strategy_id`.
+    """One Strategy enrolled in the autonomous LiveExecutionPipeline
+    (Build Spec §12, redesigned in Phase 18) against a single
+    symbol/broker, using the same deterministic builtin signal generators
+    as Phase 7's paper engine (src.engine.backtest.signals). Keyed by
+    `strategy_id` (not `strategy_version_id`, unlike
+    PaperTradingSubscription) because live-eligibility
+    (Strategy.status == LiveEligible/Live) is itself a Strategy-level,
+    not version-level, property -- and `live_order_intents` (Build Spec
+    §12.3) is likewise keyed by `strategy_id`.
 
     `last_signal_type`/`last_signal_reference_price`/
     `last_signal_generated_at` hold Layer 1's daily-signal state directly
@@ -34,8 +35,27 @@ class LiveTradingSubscription(Base):
     `DailySignal` does -- a deliberate simplification for live trading:
     only the *latest* signal ever matters for intent generation (Phase
     7's per-signal audit trail isn't needed here, since every live intent
-    this state produces already gets its own persisted, human-visible
+    this state produces already gets its own persisted, auditable
     `LiveOrderIntent` row).
+
+    **`autonomous_trading_enabled` is the master switch** (Phase 18,
+    replacing the old per-order human-approval gate): defaults `False` on
+    every subscription, including one enrolled against an already
+    `LiveEligible`/`Live` strategy -- there is no code path that creates a
+    subscription with this already `True`. The only way to flip it is
+    `src.orchestration.live_trading.set_autonomous_trading`, which
+    requires an explicit human actor and writes an audit-log row on every
+    real flip. `generate_live_order_intent` checks this switch before
+    anything else, even before the Kill Switch -- see that function's own
+    docstring for the exact ordering and why.
+
+    `max_intents_per_window`/`rate_limit_window_minutes`/
+    `max_notional_per_intent` are the standing, always-on caps every
+    autonomous subscription carries (Phase 18 Part 3) -- deliberately
+    conservative defaults, editable here at enrollment or any time after,
+    never optional and never buried in a separate pre-authorization flow
+    the way the now-unused `LiveBatchAuthorization` table originally
+    worked.
     """
 
     __tablename__ = "live_trading_subscriptions"
@@ -51,6 +71,18 @@ class LiveTradingSubscription(Base):
         CheckConstraint(
             "intent_expiry_seconds > 0 AND intent_expiry_seconds <= 300",
             name="ck_live_trading_subscriptions_intent_expiry_seconds",
+        ),
+        CheckConstraint(
+            "max_intents_per_window > 0",
+            name="ck_live_trading_subscriptions_max_intents_per_window",
+        ),
+        CheckConstraint(
+            "rate_limit_window_minutes > 0",
+            name="ck_live_trading_subscriptions_rate_limit_window_minutes",
+        ),
+        CheckConstraint(
+            "max_notional_per_intent > 0",
+            name="ck_live_trading_subscriptions_max_notional_per_intent",
         ),
         # One subscription per (strategy, symbol): _get_live_subscription
         # (src.orchestration.live_trading) looks one up by this exact pair
@@ -84,6 +116,30 @@ class LiveTradingSubscription(Base):
     intent_expiry_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=90)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Phase 18's master switch -- see the class docstring. Defaults False
+    # everywhere; only src.orchestration.live_trading.set_autonomous_trading
+    # may ever set it True, and always with an explicit human actor.
+    autonomous_trading_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    autonomy_enabled_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    autonomy_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Phase 18 Part 3's standing, always-on caps -- conservative defaults,
+    # operator-editable, never optional once autonomy is enabled. See
+    # generate_live_order_intent's rolling-window enforcement.
+    max_intents_per_window: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
+    rate_limit_window_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60, server_default="60"
+    )
+    max_notional_per_intent: Mapped[float] = mapped_column(
+        Float, nullable=False, default=50_000.0, server_default="50000.0"
+    )
 
     last_signal_type: Mapped[str | None] = mapped_column(String(8), nullable=True)
     last_signal_reference_price: Mapped[float | None] = mapped_column(Float, nullable=True)

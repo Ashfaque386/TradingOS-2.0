@@ -23,6 +23,7 @@ from src.orchestration.live_trading import (
     enroll_in_live_trading,
     generate_live_order_intent,
     run_live_daily_signal_generation,
+    set_autonomous_trading,
 )
 from src.orchestration.strategies import (
     LIVE_ELIGIBILITY_TRANSITION_TYPE,
@@ -213,14 +214,23 @@ async def test_go_live_gate_failure_does_not_fire_an_alert(db_session_factory, m
     assert calls == []
 
 
-# --- Sign-off item: a live order intent (Phase 9) --------------------------
+# --- Retired by Phase 18: a live order intent was a sign-off item ----------
+#
+# generate_live_order_intent used to fire an AlertLevel.SIGN_OFF alert the
+# moment a pending_approval intent was created -- the notification that told
+# a human "come approve this." Phase 18 removed the per-order human-approval
+# gate entirely: an intent now resolves itself (submitted/failed/capped)
+# inside the same call that created it, with nothing left for a human to be
+# summoned to sign off on. src.orchestration.live_trading no longer imports
+# `notify` at all -- the test below is a positive assertion of that removal,
+# not a hole in coverage.
 
 _PRICE_PROVIDER = FakeDailyPriceProvider(seed_by_symbol={"ALERTSTOCK": 1})
 _BUY_AS_OF = pd.Timestamp("2026-09-09")
 
 
-async def test_live_order_intent_pending_approval_fires_a_sign_off_alert(
-    db_session_factory, monkeypatch
+async def test_live_order_intent_generation_no_longer_fires_a_sign_off_alert(
+    db_session_factory,
 ):
     strategy_id = await _make_paper_trading_strategy(db_session_factory)
     async with db_session_factory() as db:
@@ -232,18 +242,17 @@ async def test_live_order_intent_pending_approval_fires_a_sign_off_alert(
             db, strategy_id=strategy_id, symbol="ALERTSTOCK", broker_name="zerodha"
         )
     async with db_session_factory() as db:
+        await set_autonomous_trading(db, subscription.id, enabled=True, actor="risk-manager-1")
+    async with db_session_factory() as db:
         await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
 
-    calls, fake_notify = _recorder()
-    monkeypatch.setattr("src.orchestration.live_trading.notify", fake_notify)
-
+    # No broker adapter passed -- the intent stays 'generated', neither
+    # submitted nor failed, but still: no notify() call of any kind, for
+    # any reason, anywhere in this module anymore.
     async with db_session_factory() as db:
         intent = await generate_live_order_intent(
             db, subscription_id=subscription.id, tick_price=106.0
         )
 
     assert intent is not None
-    assert intent.status == "pending_approval"
-    assert len(calls) == 1
-    assert calls[0][0] == AlertLevel.SIGN_OFF
-    assert "ALERTSTOCK" in calls[0][1]
+    assert intent.status == "generated"

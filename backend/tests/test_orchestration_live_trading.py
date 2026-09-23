@@ -1,9 +1,11 @@
-"""LiveExecutionPipeline orchestration tests (Build Spec §12): intent
-generation never auto-submits, an approved intent reaches a real broker
-adapter and produces audit-logged Order/Trade rows, a rejected intent
-never reaches the broker, bounded batch pre-authorization enforces its
-bounds server-side, and -- the acceptance-critical case -- a tripped kill
-switch stops intent GENERATION entirely, not just approval.
+"""LiveExecutionPipeline orchestration tests (Build Spec §12, redesigned
+by Phase 18): autonomy is disabled by default and produces no intent at
+all until explicitly enabled; the master switch is checked before the
+Kill Switch; a tripped Kill Switch still blocks generation (and, in the
+same call, submission) when autonomy is on; the standing rate/notional
+cap stops a runaway signal loop independent of the Kill Switch; and the
+expiry sweep still resolves the one rare "no broker adapter configured"
+case, plus historical pre-Phase-18 rows, safely.
 """
 
 import uuid
@@ -14,7 +16,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import select
 
-from src.brokers.base import BrokerCredentials
+from src.brokers.base import BrokerCredentials, BrokerQuote, OrderRequest
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
@@ -24,21 +26,18 @@ from src.engine.sandbox.process_runtime import RestrictedProcessSandboxRuntime
 from src.models.audit_log import AuditLog
 from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
+from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.order import Order
-from src.models.trade import Trade
 from src.orchestration.approvals import create_approval_request, decide_approval_request
 from src.orchestration.kill_switch import check_drawdown
 from src.orchestration.live_trading import (
-    IntentExpiredError,
-    IntentNotPendingError,
+    IntentExpiryWindowTooLongError,
     StrategyNotLiveEligibleError,
-    approve_live_order_intent,
-    create_batch_authorization,
     enroll_in_live_trading,
     expire_stale_intents,
     generate_live_order_intent,
-    reject_live_order_intent,
     run_live_daily_signal_generation,
+    set_autonomous_trading,
 )
 from src.orchestration.strategies import (
     LIVE_ELIGIBILITY_TRANSITION_TYPE,
@@ -128,6 +127,20 @@ async def _make_live_eligible_strategy(db_session_factory) -> uuid.UUID:
     return strategy_id
 
 
+async def _enroll_and_enable_autonomy(
+    db_session_factory, strategy_id: uuid.UUID, **enroll_kwargs
+) -> LiveTradingSubscription:
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha", **enroll_kwargs
+        )
+    async with db_session_factory() as db:
+        subscription = await set_autonomous_trading(
+            db, subscription.id, enabled=True, actor="risk-manager-1"
+        )
+    return subscription
+
+
 def _mock_adapter(handler) -> ZerodhaKiteAdapter:
     return ZerodhaKiteAdapter(
         BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
@@ -161,6 +174,21 @@ async def test_enroll_requires_live_eligible_strategy(db_session_factory):
             )
 
 
+async def test_enroll_never_accepts_an_initial_autonomy_value(db_session_factory):
+    """There is no `autonomous_trading_enabled` kwarg on
+    `enroll_in_live_trading` at all -- a fresh subscription is always
+    `False`, including for an already-LiveEligible strategy, per
+    Non-Negotiable Rule #1."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        )
+    assert subscription.autonomous_trading_enabled is False
+    assert subscription.autonomy_enabled_by is None
+    assert subscription.autonomy_enabled_at is None
+
+
 async def test_daily_signal_generation_updates_subscription_in_place(db_session_factory):
     strategy_id = await _make_live_eligible_strategy(db_session_factory)
     async with db_session_factory() as db:
@@ -179,216 +207,74 @@ async def test_daily_signal_generation_updates_subscription_in_place(db_session_
     assert updated[0].last_signal_reference_price > 0
 
 
-async def test_generate_intent_on_a_buy_signal_is_pending_approval_never_auto_submitted(
+async def test_generate_intent_with_autonomy_disabled_produces_no_intent_at_all(
+    db_session_factory,
+):
+    """Non-Negotiable Rule #1's "full stop": a real BUY signal exists,
+    but autonomy was never enabled -- generate_live_order_intent must
+    return None and write no LiveOrderIntent row, not even a rejected
+    one."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        )
+    assert subscription.autonomous_trading_enabled is False
+
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db, subscription_id=subscription.id, tick_price=106.0
+        )
+
+    assert intent is None
+    async with db_session_factory() as db:
+        intents = (
+            (
+                await db.execute(
+                    select(LiveOrderIntent).where(LiveOrderIntent.strategy_id == strategy_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert intents == []
+
+
+async def test_generate_intent_with_autonomy_enabled_auto_submits_and_reaches_broker(
     db_session_factory,
 ):
     strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
+    subscription = await _enroll_and_enable_autonomy(db_session_factory, strategy_id)
     async with db_session_factory() as db:
         await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
 
+    adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="AUTO_OID_1"))
+
     async with db_session_factory() as db:
         intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-
-    assert intent is not None
-    assert intent.status == "pending_approval"
-    assert intent.intent_type == "entry"
-    assert intent.side == "buy"
-    assert intent.quantity > 0
-
-    async with db_session_factory() as db:
-        orders = (await db.execute(select(Order))).scalars().all()
-    assert orders == [], "pending_approval must never produce an Order row"
-
-
-async def test_intent_expires_safely_when_unactioned_past_its_window(db_session_factory):
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
             db,
-            strategy_id=strategy_id,
-            symbol="DEMOSTOCK",
-            broker_name="zerodha",
-            intent_expiry_seconds=90,
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-    assert intent.status == "pending_approval"
-
-    # Force it into the past rather than sleeping 90s in a test.
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-        await db.commit()
-
-    async with db_session_factory() as db:
-        expired_count = await expire_stale_intents(db)
-    assert expired_count == 1
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-    assert row.status == "expired"
-
-    async with db_session_factory() as db:
-        orders = (await db.execute(select(Order))).scalars().all()
-    assert orders == [], "an expired intent must never have produced an order"
-
-
-# Build Spec §21-22 hardening pass: expire_stale_intents is DB-orchestration
-# code (a bulk UPDATE) with the rest of live_trading.py's 700 lines around
-# it, so it's covered by this hand-driven mutation analysis rather than an
-# automated mutmut config (see pyproject.toml's [tool.mutmut] comment) --
-# reasoning through what a mutant could flip in this function's WHERE
-# clause and what would still pass the one existing expiry test above.
-
-
-async def test_expires_an_approved_but_unsubmitted_intent_too(db_session_factory):
-    """The sweep's status filter is `.in_(("pending_approval", "approved"))`
-    -- not just "pending_approval" -- specifically so an intent that got
-    marked "approved" but crashed before reaching the broker (the module
-    docstring's own "approved -- unsubmitted -- expired" transition) still
-    gets swept. The one existing expiry test above only ever creates a
-    "pending_approval" intent, so a mutant that narrowed the filter to
-    that single status would pass it anyway."""
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db,
-            strategy_id=strategy_id,
-            symbol="DEMOSTOCK",
-            broker_name="zerodha",
-            intent_expiry_seconds=90,
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-        row.status = "approved"
-        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-        await db.commit()
-
-    async with db_session_factory() as db:
-        expired_count = await expire_stale_intents(db)
-    assert expired_count == 1
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-    assert row.status == "expired"
-
-
-async def test_does_not_expire_intents_still_within_their_window(db_session_factory):
-    """The comparison is `expires_at <= now`, not something that fires
-    early -- an intent well inside its window must be left completely
-    alone by the sweep."""
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db,
-            strategy_id=strategy_id,
-            symbol="DEMOSTOCK",
-            broker_name="zerodha",
-            intent_expiry_seconds=300,
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-
-    async with db_session_factory() as db:
-        expired_count = await expire_stale_intents(db)
-    assert expired_count == 0
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-    assert row.status == "pending_approval"
-
-
-async def test_does_not_touch_intents_already_in_a_terminal_state(db_session_factory):
-    """The sweep only ever targets "pending_approval"/"approved" -- a
-    rejected intent whose expires_at has long passed must never be swept
-    or counted, since it's already resolved and the sweep isn't the thing
-    that resolved it."""
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-        row.status = "rejected"
-        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-        await db.commit()
-
-    async with db_session_factory() as db:
-        expired_count = await expire_stale_intents(db)
-    assert expired_count == 0
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-    assert row.status == "rejected"
-
-
-async def test_approving_an_intent_reaches_the_broker_and_writes_order_and_trade_rows(
-    db_session_factory,
-):
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-
-    adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="LIVE_OID_1"))
-
-    async with db_session_factory() as db:
-        approved = await approve_live_order_intent(
-            db,
-            intent.id,
-            approved_by="risk-manager-1",
+            subscription_id=subscription.id,
+            tick_price=106.0,
             adapter=adapter,
             regulatory_provider=_REGULATORY_PROVIDER,
         )
 
-    assert approved.status == "submitted"
-    assert approved.resulting_order_id is not None
+    assert intent is not None
+    assert intent.status == "submitted"
+    assert intent.intent_type == "entry"
+    assert intent.side == "buy"
+    assert intent.resulting_order_id is not None
+    # No human ever approved this -- both fields stay honestly empty.
+    assert intent.approved_by is None
+    assert intent.approved_at is None
 
     async with db_session_factory() as db:
-        order = await db.get(Order, approved.resulting_order_id)
+        order = await db.get(Order, intent.resulting_order_id)
         assert order.status == "submitted"
-        assert order.broker_order_id == "LIVE_OID_1"
-
-        trades = (await db.execute(select(Trade).where(Trade.order_id == order.id))).scalars().all()
-        assert len(trades) == 1
-        assert trades[0].price == 106.5
-        assert trades[0].status == "pending_confirmation"
+        assert order.broker_order_id == "AUTO_OID_1"
 
         audit_entries = (
             (
@@ -400,6 +286,7 @@ async def test_approving_an_intent_reaches_the_broker_and_writes_order_and_trade
             .all()
         )
         assert len(audit_entries) == 1
+        assert audit_entries[0].actor == "system:autonomous-safety-layer"
 
         position = (
             (await db.execute(select(LivePosition).where(LivePosition.strategy_id == strategy_id)))
@@ -410,7 +297,11 @@ async def test_approving_an_intent_reaches_the_broker_and_writes_order_and_trade
         assert position.avg_cost == 106.5
 
 
-async def test_rejecting_an_intent_never_reaches_the_broker(db_session_factory):
+async def test_master_switch_checked_before_kill_switch(db_session_factory):
+    """Autonomy left disabled + a tripped Kill Switch: generation must
+    return `None` cleanly, NOT raise `KillSwitchTrippedError` -- proving
+    the master-switch-off check short-circuits before the Kill Switch is
+    ever consulted, per this module's own documented check order."""
     strategy_id = await _make_live_eligible_strategy(db_session_factory)
     async with db_session_factory() as db:
         subscription = await enroll_in_live_trading(
@@ -418,195 +309,23 @@ async def test_rejecting_an_intent_never_reaches_the_broker(db_session_factory):
         )
     async with db_session_factory() as db:
         await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+
+    async with db_session_factory() as db:
+        await check_drawdown(db, "live", current_equity=50_000, peak_equity=100_000)
+
     async with db_session_factory() as db:
         intent = await generate_live_order_intent(
             db, subscription_id=subscription.id, tick_price=106.0
         )
-
-    async with db_session_factory() as db:
-        rejected = await reject_live_order_intent(db, intent.id, rejected_by="risk-manager-1")
-
-    assert rejected.status == "rejected"
-    assert rejected.resulting_order_id is None
-
-    async with db_session_factory() as db:
-        orders = (await db.execute(select(Order))).scalars().all()
-    assert orders == [], "a rejected intent must never produce an order"
-
-    # Re-approving a rejected intent must be refused, not silently retried.
-    async with db_session_factory() as db:
-        with pytest.raises(IntentNotPendingError):
-            await approve_live_order_intent(
-                db,
-                intent.id,
-                approved_by="risk-manager-1",
-                adapter=_mock_adapter(lambda r: httpx.Response(500)),
-                regulatory_provider=_REGULATORY_PROVIDER,
-            )
+    assert intent is None
 
 
-async def test_approving_an_already_expired_intent_is_refused(db_session_factory):
+async def test_kill_switch_tripped_blocks_generation_when_autonomy_enabled(db_session_factory):
+    """The acceptance-critical behavior carried over from the original
+    design: with autonomy ON, a tripped Kill Switch must block intent
+    GENERATION itself -- no `LiveOrderIntent` row created at all."""
     strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db, subscription_id=subscription.id, tick_price=106.0
-        )
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-        await db.commit()
-
-    async with db_session_factory() as db:
-        with pytest.raises(IntentExpiredError):
-            await approve_live_order_intent(
-                db,
-                intent.id,
-                approved_by="risk-manager-1",
-                adapter=_mock_adapter(lambda r: httpx.Response(500)),
-                regulatory_provider=_REGULATORY_PROVIDER,
-            )
-
-    async with db_session_factory() as db:
-        row = await db.get(LiveOrderIntent, intent.id)
-    assert row.status == "expired"
-
-
-async def test_batch_authorization_auto_approves_and_submits_within_bounds(db_session_factory):
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-
-    now = datetime.now(UTC)
-    async with db_session_factory() as db:
-        batch = await create_batch_authorization(
-            db,
-            strategy_id=strategy_id,
-            authorized_by="risk-manager-1",
-            max_intents=3,
-            max_notional_per_intent=1_000_000.0,
-            window_start=now - timedelta(minutes=1),
-            window_end=now + timedelta(minutes=30),
-        )
-
-    adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="BATCH_OID"))
-
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db,
-            subscription_id=subscription.id,
-            tick_price=106.0,
-            adapter=adapter,
-            regulatory_provider=_REGULATORY_PROVIDER,
-        )
-
-    assert intent.status == "submitted"
-    assert intent.batch_authorization_id == batch.id
-    assert intent.approved_by == "batch:risk-manager-1"
-
-    async with db_session_factory() as db:
-        refreshed_batch = await db.get(type(batch), batch.id)
-    assert refreshed_batch.intents_used == 1
-
-
-async def test_batch_authorization_never_lets_a_client_exceed_its_count_bound(db_session_factory):
-    """The acceptance-critical server-side enforcement: an authorization
-    already at its intent count cap must never auto-approve one more,
-    even though the batch row itself still exists and could be named."""
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-
-    now = datetime.now(UTC)
-    async with db_session_factory() as db:
-        batch = await create_batch_authorization(
-            db,
-            strategy_id=strategy_id,
-            authorized_by="risk-manager-1",
-            max_intents=1,
-            max_notional_per_intent=1_000_000.0,
-            window_start=now - timedelta(minutes=1),
-            window_end=now + timedelta(minutes=30),
-        )
-        # Simulate the cap already being exhausted by a prior tick.
-        batch.intents_used = 1
-        await db.commit()
-
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db,
-            subscription_id=subscription.id,
-            tick_price=106.0,
-            adapter=_mock_adapter(lambda r: httpx.Response(500)),
-            regulatory_provider=_REGULATORY_PROVIDER,
-        )
-
-    assert intent.status == "pending_approval", "an exhausted batch must never auto-approve"
-    assert intent.batch_authorization_id is None
-
-
-async def test_batch_authorization_never_lets_a_client_exceed_its_notional_cap(db_session_factory):
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
-    async with db_session_factory() as db:
-        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
-
-    now = datetime.now(UTC)
-    async with db_session_factory() as db:
-        await create_batch_authorization(
-            db,
-            strategy_id=strategy_id,
-            authorized_by="risk-manager-1",
-            max_intents=5,
-            # Deliberately far below what a real entry's notional would be
-            # (initial_capital * position_size_pct/100 ~= a few thousand),
-            # so this specific intent can never qualify no matter what a
-            # client might claim.
-            max_notional_per_intent=1.0,
-            window_start=now - timedelta(minutes=1),
-            window_end=now + timedelta(minutes=30),
-        )
-
-    async with db_session_factory() as db:
-        intent = await generate_live_order_intent(
-            db,
-            subscription_id=subscription.id,
-            tick_price=106.0,
-            adapter=_mock_adapter(lambda r: httpx.Response(500)),
-            regulatory_provider=_REGULATORY_PROVIDER,
-        )
-
-    assert intent.status == "pending_approval", "notional over the cap must never auto-approve"
-    assert intent.batch_authorization_id is None
-
-
-async def test_a_tripped_kill_switch_stops_intent_generation_not_just_approval(db_session_factory):
-    """The acceptance-critical Build Spec §12.2 behavior: a tripped kill
-    switch must block intent GENERATION, not merely approval/submission --
-    no LiveOrderIntent row is created at all, for a tick that would
-    otherwise clearly have produced one."""
-    strategy_id = await _make_live_eligible_strategy(db_session_factory)
-    async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
-        )
+    subscription = await _enroll_and_enable_autonomy(db_session_factory, strategy_id)
     async with db_session_factory() as db:
         await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
 
@@ -627,42 +346,363 @@ async def test_a_tripped_kill_switch_stops_intent_generation_not_just_approval(d
             .scalars()
             .all()
         )
-    assert intents == [], "a tripped kill switch must block intent creation, not just approval"
+    assert intents == [], "a tripped kill switch must block intent creation, not just submission"
 
 
-async def test_kill_switch_tripped_between_generation_and_approval_still_blocks_submission(
-    db_session_factory,
-):
-    """Generation-time blocking is additive, not a replacement for the
-    existing submission-time check: a switch tripped after a pending
-    intent already exists must still block it reaching the broker."""
+async def test_kill_switch_tripped_mid_flight_still_blocks_submission(db_session_factory):
+    """Part 1.4's required case: with no multi-minute human-decision
+    window left for a trip to happen during, the only window that still
+    matters is the few milliseconds inside one `generate_live_order_intent`
+    call. Simulated here via a broker double whose `get_quote` trips the
+    switch as a side effect right before returning -- the Kill Switch was
+    off when generation started, but `_submit_intent_to_broker`'s own
+    re-check (via `create_order_intent`) must still catch it and fail the
+    intent, never place the order."""
     strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(db_session_factory, strategy_id)
     async with db_session_factory() as db:
-        subscription = await enroll_in_live_trading(
-            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+
+    class _TripKillSwitchMidFlightAdapter:
+        broker_name = "zerodha"
+
+        def __init__(self, session_factory):
+            self._session_factory = session_factory
+
+        async def get_quote(self, symbol: str) -> BrokerQuote:
+            async with self._session_factory() as db:
+                await check_drawdown(db, "live", current_equity=50_000, peak_equity=100_000)
+            return BrokerQuote(
+                symbol=symbol, last_price=106.5, bid=None, ask=None, timestamp=datetime.now(UTC)
+            )
+
+        async def place_order(self, order: OrderRequest):
+            raise AssertionError(
+                "the kill switch tripped mid-flight -- place_order must never be called"
+            )
+
+    adapter = _TripKillSwitchMidFlightAdapter(db_session_factory)
+
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=adapter,
+            regulatory_provider=_REGULATORY_PROVIDER,
         )
+
+    assert intent.status == "failed"
+    assert intent.resulting_order_id is None
+
+    async with db_session_factory() as db:
+        orders = (await db.execute(select(Order))).scalars().all()
+    assert orders == [], "a kill switch tripped mid-flight must still block the order"
+
+
+async def test_standing_cap_blocks_a_runaway_signal_loop(db_session_factory):
+    """Part 3.3's required case: a strategy misconfigured to fire an
+    entry signal on every tick regardless of its own position (simulated
+    here by forcing the position back to flat before each call, so a
+    real BUY candidate is produced every single time -- exactly the
+    "fires on every tick" misconfiguration) must stop generating real
+    orders once it hits `max_intents_per_window`, independent of and
+    well before the Kill Switch would ever matter."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(
+        db_session_factory, strategy_id, max_intents_per_window=3, rate_limit_window_minutes=60
+    )
+    async with db_session_factory() as db:
+        sub_row = await db.get(LiveTradingSubscription, subscription.id)
+        sub_row.last_signal_type = "BUY"
+        await db.commit()
+
+    adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="RUNAWAY_OID"))
+
+    real_statuses: list[str] = []
+    for _ in range(8):
+        async with db_session_factory() as db:
+            position = (
+                (
+                    await db.execute(
+                        select(LivePosition).where(LivePosition.strategy_id == strategy_id)
+                    )
+                )
+                .scalars()
+                .one_or_none()
+            )
+            if position is not None:
+                position.quantity = 0
+                position.avg_cost = 0.0
+                await db.commit()
+
+        async with db_session_factory() as db:
+            intent = await generate_live_order_intent(
+                db,
+                subscription_id=subscription.id,
+                tick_price=106.0,
+                adapter=adapter,
+                regulatory_provider=_REGULATORY_PROVIDER,
+            )
+        assert intent is not None
+        real_statuses.append(intent.status)
+
+    submitted = [s for s in real_statuses if s == "submitted"]
+    capped = [s for s in real_statuses if s == "capped"]
+    assert (
+        len(submitted) == 3
+    ), f"expected exactly the cap's worth of real orders, got {real_statuses}"
+    assert len(capped) == 5
+
+    async with db_session_factory() as db:
+        orders = (await db.execute(select(Order))).scalars().all()
+    assert len(orders) == 3, "the broker must never see more orders than the standing cap allows"
+
+    async with db_session_factory() as db:
+        capped_audit = (
+            (
+                await db.execute(
+                    select(AuditLog).where(AuditLog.action == "live_order_intent.capped")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(capped_audit) == 5, "every cap rejection must be audited, never silently dropped"
+
+
+async def test_standing_notional_cap_blocks_an_oversized_intent(db_session_factory):
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(
+        db_session_factory,
+        strategy_id,
+        # Deliberately far below what a real entry's notional would be
+        # (initial_capital * position_size_pct/100 ~= a few thousand), so
+        # this specific intent can never qualify no matter the tick price.
+        max_notional_per_intent=1.0,
+    )
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+
+    def _explode(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the broker must never be called for a notional-capped intent")
+
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=_mock_adapter(_explode),
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+
+    assert intent.status == "capped"
+    assert intent.resulting_order_id is None
+
+
+async def test_intent_expires_safely_when_unactioned_past_its_window(db_session_factory):
+    """The one rare case a `generated` row outlives its own generation
+    call: no broker adapter configured at generation time."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(
+        db_session_factory, strategy_id, intent_expiry_seconds=90
+    )
     async with db_session_factory() as db:
         await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
     async with db_session_factory() as db:
         intent = await generate_live_order_intent(
             db, subscription_id=subscription.id, tick_price=106.0
         )
-    assert intent.status == "pending_approval"
+    assert intent.status == "generated"
+
+    # Force it into the past rather than sleeping 90s in a test.
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
 
     async with db_session_factory() as db:
-        await check_drawdown(db, "live", current_equity=50_000, peak_equity=100_000)
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 1
 
     async with db_session_factory() as db:
-        approved = await approve_live_order_intent(
-            db,
-            intent.id,
-            approved_by="risk-manager-1",
-            adapter=_mock_adapter(lambda r: httpx.Response(500)),
-            regulatory_provider=_REGULATORY_PROVIDER,
-        )
-
-    assert approved.status == "failed"
+        row = await db.get(LiveOrderIntent, intent.id)
+    assert row.status == "expired"
 
     async with db_session_factory() as db:
         orders = (await db.execute(select(Order))).scalars().all()
-    assert orders == [], "a kill switch tripped before submission must still block it"
+    assert orders == [], "an expired intent must never have produced an order"
+
+
+async def test_expires_a_historical_pre_phase18_pending_approval_row_too(db_session_factory):
+    """The sweep's status filter still includes 'pending_approval'/
+    'approved' -- not because new code ever writes them, but so a
+    historical row left over from before Phase 18 still gets swept
+    correctly rather than stuck forever."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        )
+
+    async with db_session_factory() as db:
+        historical = LiveOrderIntent(
+            strategy_id=strategy_id,
+            symbol=subscription.symbol,
+            side="buy",
+            quantity=10,
+            intent_type="entry",
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            status="pending_approval",
+        )
+        db.add(historical)
+        await db.commit()
+        await db.refresh(historical)
+
+    async with db_session_factory() as db:
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 1
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, historical.id)
+    assert row.status == "expired"
+
+
+async def test_does_not_expire_intents_still_within_their_window(db_session_factory):
+    """The comparison is `expires_at <= now`, not something that fires
+    early -- an intent well inside its window must be left completely
+    alone by the sweep."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(
+        db_session_factory, strategy_id, intent_expiry_seconds=300
+    )
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db, subscription_id=subscription.id, tick_price=106.0
+        )
+    assert intent.status == "generated"
+
+    async with db_session_factory() as db:
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 0
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+    assert row.status == "generated"
+
+
+async def test_does_not_touch_intents_already_in_a_terminal_state(db_session_factory):
+    """The sweep only ever targets unsubmitted statuses -- a `submitted`
+    intent whose `expires_at` has long passed must never be swept or
+    counted, since it's already resolved and the sweep isn't the thing
+    that resolved it."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(db_session_factory, strategy_id)
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=_mock_adapter(_quote_and_order_handler(106.5)),
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+    assert intent.status == "submitted"
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+
+    async with db_session_factory() as db:
+        expired_count = await expire_stale_intents(db)
+    assert expired_count == 0
+
+    async with db_session_factory() as db:
+        row = await db.get(LiveOrderIntent, intent.id)
+    assert row.status == "submitted"
+
+
+async def test_set_autonomous_trading_requires_an_explicit_actor(db_session_factory):
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        )
+
+    async with db_session_factory() as db:
+        with pytest.raises(ValueError):
+            await set_autonomous_trading(db, subscription.id, enabled=True, actor="")
+
+
+async def test_set_autonomous_trading_writes_an_audit_entry_only_on_a_real_change(
+    db_session_factory,
+):
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        subscription = await enroll_in_live_trading(
+            db, strategy_id=strategy_id, symbol="DEMOSTOCK", broker_name="zerodha"
+        )
+
+    async with db_session_factory() as db:
+        enabled = await set_autonomous_trading(
+            db, subscription.id, enabled=True, actor="risk-manager-1"
+        )
+    assert enabled.autonomous_trading_enabled is True
+    assert enabled.autonomy_enabled_by == "risk-manager-1"
+    assert enabled.autonomy_enabled_at is not None
+
+    # Idempotent re-enable: no new audit entry, no state change.
+    async with db_session_factory() as db:
+        await set_autonomous_trading(db, subscription.id, enabled=True, actor="risk-manager-2")
+
+    async with db_session_factory() as db:
+        entries = (
+            (
+                await db.execute(
+                    select(AuditLog).where(
+                        AuditLog.action == "live_trading_subscription.autonomy_enabled"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(entries) == 1
+
+    async with db_session_factory() as db:
+        disabled = await set_autonomous_trading(
+            db, subscription.id, enabled=False, actor="risk-manager-1"
+        )
+    assert disabled.autonomous_trading_enabled is False
+    assert disabled.autonomy_enabled_by is None
+    assert disabled.autonomy_enabled_at is None
+
+
+async def test_enroll_rejects_a_non_positive_standing_cap(db_session_factory):
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        with pytest.raises(ValueError):
+            await enroll_in_live_trading(
+                db,
+                strategy_id=strategy_id,
+                symbol="DEMOSTOCK",
+                broker_name="zerodha",
+                max_intents_per_window=0,
+            )
+
+
+async def test_intent_expiry_window_too_long_is_rejected_at_enrollment(db_session_factory):
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    async with db_session_factory() as db:
+        with pytest.raises(IntentExpiryWindowTooLongError):
+            await enroll_in_live_trading(
+                db,
+                strategy_id=strategy_id,
+                symbol="DEMOSTOCK",
+                broker_name="zerodha",
+                intent_expiry_seconds=301,
+            )

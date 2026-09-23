@@ -1,8 +1,10 @@
-"""Live Trading API acceptance tests (Build Spec §12): the full HTTP
-flow -- strategy promotion, live-eligibility sign-off, enrollment, intent
-generation, and approve/reject -- with RBAC enforced throughout and a
-mocked broker adapter injected via dependency override (no real
-credentials or network egress needed).
+"""Live Trading API acceptance tests (Build Spec §12, redesigned by
+Phase 18): the full HTTP flow -- strategy promotion, live-eligibility
+sign-off, enrollment, the master autonomy switch, and intent generation
+-- with RBAC enforced throughout and a mocked broker adapter injected via
+dependency override (no real credentials or network egress needed).
+There is no approve/reject endpoint anymore -- see
+src/api/routes/live_trading.py's module docstring.
 """
 
 import httpx
@@ -136,7 +138,72 @@ async def test_enroll_requires_live_eligible_strategy(client, make_user):
     assert resp.status_code == 409
 
 
-async def test_full_enroll_generate_approve_cycle_reaches_the_broker(client, make_user):
+async def test_enroll_defaults_to_autonomy_disabled_with_conservative_caps(client, make_user):
+    await make_user("admin1b@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
+    admin_token = await _login(client, "admin1b@example.com", "supersecret1")
+    await make_user("risk1b@example.com", "supersecret1", Role.RISK_MANAGER)
+    risk_token = await _login(client, "risk1b@example.com", "supersecret1")
+
+    strategy_id = await _promote_to_live_eligible(client, admin_token, risk_token)
+
+    enroll_resp = await client.post(
+        "/api/v1/live-trading/subscriptions",
+        json={"strategy_id": strategy_id, "symbol": "DEMOSTOCK", "broker_name": "zerodha"},
+        headers=_auth(admin_token),
+    )
+    assert enroll_resp.status_code == 201
+    body = enroll_resp.json()
+    assert body["autonomous_trading_enabled"] is False
+    assert body["autonomy_enabled_by"] is None
+    assert body["autonomy_enabled_at"] is None
+    assert body["max_intents_per_window"] == 5
+    assert body["rate_limit_window_minutes"] == 60
+    assert body["max_notional_per_intent"] == 50_000.0
+
+
+async def test_generate_intent_with_autonomy_disabled_returns_null_and_writes_nothing(
+    client, make_user
+):
+    await make_user("admin1c@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
+    admin_token = await _login(client, "admin1c@example.com", "supersecret1")
+    await make_user("risk1c@example.com", "supersecret1", Role.RISK_MANAGER)
+    risk_token = await _login(client, "risk1c@example.com", "supersecret1")
+
+    strategy_id = await _promote_to_live_eligible(client, admin_token, risk_token)
+    enroll_resp = await client.post(
+        "/api/v1/live-trading/subscriptions",
+        json={"strategy_id": strategy_id, "symbol": "DEMOSTOCK", "broker_name": "zerodha"},
+        headers=_auth(admin_token),
+    )
+    subscription_id = enroll_resp.json()["id"]
+    await client.post(
+        "/api/v1/live-trading/daily-signal-run",
+        json={"as_of": "2026-09-09"},
+        headers=_auth(admin_token),
+    )
+
+    def _explode(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("autonomy is disabled -- the broker must never be called")
+
+    app.dependency_overrides[get_live_broker_adapter] = lambda: ZerodhaKiteAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(_explode)
+    )
+    try:
+        generate_resp = await client.post(
+            f"/api/v1/live-trading/subscriptions/{subscription_id}/generate-intent",
+            json={"tick_price": 106.0},
+            headers=_auth(admin_token),
+        )
+        assert generate_resp.status_code == 200
+        assert generate_resp.json() is None
+
+        intents_resp = await client.get("/api/v1/live-trading/intents", headers=_auth(admin_token))
+        assert intents_resp.json() == []
+    finally:
+        _clear_adapter_override()
+
+
+async def test_full_enroll_enable_autonomy_generate_cycle_reaches_the_broker(client, make_user):
     await make_user("admin2@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
     admin_token = await _login(client, "admin2@example.com", "supersecret1")
     await make_user("risk2@example.com", "supersecret1", Role.RISK_MANAGER)
@@ -165,6 +232,14 @@ async def test_full_enroll_generate_approve_cycle_reaches_the_broker(client, mak
     assert len(daily_resp.json()) == 1
     assert daily_resp.json()[0]["id"] == subscription_id
 
+    autonomy_resp = await client.post(
+        f"/api/v1/live-trading/subscriptions/{subscription_id}/autonomy",
+        json={"enabled": True},
+        headers=_auth(risk_token),
+    )
+    assert autonomy_resp.status_code == 200
+    assert autonomy_resp.json()["autonomous_trading_enabled"] is True
+
     _override_adapter(price=106.5, order_id="LIVE_API_OID")
     try:
         generate_resp = await client.post(
@@ -175,17 +250,11 @@ async def test_full_enroll_generate_approve_cycle_reaches_the_broker(client, mak
         assert generate_resp.status_code == 200
         intent_body = generate_resp.json()
         assert intent_body is not None
-        assert intent_body["status"] == "pending_approval"
+        assert intent_body["status"] == "submitted"
         assert intent_body["intent_type"] == "entry"
-        intent_id = intent_body["id"]
-
-        approve_resp = await client.post(
-            f"/api/v1/live-trading/intents/{intent_id}/approve", headers=_auth(risk_token)
-        )
-        assert approve_resp.status_code == 200
-        approved_body = approve_resp.json()
-        assert approved_body["status"] == "submitted"
-        assert approved_body["resulting_order_id"] is not None
+        assert intent_body["resulting_order_id"] is not None
+        # No human ever approved this -- honestly empty, not fabricated.
+        assert intent_body["approved_by"] is None
 
         orders_resp = await client.get(
             f"/api/v1/live-trading/strategies/{strategy_id}/orders", headers=_auth(admin_token)
@@ -213,14 +282,44 @@ async def test_full_enroll_generate_approve_cycle_reaches_the_broker(client, mak
         _clear_adapter_override()
 
 
-async def test_reject_intent_never_reaches_the_broker_over_http(client, make_user):
+async def test_set_autonomy_requires_live_signoff_role(client, make_user):
     await make_user("admin3@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
     admin_token = await _login(client, "admin3@example.com", "supersecret1")
+    await make_user("pm3@example.com", "supersecret1", Role.PORTFOLIO_MANAGER)
+    pm_token = await _login(client, "pm3@example.com", "supersecret1")
     await make_user("risk3@example.com", "supersecret1", Role.RISK_MANAGER)
     risk_token = await _login(client, "risk3@example.com", "supersecret1")
 
     strategy_id = await _promote_to_live_eligible(client, admin_token, risk_token)
+    enroll_resp = await client.post(
+        "/api/v1/live-trading/subscriptions",
+        json={"strategy_id": strategy_id, "symbol": "DEMOSTOCK", "broker_name": "zerodha"},
+        headers=_auth(admin_token),
+    )
+    subscription_id = enroll_resp.json()["id"]
 
+    forbidden_resp = await client.post(
+        f"/api/v1/live-trading/subscriptions/{subscription_id}/autonomy",
+        json={"enabled": True},
+        headers=_auth(pm_token),
+    )
+    assert forbidden_resp.status_code == 403
+
+    not_found_resp = await client.post(
+        "/api/v1/live-trading/subscriptions/00000000-0000-0000-0000-000000000000/autonomy",
+        json={"enabled": True},
+        headers=_auth(admin_token),
+    )
+    assert not_found_resp.status_code == 404
+
+
+async def test_list_subscriptions_surfaces_autonomy_state(client, make_user):
+    await make_user("admin4@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
+    admin_token = await _login(client, "admin4@example.com", "supersecret1")
+    await make_user("risk4@example.com", "supersecret1", Role.RISK_MANAGER)
+    risk_token = await _login(client, "risk4@example.com", "supersecret1")
+
+    strategy_id = await _promote_to_live_eligible(client, admin_token, risk_token)
     enroll_resp = await client.post(
         "/api/v1/live-trading/subscriptions",
         json={"strategy_id": strategy_id, "symbol": "DEMOSTOCK", "broker_name": "zerodha"},
@@ -229,69 +328,17 @@ async def test_reject_intent_never_reaches_the_broker_over_http(client, make_use
     subscription_id = enroll_resp.json()["id"]
 
     await client.post(
-        "/api/v1/live-trading/daily-signal-run",
-        json={"as_of": "2026-09-09"},
-        headers=_auth(admin_token),
+        f"/api/v1/live-trading/subscriptions/{subscription_id}/autonomy",
+        json={"enabled": True},
+        headers=_auth(risk_token),
     )
 
-    # A broker that raises on any call -- if approve/generate ever touched
-    # it during generation, this test would fail with an error instead of
-    # asserting cleanly. generate-intent itself never calls the broker
-    # (only approval does), so this also doubles as proof of that.
-    def _explode(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("the broker must never be called for a rejected intent")
-
-    adapter = ZerodhaKiteAdapter(
-        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(_explode)
+    listing_resp = await client.get(
+        "/api/v1/live-trading/subscriptions", headers=_auth(admin_token)
     )
-    app.dependency_overrides[get_live_broker_adapter] = lambda: adapter
-    try:
-        generate_resp = await client.post(
-            f"/api/v1/live-trading/subscriptions/{subscription_id}/generate-intent",
-            json={"tick_price": 106.0},
-            headers=_auth(admin_token),
-        )
-        assert generate_resp.status_code == 200
-        intent_body = generate_resp.json()
-        assert intent_body is not None
-        assert intent_body["status"] == "pending_approval"
-
-        reject_resp = await client.post(
-            f"/api/v1/live-trading/intents/{intent_body['id']}/reject", headers=_auth(risk_token)
-        )
-        assert reject_resp.status_code == 200
-        assert reject_resp.json()["status"] == "rejected"
-
-        orders_resp = await client.get(
-            f"/api/v1/live-trading/strategies/{strategy_id}/orders", headers=_auth(admin_token)
-        )
-        assert orders_resp.json() == []
-    finally:
-        _clear_adapter_override()
-
-
-async def test_approve_and_reject_require_live_signoff_role(client, make_user):
-    await make_user("admin4@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
-    admin_token = await _login(client, "admin4@example.com", "supersecret1")
-    await make_user("pm4@example.com", "supersecret1", Role.PORTFOLIO_MANAGER)
-    pm_token = await _login(client, "pm4@example.com", "supersecret1")
-
-    approve_resp = await client.post(
-        "/api/v1/live-trading/intents/00000000-0000-0000-0000-000000000000/approve",
-        headers=_auth(pm_token),
+    assert listing_resp.status_code == 200
+    by_id = {s["id"]: s for s in listing_resp.json()}
+    assert by_id[subscription_id]["autonomous_trading_enabled"] is True
+    assert by_id[subscription_id]["autonomy_enabled_by"] == str(
+        (await client.get("/api/v1/auth/me", headers=_auth(risk_token))).json()["id"]
     )
-    assert approve_resp.status_code == 403
-
-    reject_resp = await client.post(
-        "/api/v1/live-trading/intents/00000000-0000-0000-0000-000000000000/reject",
-        headers=_auth(pm_token),
-    )
-    assert reject_resp.status_code == 403
-
-    # A SystemAdministrator is allowed through RBAC but the intent
-    # doesn't exist -- 404, not 403, proves RBAC passed for this role.
-    not_found_resp = await client.post(
-        "/api/v1/live-trading/intents/00000000-0000-0000-0000-000000000000/approve",
-        headers=_auth(admin_token),
-    )
-    assert not_found_resp.status_code == 404

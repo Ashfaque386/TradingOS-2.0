@@ -8,9 +8,14 @@ flows named in that pass:
 - `strategy-lifecycle.spec.ts` -- the full strategy pipeline (Ideation ->
   Backtesting -> Paper Trading -> Live Eligible), including both human
   sign-off decisions along the way.
-- `signoff-queue.spec.ts` -- the live-order-intent half of the Sign-off
-  Queue: a human approving an intent before it expires, and the
-  sweep-driven expiry of one nobody actioned in time.
+- `live-autonomy.spec.ts` -- Phase 18's redesigned live-trading flow:
+  enrolling a subscription, autonomy off producing no order at all,
+  the confirmation-modal-gated master switch auto-resolving the next real
+  signal with no per-order approval step, a tripped Kill Switch still
+  blocking generation with autonomy on, and the standing rate cap
+  stopping a runaway signal independent of the Kill Switch. Replaces the
+  old `signoff-queue.spec.ts` (a human approving/rejecting a pending live
+  order intent), which no longer applies -- see Non-Negotiable Rule #1.
 - `kill-switch.spec.ts` -- a real drawdown tripping the paper kill
   switch, and a RiskManager/SystemAdministrator resetting it from the
   Overview console (PortfolioManager sees the tripped state but no reset
@@ -39,10 +44,10 @@ You need, running locally (not via Docker):
      .venv/bin/python -m alembic upgrade head
    ```
 2. **Redis** on the default port (`redis-server`).
-3. **The backend**, on port 8000, with a broker configured so live-intent
-   approval has something to submit to (fixture credentials, never real
-   ones -- see `backend/scripts/seed_e2e_users.py`'s own docstring for why
-   this is fixture setup, not a production credential-bootstrap path):
+3. **The backend**, on port 8000 (`live-autonomy.spec.ts` saves its own
+   fixture Zerodha credentials via the real API mid-test, never real ones
+   -- see `backend/scripts/seed_e2e_users.py`'s own docstring for why this
+   pattern is fixture setup, not a production credential-bootstrap path):
    ```
    cd backend
    DATABASE_URL=postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos \
@@ -66,26 +71,14 @@ You need, running locally (not via Docker):
      JWT_SECRET_KEY=dev-only-secret-do-not-use-in-production \
      .venv/bin/python scripts/seed_e2e_users.py
    ```
-6. **Zerodha broker credentials** (fixture values -- the live-intent
-   approve spec needs *some* broker configured so `build_configured_adapter`
-   doesn't return `None`; with fixture credentials the realistic outcome
-   is the broker call itself failing, which is what the spec asserts):
-   ```
-   TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email":"e2e.admin@example.com","password":"E2eAdminPass!2026"}' \
-     | python3 -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
-   curl -s -X POST http://localhost:8000/api/v1/broker-credentials/zerodha \
-     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-     -d '{"api_key":"e2e-test-api-key","api_secret":"e2e-test-api-secret","access_token":"e2e-test-access-token"}'
-   ```
-
 Then, from the repo root:
 
 ```
 npx playwright test
 ```
 
-`backend/scripts/seed_e2e_live_intent.py` is called by `signoff-queue.spec.ts`
+`backend/scripts/seed_e2e_live_intent.py` is called by `live-autonomy.spec.ts`
 itself (via `e2e/utils.ts`'s `runSeedScript`), not something you run by
-hand.
+hand -- it seeds a fresh LiveEligible strategy per test; the spec itself
+enrolls it into live trading, flips its autonomy switch, and saves its own
+fixture Zerodha credentials through the real API.

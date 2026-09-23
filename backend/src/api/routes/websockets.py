@@ -22,12 +22,13 @@ data, not a new parallel event-logging system invented for this phase:
   every run when no `run_id` query param is given (the Overview page's
   organization-wide feed), or one run's own channel when scoped (the
   Mission Control task drawer's per-run activity log).
-- `sign-off-queue`: polls the same tables `GET /approvals` and
-  `GET /live-trading/intents` already query, pushing a full snapshot on
-  each tick -- every `LiveOrderIntent.expires_at` in that snapshot is the
-  real database timestamp `generate_live_order_intent` wrote, so a page
-  refresh reconnects and receives that exact same value, never a
-  client-restarted timer.
+- `sign-off-queue`: polls `GET /approvals` (strategy promotion/live-
+  eligibility sign-off, unchanged) on each tick. Its `intents` field is
+  now always `[]` -- Phase 18 removed the per-order human-approval gate
+  entirely, so no `LiveOrderIntent` is ever `pending_approval` again; the
+  field stays on the wire shape rather than being a breaking payload
+  change, but nothing populates it. See `_signoff_snapshot`'s own
+  comment.
 - `ticks`: `redis.xread(..., block=...)` against the real per-symbol
   Redis Stream Phase 7 already writes to (`src.engine.paper_trading.
   tick_feed`), blocking-polled rather than sleep-looped so a new tick is
@@ -45,7 +46,6 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.api.routes.live_trading import _intent_response
 from src.api.schemas import ApprovalRequestResponse
 from src.api.ws_auth import authenticate_websocket
 from src.core.db import get_db, get_session_factory
@@ -53,7 +53,6 @@ from src.core.redis_client import get_redis
 from src.engine.paper_trading.tick_feed import tick_stream_key
 from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
-from src.models.live_order_intent import LiveOrderIntent
 
 logger = structlog.get_logger(__name__)
 
@@ -191,17 +190,6 @@ async def _signoff_snapshot(db: AsyncSession) -> dict:
         .scalars()
         .all()
     )
-    intents = (
-        (
-            await db.execute(
-                select(LiveOrderIntent)
-                .where(LiveOrderIntent.status == "pending_approval")
-                .order_by(LiveOrderIntent.expires_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
     return {
         "type": "snapshot",
         "server_time": datetime.now(UTC).isoformat(),
@@ -209,7 +197,10 @@ async def _signoff_snapshot(db: AsyncSession) -> dict:
             json.loads(ApprovalRequestResponse.model_validate(a).model_dump_json())
             for a in approvals
         ],
-        "intents": [json.loads(_intent_response(i).model_dump_json()) for i in intents],
+        # Phase 18 removed the per-order human-approval gate -- no
+        # LiveOrderIntent is ever "pending_approval" anymore, so this is
+        # always empty, not a query that happens to return nothing.
+        "intents": [],
     }
 
 

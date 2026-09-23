@@ -1,13 +1,17 @@
-"""Live Trading API (Build Spec §12): enroll a live-eligible strategy,
-watch its sign-off queue in real time (`GET .../intents`), and
-approve/reject individual intents -- the only two ways a `LiveOrderIntent`
-ever reaches a broker or is safely disposed of, per-intent, every time.
-The manual intent-generation trigger exercises the exact same
-`generate_live_order_intent` function the scheduler
-(`src.orchestration.live_trading_scheduler`) calls automatically; useful
-for ops visibility and demonstration, never a required step -- the
-pipeline generates intents on its own once a strategy is live-eligible
-and enrolled.
+"""Live Trading API (Build Spec §12, redesigned by Phase 18): enroll a
+live-eligible strategy, configure its standing rate/notional caps, flip
+its master autonomy switch, and watch `GET .../intents` for the real,
+audited history of what the deterministic safety layer let through or
+blocked. There is no approve/reject endpoint anymore -- Non-Negotiable
+Rule #1 (CLAUDE.md) means no code path here ever asks a human to
+authorize a specific order; the only human action left is the standing,
+account-level `POST .../autonomy` switch. The manual intent-generation
+trigger exercises the exact same `generate_live_order_intent` function
+the scheduler (`src.orchestration.live_trading_scheduler`) calls
+automatically; useful for ops visibility and demonstration, never a
+required step -- the pipeline generates (and, once autonomy is enabled,
+submits) intents on its own once a strategy is live-eligible and
+enrolled.
 """
 
 import uuid
@@ -18,15 +22,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
-    CreateBatchAuthorizationRequest,
     EnrollLiveTradingRequest,
     GenerateLiveOrderIntentRequest,
-    LiveBatchAuthorizationResponse,
     LiveOrderIntentResponse,
     LivePositionResponse,
     LiveTradingSubscriptionResponse,
     OrderResponse,
     RunDailySignalRequest,
+    SetAutonomousTradingRequest,
     TradeResponse,
 )
 from src.brokers.base import BrokerAdapter
@@ -43,31 +46,33 @@ from src.models.order import Order
 from src.models.trade import Trade
 from src.models.user import User
 from src.orchestration.live_trading import (
-    IntentExpiredError,
-    IntentNotFoundError,
-    IntentNotPendingError,
-    NoBrokerConfiguredError,
     StrategyNotLiveEligibleError,
-    approve_live_order_intent,
-    create_batch_authorization,
+    SubscriptionNotFoundError,
     enroll_in_live_trading,
     generate_live_order_intent,
-    reject_live_order_intent,
     run_live_daily_signal_generation,
+    set_autonomous_trading,
 )
 
 router = APIRouter(prefix="/live-trading", tags=["live-trading"])
 
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
-# Approving/rejecting a live order intent and authorizing a pre-approval
-# batch are real-money actions -- same stricter pair as kill-switch reset
-# and live-eligibility sign-off (src/api/routes/kill_switch.py,
-# src/api/routes/strategies.py), not the broader _OPERATOR_ROLES above.
+# Flipping the master autonomy switch is the single highest-stakes action
+# in this codebase (Non-Negotiable Rule #1) -- same stricter pair as
+# kill-switch reset and live-eligibility sign-off
+# (src/api/routes/kill_switch.py, src/api/routes/strategies.py), not the
+# broader _OPERATOR_ROLES above.
 _LIVE_SIGNOFF_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.RISK_MANAGER]
 
 register_policy("POST", "/api/v1/live-trading/subscriptions", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/live-trading/daily-signal-run", roles=_OPERATOR_ROLES)
+register_policy("GET", "/api/v1/live-trading/subscriptions", roles=list(Role))
 register_policy("GET", "/api/v1/live-trading/subscriptions/{subscription_id}", roles=list(Role))
+register_policy(
+    "POST",
+    "/api/v1/live-trading/subscriptions/{subscription_id}/autonomy",
+    roles=_LIVE_SIGNOFF_ROLES,
+)
 register_policy("GET", "/api/v1/live-trading/strategies/{strategy_id}/position", roles=list(Role))
 register_policy("GET", "/api/v1/live-trading/strategies/{strategy_id}/orders", roles=list(Role))
 register_policy("GET", "/api/v1/live-trading/orders/{order_id}/trades", roles=list(Role))
@@ -78,13 +83,6 @@ register_policy(
     "/api/v1/live-trading/subscriptions/{subscription_id}/generate-intent",
     roles=_OPERATOR_ROLES,
 )
-register_policy(
-    "POST", "/api/v1/live-trading/intents/{intent_id}/approve", roles=_LIVE_SIGNOFF_ROLES
-)
-register_policy(
-    "POST", "/api/v1/live-trading/intents/{intent_id}/reject", roles=_LIVE_SIGNOFF_ROLES
-)
-register_policy("POST", "/api/v1/live-trading/batch-authorizations", roles=_LIVE_SIGNOFF_ROLES)
 
 # Module-level honest-stub providers, same instances used by
 # src.orchestration.live_trading_scheduler in src.main's lifespan.
@@ -118,6 +116,14 @@ def _subscription_response(sub: LiveTradingSubscription) -> LiveTradingSubscript
         position_size_pct=sub.position_size_pct,
         intent_expiry_seconds=sub.intent_expiry_seconds,
         is_active=sub.is_active,
+        autonomous_trading_enabled=sub.autonomous_trading_enabled,
+        autonomy_enabled_by=sub.autonomy_enabled_by,
+        autonomy_enabled_at=sub.autonomy_enabled_at.isoformat()
+        if sub.autonomy_enabled_at
+        else None,
+        max_intents_per_window=sub.max_intents_per_window,
+        rate_limit_window_minutes=sub.rate_limit_window_minutes,
+        max_notional_per_intent=sub.max_notional_per_intent,
     )
 
 
@@ -157,6 +163,9 @@ async def enroll_subscription_endpoint(
             stop_loss_pct=body.stop_loss_pct,
             position_size_pct=body.position_size_pct,
             intent_expiry_seconds=body.intent_expiry_seconds,
+            max_intents_per_window=body.max_intents_per_window,
+            rate_limit_window_minutes=body.rate_limit_window_minutes,
+            max_notional_per_intent=body.max_notional_per_intent,
             created_by=str(current_user.id),
         )
     except StrategyNotLiveEligibleError as exc:
@@ -175,6 +184,39 @@ async def run_daily_signal_endpoint(
         db, price_provider=_PRICE_PROVIDER, as_of=as_of
     )
     return [_subscription_response(s) for s in updated]
+
+
+@router.get("/subscriptions")
+async def list_subscriptions_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[LiveTradingSubscriptionResponse]:
+    """Every live-trading subscription, autonomous or not -- what the
+    Overview console's autonomy banner (Non-Negotiable Rule #1's "answer
+    'is real money being risked autonomously right now'") and the
+    Strategies page's live-trading panel both read from."""
+    result = await db.execute(select(LiveTradingSubscription))
+    return [_subscription_response(s) for s in result.scalars().all()]
+
+
+@router.post("/subscriptions/{subscription_id}/autonomy")
+async def set_autonomy_endpoint(
+    subscription_id: uuid.UUID,
+    body: SetAutonomousTradingRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> LiveTradingSubscriptionResponse:
+    """The one place in this codebase that can turn a subscription
+    autonomous. RBAC-restricted to `_LIVE_SIGNOFF_ROLES` (same tier as
+    kill-switch reset); the frontend's own confirmation step is what
+    makes this hard to flip by accident, not this endpoint's shape."""
+    try:
+        subscription = await set_autonomous_trading(
+            db, subscription_id, enabled=body.enabled, actor=str(current_user.id)
+        )
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _subscription_response(subscription)
 
 
 @router.get("/subscriptions/{subscription_id}")
@@ -308,78 +350,3 @@ async def generate_intent_endpoint(
     except KillSwitchTrippedError as exc:
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=str(exc)) from exc
     return _intent_response(intent) if intent is not None else None
-
-
-@router.post("/intents/{intent_id}/approve")
-async def approve_intent_endpoint(
-    intent_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role),
-    adapter: BrokerAdapter | None = Depends(get_live_broker_adapter),
-) -> LiveOrderIntentResponse:
-    try:
-        intent = await approve_live_order_intent(
-            db,
-            intent_id,
-            approved_by=str(current_user.id),
-            adapter=adapter,
-            regulatory_provider=_REGULATORY_PROVIDER,
-        )
-    except IntentNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except IntentNotPendingError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except IntentExpiredError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except NoBrokerConfiguredError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        ) from exc
-    return _intent_response(intent)
-
-
-@router.post("/intents/{intent_id}/reject")
-async def reject_intent_endpoint(
-    intent_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role),
-) -> LiveOrderIntentResponse:
-    try:
-        intent = await reject_live_order_intent(db, intent_id, rejected_by=str(current_user.id))
-    except IntentNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except IntentNotPendingError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return _intent_response(intent)
-
-
-@router.post("/batch-authorizations", status_code=status.HTTP_201_CREATED)
-async def create_batch_authorization_endpoint(
-    body: CreateBatchAuthorizationRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role),
-) -> LiveBatchAuthorizationResponse:
-    try:
-        authorization = await create_batch_authorization(
-            db,
-            strategy_id=body.strategy_id,
-            authorized_by=str(current_user.id),
-            max_intents=body.max_intents,
-            max_notional_per_intent=body.max_notional_per_intent,
-            window_start=body.window_start,
-            window_end=body.window_end,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-    return LiveBatchAuthorizationResponse(
-        id=authorization.id,
-        strategy_id=authorization.strategy_id,
-        authorized_by=authorization.authorized_by,
-        max_intents=authorization.max_intents,
-        max_notional_per_intent=authorization.max_notional_per_intent,
-        intents_used=authorization.intents_used,
-        window_start=authorization.window_start.isoformat(),
-        window_end=authorization.window_end.isoformat(),
-    )
