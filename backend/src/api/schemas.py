@@ -72,6 +72,13 @@ class RunResponse(BaseModel):
 
 
 class AgentSummaryResponse(BaseModel):
+    """`identity_name`/`emoji`/`avatar`/`theme`/`voice` are the *effective*
+    identity (`EffectiveAgentConfig`, src.gateway.loader) -- `identity_name`
+    always falls back to the fixed roster's own `display_name` when no
+    override exists, matching `display_name` exactly in that case; the
+    other four are genuinely `None` until an operator sets one via `PUT
+    /api/v1/agents/{agent_id}/identity`, never a fabricated default."""
+
     agent_id: str
     display_name: str
     department: str
@@ -80,6 +87,11 @@ class AgentSummaryResponse(BaseModel):
     capabilities: list[str]
     skills: list[str]
     heartbeat_enabled: bool
+    identity_name: str
+    emoji: str | None
+    avatar: str | None
+    theme: str | None
+    voice: str | None
 
 
 class RunPipelineRequest(BaseModel):
@@ -92,6 +104,35 @@ class RunPipelineResponse(BaseModel):
     deployment_result: dict | None
     evaluation_verdict: dict | None
     rejection_count: int
+
+
+class SetAgentIdentityRequest(BaseModel):
+    """Every field optional -- only what's actually being changed needs to
+    be sent, matching `src.gateway.service.set_identity`'s own
+    only-overwrite-what's-given behavior (a field left out keeps its
+    current value, it is never reset to `None`)."""
+
+    name: str | None = Field(default=None, min_length=1)
+    emoji: str | None = None
+    avatar: str | None = None
+    theme: str | None = None
+    voice: str | None = None
+
+
+class PromptVersionResponse(BaseModel):
+    id: uuid.UUID
+    agent_id: str
+    version_number: int
+    content: str
+    status: str
+    diff_from_previous: str | None
+    created_by: str | None
+    created_at: str
+    activated_at: str | None
+
+
+class CreatePromptVersionRequest(BaseModel):
+    content: str = Field(min_length=1)
 
 
 class CreateStrategyRequest(BaseModel):
