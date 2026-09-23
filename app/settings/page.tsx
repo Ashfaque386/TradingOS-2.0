@@ -426,7 +426,8 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
       {canEdit && (
         <>
           {!isLocal && <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
-          {isLocal && <div className="set-cred-field"><Zap className="size-3.5" /><input placeholder={provider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:8080'} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></div>}
+          {isLocal && <div className="set-cred-field"><Zap className="size-3.5" /><input placeholder={provider === 'ollama' ? 'http://host.docker.internal:11434' : 'http://host.docker.internal:8080'} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></div>}
+          {isLocal && <p className="set-redirect-hint">Running the backend in Docker? Use <code>http://host.docker.internal:{provider === 'ollama' ? '11434' : '8080'}</code>, not <code>localhost</code> — inside the container, &quot;localhost&quot; means the container itself, not this machine.</p>}
           <div className="set-cred-actions">
             <button className="set-btn set-btn-ghost" disabled={busy || (isLocal ? !baseUrl : !apiKey)} onClick={handleSave}>Save</button>
             {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleRemove}>Remove</button>}

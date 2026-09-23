@@ -232,19 +232,135 @@ polluted Redis keys deleted afterward. Full backend suite: 818 passed;
 `ruff format --check`/`ruff check` clean on `backend/`; `tsc --noEmit`
 clean on the frontend.
 
-## Parts 1 and 4 — not attempted in this pass
+## Parts 1 and 4 — blocked, then fixed, on the first real local attempt
 
-Real broker OAuth, a real LLM provider/Ollama connection, a real
-Telegram/Discord/Slack message actually arriving, and a live-NSE-hours
-paper-trading smoke test all require two things this session genuinely
-does not have: a real Docker stack (confirmed unrunnable here — `dockerd`
-cannot start), and real developer-console credentials for external
-services this sandbox's egress policy blocks regardless. Per this
-project's own Development & Testing Workflow
-(`docs/CLAUDE.md`), these were always meant to be exercised at
-`D:\TradingOS-2.0\TradingOS-2.0`, not wherever the code was written — this
-pass doesn't change that, it just means Parts 2/3's code is what's ready
-to pull there. Once run locally, update this section (or the Phase 17
-entry in `docs/CLAUDE.md`) with what was actually exercised, honestly,
-the same way every other phase's live-verification paragraph in this
-repo works.
+The user did attempt Parts 1/4 at `D:\TradingOS-2.0\TradingOS-2.0` via
+`docker compose up`, and hit a real, blocking bug before any of it could
+start: every Settings panel (Broker Config, LLM Providers, Notification
+Channels) showed "Not configured" with every Save disabled, and Broker
+Config's error banner showed the literal text `SECRETS_ENCRYPTION_KEY is
+not configured...` verbatim. This section documents the root-cause
+diagnosis and fix, not a guess — each root cause below was confirmed by
+reading the actual code before being called the cause.
+
+### Root cause 1 — not docker-compose.yml, the root `.env.example`
+
+`docker-compose.yml`'s `backend` service already passed
+`SECRETS_ENCRYPTION_KEY` through correctly
+(`SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}`, the same pattern
+as `JWT_SECRET_KEY`) — that was never the bug. The real gap: the repo-root
+`.env.example` (the one a Docker Compose user actually copies to `.env`)
+had **no `SECRETS_ENCRYPTION_KEY` entry at all**, while `backend/.env.example`
+(for a bare, non-Docker `uvicorn` run) documented it fully with the exact
+generation command. A user following the documented Docker path had no
+way to discover the variable existed. All three Settings stores
+(`secrets_store.py`, `llm_provider_store.py`, `channel_store.py`) share
+this one Fernet key and fail with the identical message text, which is
+why all three panels broke identically.
+
+**Fixed:** `.env.example` now documents `SECRETS_ENCRYPTION_KEY` with the
+generation command, matching `backend/.env.example`'s existing model.
+`backend/scripts/api-entrypoint.sh` (shared by both `docker-compose.yml`'s
+`backend` service and `Dockerfile.allinone`'s `[program:api]`) now prints
+a loud, non-fatal startup warning naming the exact panels affected and the
+exact fix if the key is empty — deliberately **not** a hard `exit 1`: the
+codebase's existing design already treats this key as optional (paper
+trading and most other features work fine without it), and the user,
+asked directly, chose the non-fatal-warning design over changing that
+posture. `README.md` and `docs/CLAUDE.md`'s Development & Testing Workflow
+section both now call this out as an explicit first-time-setup step.
+
+### Root cause 2 — a real unhandled-exception bug in local/custom LLM providers
+
+Separately, real: `OllamaClient.complete`/`CustomProviderClient.complete`
+(`backend/src/agents/llm_router.py`) and every branch of `_discover_models`
+(`backend/src/api/routes/llm_providers.py`) made raw `httpx` calls with no
+`except httpx.HTTPError` guard — only an HTTP-status failure was ever
+converted to a friendly `LlmProviderError`; a connection failure (exactly
+what `http://localhost:11434` produces from inside the backend's own
+Docker container, since `localhost` there means the container itself, not
+the host machine running Ollama) was an **unhandled exception**, surfacing
+as a raw 500 rather than a graceful "Test Connection failed" message.
+Confirmed live in this pass: saving `http://127.0.0.1:1` (a real,
+guaranteed-unreachable loopback port, standing in for the exact Docker
+`localhost` trap) as a Custom provider's base URL and hitting `/test`
+returned `{"ok": false, "detail": "custom: connection failed: All
+connection attempts failed"}` over real HTTP once fixed — a genuine
+network failure, handled gracefully, not mocked.
+
+**Fixed:** `OllamaClient.complete`/`CustomProviderClient.complete` now
+catch `httpx.HTTPError` and convert it to a real `LlmProviderError`,
+matching the exact pattern already used everywhere else in this codebase
+for outbound calls (`src.notifications.senders`,
+`src.api.routes.broker_oauth`). `test_llm_provider_endpoint` and
+`list_llm_provider_models_endpoint` (`llm_providers.py`) both also now
+catch `httpx.HTTPError` as a safety net covering every other provider
+client's `complete()`, not just the two named above (the same gap exists,
+e.g., in `AnthropicClient.complete`, confirmed by reading it — left
+uncaught at the client level since that's a pre-existing pattern this
+pass didn't otherwise touch, but now covered by the route-level net
+either way). `docker-compose.yml`'s `backend` service gained
+`extra_hosts: ["host.docker.internal:host-gateway"]`, required for
+`host.docker.internal` to resolve at all under Linux Docker Compose
+(Docker Desktop on Windows/Mac resolves it without this). The Settings
+UI's base-URL field placeholder, which previously read the literal
+(broken) `http://localhost:11434`, now reads the correct
+`http://host.docker.internal:11434`, with explicit help text underneath
+explaining why — the explicit-help-text approach, not a silent
+auto-rewrite of what the user typed, matching this codebase's existing
+idiom (no URL-rewrite utility exists anywhere else in it either).
+
+11 new/updated backend tests
+(`backend/tests/test_agents_llm_router.py`,
+`backend/tests/test_llm_providers_api.py`) cover: a genuine connection
+attempt against an unreachable loopback port for both `OllamaClient` and
+`CustomProviderClient` (no mock transport needed — loopback traffic never
+touches this sandbox's egress proxy, so this is a real network failure,
+not a simulated one), and the `/models` route converting a mocked
+`httpx.ConnectError` into a real 502 rather than an unhandled 500.
+
+### Part 3 (Zerodha vs Upstox) — confirmed live, no code gap
+
+Investigated before assuming a gap: `backend/src/api/routes/broker_oauth.py`
+already implements both brokers fully and symmetrically (Zerodha's real
+Kite Connect login URL and the real SHA-256 checksum'd token exchange;
+Upstox's real authorization-code exchange), and the frontend
+`BrokerConfigCard` (`app/settings/page.tsx`) already renders the same
+redirect-URL box and the same working "Connect" button for both brokers.
+**Live-confirmed in this pass** (not just read): `GET
+/api/v1/broker-credentials` initially showed `redirect_uri: null` for a
+freshly-saved Zerodha credential; calling `GET
+.../zerodha/login-url` once (exactly what clicking "Connect" does)
+returned the real `https://kite.zerodha.com/connect/login?v=3&api_key=...`
+URL and persisted `redirect_uri`, after which the list endpoint showed it
+populated — precisely the behavior the earlier static-code investigation
+predicted. The screenshot's original asymmetry (Upstox showing guidance
+text, Zerodha showing the encryption-key error instead) is fully
+explained by Root Cause 1 above plus Zerodha's Connect never having been
+clicked yet; **no Zerodha-specific code change was needed or made.**
+
+### Part 4 (notifications) — same root cause as Part 1
+
+`backend/src/notifications/channel_store.py`'s `get_notification_channel_store()`
+has the identical `SECRETS_ENCRYPTION_KEY` guard as the broker/LLM stores
+— expected to resolve once the user sets a real key locally, per Root
+Cause 1's fix. Not independently re-broken by anything in this pass; live
+confirmation (saving a real channel, sending a real test message) is the
+user's own next step per Part 4 of their original request.
+
+**Live-verified in this sandbox** (its own Postgres/Redis, the same path
+used throughout this project — Docker itself still cannot run here):
+registered a demo `SystemAdministrator`, saved a Custom LLM provider
+pointed at a real unreachable loopback port, and confirmed both `/test`
+(graceful `ok: false`) and `/models` (real `502`) over genuine HTTP with
+a genuine network failure underneath, not a mock. Saved real-shaped
+Zerodha credentials and confirmed the redirect-URL generate-on-first-call
+behavior end to end. Full backend suite: 827 passed; `ruff format
+--check`/`ruff check` clean; `tsc --noEmit` clean. Demo user, saved
+credentials, and secrets-store files deleted afterward. **Not verified
+here, and still the user's own next step on `D:\TradingOS-2.0\TradingOS-2.0`**:
+a real Docker rebuild picking up these fixes, a real local Ollama
+instance passing Test Connection through the actual container, a real
+completed Zerodha/Upstox OAuth login, and a real notification test
+message arriving — all now unblocked, none of them previously reachable
+before this pass.

@@ -194,7 +194,14 @@ async def test_llm_provider_endpoint(
     started = time.monotonic()
     try:
         payload = await client.complete(model=test_model, prompt="Reply with the single word: ok")
-    except LlmProviderError as exc:
+    except (LlmProviderError, httpx.HTTPError) as exc:
+        # httpx.HTTPError alongside LlmProviderError: OllamaClient/
+        # CustomProviderClient already convert a connection failure into
+        # LlmProviderError themselves (the common case -- a bare
+        # `localhost` base URL from inside the backend's own Docker
+        # container), but this is the safety net for any other client's
+        # complete() that doesn't, so a network blip is a graceful
+        # "ok: false" result here, never an unhandled 500.
         result = LlmProviderTestResult(provider=provider, ok=False, detail=str(exc))
     else:
         latency_ms = (time.monotonic() - started) * 1000
@@ -238,7 +245,14 @@ async def list_llm_provider_models_endpoint(
 
     try:
         models = await _discover_models(provider_enum, client, http_client)
-    except LlmProviderError as exc:
+    except (LlmProviderError, httpx.HTTPError) as exc:
+        # httpx.HTTPError: _discover_models's per-provider branches don't
+        # each convert a connection failure into LlmProviderError the way
+        # OllamaClient.complete/CustomProviderClient.complete now do --
+        # this is the single choke point that keeps a network blip (most
+        # commonly a bare `localhost` base URL from inside the backend's
+        # own Docker container reaching for a host-side Ollama instance)
+        # a real 502 with a real message instead of an unhandled 500.
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return LlmProviderModelsResponse(provider=provider, models=models)
 

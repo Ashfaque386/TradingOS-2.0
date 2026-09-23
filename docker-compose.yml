@@ -55,6 +55,13 @@ services:
       # tick feed fallback, src.brokers.tick_source.build_tick_source).
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       SECRETS_STORE_PATH: /app/secrets/broker_credentials.enc
+    extra_hosts:
+      # Lets the backend reach a host-machine service (e.g. a local Ollama
+      # instance at 11434) via `host.docker.internal` from inside this
+      # container. Docker Desktop (Windows/Mac) already resolves this name
+      # on its own -- this line is what makes it also resolve under plain
+      # Docker Compose on Linux, where it otherwise doesn't exist at all.
+      - "host.docker.internal:host-gateway"
     ports:
       # API_HOST_PORT always publishes — it's the only way to reach the app.
       # BIND_HOST defaults to loopback-only: this port serves the entire
