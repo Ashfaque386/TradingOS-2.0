@@ -231,6 +231,16 @@ export type TodaysPaperPnl = {
 }
 export const getTodaysPaperPnl = () => apiGet<TodaysPaperPnl>('/api/v1/paper-trading/pnl/today')
 
+export type UnrealizedPaperPnl = {
+  as_of: string
+  price_source: 'real' | 'synthetic'
+  unrealized_pnl: number | null
+  positions_priced: number
+  positions_unpriced: number
+}
+export const getUnrealizedPaperPnl = () =>
+  apiGet<UnrealizedPaperPnl>('/api/v1/paper-trading/pnl/unrealized')
+
 // ---- Orchestration runs ----
 export type TaskSummary = {
   id: string

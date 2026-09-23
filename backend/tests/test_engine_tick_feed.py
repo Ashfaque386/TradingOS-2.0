@@ -5,6 +5,8 @@ see every tick.
 
 from src.engine.paper_trading.tick_feed import (
     MockTickSource,
+    Tick,
+    get_latest_tick,
     publish_tick,
     publish_ticks_once,
     read_new_ticks,
@@ -61,8 +63,6 @@ async def test_a_consumer_that_falls_behind_still_sees_every_tick(redis_client):
 
 
 async def test_publish_tick_writes_to_the_symbol_specific_stream(redis_client):
-    from src.engine.paper_trading.tick_feed import Tick
-
     symbol = "TESTTICKFEED_D"
     await redis_client.delete(tick_stream_key(symbol))
 
@@ -70,5 +70,27 @@ async def test_publish_tick_writes_to_the_symbol_specific_stream(redis_client):
     ticks, _cursor = await read_new_ticks(redis_client, symbol)
     assert len(ticks) == 1
     assert ticks[0].price == 123.45
+
+    await redis_client.delete(tick_stream_key(symbol))
+
+
+async def test_get_latest_tick_returns_none_when_nothing_has_been_published(redis_client):
+    symbol = "TESTTICKFEED_E"
+    await redis_client.delete(tick_stream_key(symbol))
+
+    assert await get_latest_tick(redis_client, symbol) is None
+
+
+async def test_get_latest_tick_returns_the_most_recently_published_tick(redis_client):
+    symbol = "TESTTICKFEED_F"
+    await redis_client.delete(tick_stream_key(symbol))
+
+    await publish_tick(redis_client, Tick(symbol=symbol, price=100.0, timestamp_ms=1_000_000))
+    await publish_tick(redis_client, Tick(symbol=symbol, price=105.5, timestamp_ms=2_000_000))
+
+    latest = await get_latest_tick(redis_client, symbol)
+    assert latest is not None
+    assert latest.price == 105.5
+    assert latest.timestamp_ms == 2_000_000
 
     await redis_client.delete(tick_stream_key(symbol))

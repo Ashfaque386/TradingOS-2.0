@@ -76,6 +76,20 @@ async def read_new_ticks(
     return ticks, cursor
 
 
+async def get_latest_tick(redis: Redis, symbol: str) -> Tick | None:
+    """The single most recent tick for `symbol`, or `None` if nothing has
+    ever been published to its stream -- for a read path (e.g. GET
+    /api/v1/paper-trading/pnl/unrealized) that needs "the current price
+    right now" rather than `read_new_ticks`'s drain-since-cursor shape."""
+    entries = await redis.xrevrange(tick_stream_key(symbol), count=1)
+    if not entries:
+        return None
+    _entry_id, fields = entries[0]
+    return Tick(
+        symbol=symbol, price=float(fields["price"]), timestamp_ms=int(fields["timestamp_ms"])
+    )
+
+
 class TickSource(Protocol):
     async def next_tick(self, symbol: str) -> Tick: ...
 

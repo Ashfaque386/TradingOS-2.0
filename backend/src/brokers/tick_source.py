@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from src.brokers.base import BrokerAdapter
 from src.brokers.factory import build_configured_adapter
 from src.engine.paper_trading.tick_feed import MockTickSource, Tick, TickSource
+from src.security.secrets_store import SecretsStoreError, get_secrets_store
 
 
 @dataclass
@@ -40,3 +41,20 @@ def build_tick_source() -> TickSource:
     if adapter is None:
         return MockTickSource()
     return BrokerQuoteTickSource(adapter)
+
+
+def is_broker_configured() -> bool:
+    """Cheap, no-network check for read paths (e.g. GET
+    /api/v1/paper-trading/pnl/unrealized) that need to honestly label a
+    figure as "real" vs "synthetic" without building a full adapter or
+    touching the circuit-breaker registry the way `build_tick_source()`
+    does -- same credential lookup `build_configured_adapter` uses
+    (`SecretsStore.list_configured_brokers`), just without constructing
+    anything. `SECRETS_ENCRYPTION_KEY` unset (the store itself unusable)
+    is honestly "no broker configured", matching
+    `build_configured_adapter`'s own `SecretsStoreError` handling."""
+    try:
+        store = get_secrets_store()
+    except SecretsStoreError:
+        return False
+    return bool(store.list_configured_brokers())
