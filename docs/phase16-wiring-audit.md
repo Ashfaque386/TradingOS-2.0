@@ -417,16 +417,28 @@ serves it. A broker with zero dispatches reports `avg_latency_ms: null`,
 never a fabricated `0.0` — the same never-fabricate-a-metric rule this
 codebase applies everywhere else.
 
-**Host CPU/memory is deliberately still not included** and the frontend
-tile still honestly says "not exposed yet" — it was never one of Build Spec
-§19's five tracked metrics and nothing in this codebase computes it
-anywhere; fabricating a value to fill out the response would have been the
-exact failure mode this whole exercise was built to avoid. Per-provider LLM
-health is likewise still genuinely not exposed and stays labeled as such.
-This is why the title above says "PARTIALLY RESOLVED, by design" rather than
-"RESOLVED" — two of the three named items are real now, one (host
-CPU/memory) was never real anywhere in this codebase and isn't fabricated
-here either.
+**Host CPU/memory** was fixed in a later pass, not this one: Phase 17's
+real-world-testing pass (`docs/phase17-realworld-testing.md`) replaced
+`GET /api/v1/observability/vitals` entirely with `GET
+/api/v1/system/vitals`, reading host CPU/memory directly via `psutil`
+(a real current-value gauge, not a fabricated figure) alongside the
+Prometheus-derived token usage and dispatch latency above.
+
+**Per-provider LLM health — RESOLVED**, also in a later pass
+(`docs/phase17-realworld-testing.md`'s "Overview 'System Vitals' — LLM
+provider health" section). `LlmRouter.health_for()`
+(`backend/src/agents/llm_router.py`) had tracked real per-provider
+failure/success data since Phase 3, but no API route ever read it until
+that pass added `llm_provider_health_vitals()` and wired it into `GET
+/api/v1/system/vitals`'s `llm.provider_health` field, replacing the
+Overview page's stale "not exposed yet" caption with a real per-provider
+status row.
+
+This is why the title above says "PARTIALLY RESOLVED, by design" for
+*this specific pass* — two of the three named items were real as of this
+pass, with the remaining two (host CPU/memory, per-provider LLM health)
+resolved in the later Phase 17 pass referenced above, not fabricated here
+or left permanently unresolved.
 
 7 new backend tests (`test_api_observability.py`) exercise the real,
 process-global Prometheus singletons directly (not mocks) using distinct

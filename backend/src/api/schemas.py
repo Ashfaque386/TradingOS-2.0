@@ -877,14 +877,29 @@ class HostVitals(BaseModel):
     uptime_seconds: float
 
 
+class LlmProviderHealthVitals(BaseModel):
+    """One provider's real failure/success tracking from the live
+    `LlmRouter` singleton (src.agents.llm_router.ProviderHealth) --
+    `last_failure_at`/`last_success_at` are `None` until that provider has
+    genuinely been called at least once this process's lifetime, never a
+    fabricated timestamp."""
+
+    provider: str
+    last_failure_at: str | None
+    last_success_at: str | None
+    served_as_fallback: bool
+
+
 class LlmVitals(BaseModel):
     """`token_usage_today` only ever contains a provider once it has
     genuinely been called today (Asia/Kolkata calendar day) -- a provider
     absent from the dict is honestly "no calls yet today", never a
-    fabricated `0`."""
+    fabricated `0`. `provider_health` is in the router's live fallback
+    order (first entry is the currently-active provider)."""
 
     active_provider: str | None
     token_usage_today: dict[str, int]
+    provider_health: list[LlmProviderHealthVitals]
 
 
 class LatencyVitals(BaseModel):

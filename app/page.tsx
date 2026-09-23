@@ -105,6 +105,38 @@ function PulseScene({ state, reduceMotion }: { state: PulseState; reduceMotion: 
   return <Canvas frameloop={reduceMotion ? 'demand' : 'always'} camera={{ position: [0, 0, 5.4], fov: 42 }} dpr={[1, 1.5]}><ambientLight intensity={.5} /><PulseOrb state={state} reduceMotion={reduceMotion} /><OrbitControls enableZoom={false} enablePan={false} autoRotate={!reduceMotion} autoRotateSpeed={.35} /></Canvas>
 }
 
+function ProviderHealthRow({ entries }: { entries: SystemVitals['llm']['provider_health'] }) {
+  if (entries.length === 0) {
+    return <p className="mt-3 text-[10px] text-muted-foreground">No provider has completed a call yet this process.</p>
+  }
+  return (
+    <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+      {entries.map((entry) => {
+        const failedMoreRecently =
+          entry.last_failure_at !== null &&
+          (entry.last_success_at === null || entry.last_failure_at > entry.last_success_at)
+        const dotClass = failedMoreRecently
+          ? 'bg-rose-400'
+          : entry.last_success_at !== null
+            ? 'bg-emerald-400'
+            : 'bg-muted-foreground/40'
+        const title = failedMoreRecently
+          ? `last failure: ${entry.last_failure_at}`
+          : entry.last_success_at !== null
+            ? `last success: ${entry.last_success_at}`
+            : 'not called yet this process'
+        return (
+          <span key={entry.provider} title={title} className="inline-flex items-center gap-1">
+            <span className={`size-1.5 rounded-full ${dotClass}`} />
+            {entry.provider}
+            {entry.served_as_fallback ? ' (fallback)' : ''}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 function Vitals() {
   const [vitals, setVitals] = useState<SystemVitals | null>(null)
 
@@ -122,7 +154,7 @@ function Vitals() {
   const p50 = vitals?.latency.order_dispatch_p50_ms ?? null
   const overBudget = p95 !== null && vitals !== null && p95 > vitals.latency.budget_ms
 
-  return <section className="pulse-panel p-5"><div className="flex items-center justify-between"><div><p className="eyebrow">SYSTEM VITALS</p><p className="mt-1 text-xs text-muted-foreground">Infrastructure telemetry — current, not historical</p></div><Wifi className="size-4 text-emerald-300" /></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="vital-tile"><div className="flex justify-between text-xs"><span>LLM active provider</span><span className="text-foreground">{vitals?.llm.active_provider ?? '—'}</span></div><p className="mt-3 text-[10px] text-muted-foreground">Provider health is not exposed yet — see docs/CLAUDE.md gaps.</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Token usage</span><span className="text-foreground">{totalTokensToday === null ? '—' : totalTokensToday.toLocaleString()}</span></div><p className="mt-3 text-[10px] text-muted-foreground">Today (IST calendar day) — resets at midnight IST, not "since server start"</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Dispatch latency</span><span className={overBudget ? 'text-rose-300' : 'text-foreground'}>{p95 === null ? 'no recent dispatches' : `p95 ${p95.toFixed(0)}ms`}</span></div><p className="mt-2 font-mono text-[10px] text-muted-foreground">{p50 !== null ? `p50 ${p50.toFixed(0)}ms · ` : ''}trailing {vitals?.latency.window ?? '5m'} · budget {vitals?.latency.budget_ms ?? '—'}ms</p></div><div className="vital-tile"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2"><Cpu className="size-3 text-violet-300" /> Host metrics</span><span className="text-foreground">{vitals ? `${vitals.host.cpu_percent.toFixed(0)}% CPU` : '—'}</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><MemoryStick className="size-3 text-cyan-300" />{vitals ? `${vitals.host.memory_percent.toFixed(0)}% mem · ${vitals.host.memory_used_mb.toFixed(0)}MB used — current` : 'Loading…'}</div></div></div></section>
+  return <section className="pulse-panel p-5"><div className="flex items-center justify-between"><div><p className="eyebrow">SYSTEM VITALS</p><p className="mt-1 text-xs text-muted-foreground">Infrastructure telemetry — current, not historical</p></div><Wifi className="size-4 text-emerald-300" /></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="vital-tile"><div className="flex justify-between text-xs"><span>LLM active provider</span><span className="text-foreground">{vitals?.llm.active_provider ?? '—'}</span></div><ProviderHealthRow entries={vitals?.llm.provider_health ?? []} /></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Token usage</span><span className="text-foreground">{totalTokensToday === null ? '—' : totalTokensToday.toLocaleString()}</span></div><p className="mt-3 text-[10px] text-muted-foreground">Today (IST calendar day) — resets at midnight IST, not "since server start"</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Dispatch latency</span><span className={overBudget ? 'text-rose-300' : 'text-foreground'}>{p95 === null ? 'no recent dispatches' : `p95 ${p95.toFixed(0)}ms`}</span></div><p className="mt-2 font-mono text-[10px] text-muted-foreground">{p50 !== null ? `p50 ${p50.toFixed(0)}ms · ` : ''}trailing {vitals?.latency.window ?? '5m'} · budget {vitals?.latency.budget_ms ?? '—'}ms</p></div><div className="vital-tile"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2"><Cpu className="size-3 text-violet-300" /> Host metrics</span><span className="text-foreground">{vitals ? `${vitals.host.cpu_percent.toFixed(0)}% CPU` : '—'}</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><MemoryStick className="size-3 text-cyan-300" />{vitals ? `${vitals.host.memory_percent.toFixed(0)}% mem · ${vitals.host.memory_used_mb.toFixed(0)}MB used — current` : 'Loading…'}</div></div></div></section>
 }
 
 export default function Home() {

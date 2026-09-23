@@ -364,3 +364,55 @@ instance passing Test Connection through the actual container, a real
 completed Zerodha/Upstox OAuth login, and a real notification test
 message arriving — all now unblocked, none of them previously reachable
 before this pass.
+
+## Overview "System Vitals" — LLM provider health, the last genuinely stale gap
+
+Phase 16 Follow-up E explicitly left "per-provider LLM health" unresolved
+("likewise still genuinely not exposed and stays labeled as such"), and
+this pass's own `GET /api/v1/system/vitals` rebuild (above) didn't touch
+it either — the Overview page's LLM tile kept a literal "Provider health
+is not exposed yet — see docs/CLAUDE.md gaps." caption even after every
+other vitals figure went real. This was verified to still be a real gap,
+not stale copy describing an already-fixed problem: `grep` across every
+API route confirmed nothing ever read `LlmRouter.health_for()`, even
+though the router has tracked real per-provider `ProviderHealth`
+(`last_failure_at`, `last_success_at`, `served_as_fallback`) since Phase
+3, updated on every real completion call by `orchestration/strategies.py`,
+`orchestration/chat.py`, `orchestration/strategy_suggestions.py`, and
+`notifications/inbound_router.py`.
+
+**Fixed:** `LlmRouter.fallback_order()` (`backend/src/agents/llm_router.py`)
+is a new public read-only wrapper around the existing private
+`_fallback_order()` (no preferred-provider override), and
+`llm_provider_health_vitals()` reads the real, process-wide
+`get_llm_router()` singleton — the same instance every real caller above
+already mutates, never a fresh, always-empty router — and returns each
+configured provider's health, in the router's live fallback order,
+converting the internal `time.time()` epoch floats to ISO-8601 timestamps
+(`None` stays `None`, never a fabricated timestamp for a provider that
+hasn't been called yet). `GET /api/v1/system/vitals`
+(`backend/src/api/routes/system.py`) now passes this into
+`build_system_vitals()` as a new `llm.provider_health` field
+(`LlmProviderHealthVitals` in `backend/src/api/schemas.py`). The Overview
+page's LLM tile (`app/page.tsx`) replaces the stale caption with a real
+per-provider status row (a colored dot — green for a real success, red
+for a more-recent real failure, dim for genuinely never called — plus a
+"(fallback)" tag when the provider's last success was served as a
+fallback), with the real timestamp as the row's tooltip.
+
+4 new/updated backend tests
+(`backend/tests/test_agents_llm_router.py`,
+`backend/tests/test_observability_vitals.py`,
+`backend/tests/test_api_system.py`) cover: the real singleton router's
+health surfacing correctly after a real success and a real failure (via
+injected fake clients, same pattern as this module's other router tests),
+a provider that's never been called reporting all-`None`/not-fallback
+rather than a fabricated default, the field's shape flowing correctly
+through `build_system_vitals()`, and the live HTTP route returning a
+non-empty `provider_health` list with the exact documented shape for
+every entry. Full backend suite: 829 passed; `ruff format --check`/`ruff
+check` clean; `tsc --noEmit` clean on the frontend change.
+
+Phase 16 Follow-up E (`docs/phase16-wiring-audit.md`) is updated to mark
+this specific sub-gap resolved rather than leaving stale text claiming it
+is still open.
