@@ -22,12 +22,12 @@ the two highest-risk fixes (a real kill-switch trip via WS, and RBAC across all
   left as explicit follow-ups with reasoning (below) rather than papered over.
   All six were subsequently picked up in follow-up passes: Follow-up A
   (broker circuit-breaker state), Follow-up B (broker-fill reconciliation),
-  Follow-up C (technical indicators), and Follow-up D (live option chain
-  OI/IV/LTP) fully resolved; Follow-up E (System Vitals JSON summary) and
-  Follow-up F (today's paper P&L) partially resolved by design (E covers
-  token usage/dispatch latency only, never host CPU/memory, which was never
-  tracked anywhere in this codebase; F is realized-only) — see each entry
-  below for the full reasoning. No follow-up remains open.
+  Follow-up C (technical indicators), Follow-up D (live option chain
+  OI/IV/LTP), Follow-up E (System Vitals JSON summary, including host
+  CPU/memory and per-provider LLM health in later passes), and Follow-up F
+  (today's paper P&L, including unrealized/mark-to-market P&L in a later
+  pass) all fully resolved — see each entry below for the full reasoning
+  and which pass resolved which part. No follow-up remains open.
 
 ## Gaps found and fixed
 
@@ -506,18 +506,57 @@ the closing fill's own `realized_pnl` (the opening fill's `realized_pnl` is
 always `0.0`, per `apply_fill`'s accounting), and RBAC access for all 4
 roles.
 
-**Deliberately not attempted in this pass: unrealized (mark-to-market)
-P&L.** This still needs a genuine current price per open position, which
-this engine has no non-fabricated source for outside of a configured
-broker's live quote. The one real, already-running candidate — the last
-tick on each symbol's `paper:ticks:{symbol}` Redis stream — is only a real
-market price when a broker is actually configured; otherwise it's
-`MockTickSource`'s synthetic random walk, and conflating the two under one
-undifferentiated "P&L" number would be exactly the kind of ambiguous,
-possibly-synthetic-looking-real figure this audit exists to catch (the same
-reasoning that kept Follow-up E's Prometheus metrics out of a JSON
-endpoint). Left as an explicitly scoped, honestly-labeled follow-up rather
-than rushed.
+**Unrealized (mark-to-market) P&L — RESOLVED in a later pass.** Not
+attempted in this original pass: it needs a genuine current price per
+open position, which this engine has no non-fabricated source for
+outside of a configured broker's live quote or `MockTickSource`'s
+synthetic random walk, and conflating the two under one undifferentiated
+"P&L" number would be exactly the kind of ambiguous, possibly-synthetic-
+looking-real figure this audit exists to catch. Left as an explicitly
+scoped, honestly-labeled follow-up at the time.
+
+Built in a later pass: new `GET /api/v1/paper-trading/pnl/unrealized`
+(`backend/src/api/routes/paper_trading.py`) prices every currently-open
+position (`PaperPosition.quantity != 0`) off the exact real, already-
+running candidate named above — the last tick on each symbol's
+`paper:ticks:{symbol}` Redis stream (`get_latest_tick`, a new `XREVRANGE`
+helper alongside the existing drain-since-cursor `read_new_ticks`) — and
+resolves the labeling concern head-on rather than working around it: a
+new `price_source` field (`"real"` vs `"synthetic"`, from a new
+`is_broker_configured()` check alongside `build_tick_source()`) is always
+present on the response, so the figure is never presented as an
+undifferentiated number. `unrealized_pnl` is a real `0.0` when there
+genuinely are no open positions, but honestly `None` (never a fabricated
+`0.0`) when open positions exist yet none has a published tick to mark
+against — `positions_priced`/`positions_unpriced` say when the figure
+covers less than every open position. Not date-scoped, unlike
+`/pnl/today`: an open position may have been opened on an earlier day
+and is still marked as of now. Overview's KPI strip gained a sixth tile
+(`UNREALIZED P&L · SYNTHETIC`/`· REAL`) reusing the strip's existing
+6-column grid, which already had room for exactly this.
+
+10 new/updated backend tests (`test_engine_tick_feed.py`,
+`test_brokers_tick_source.py`, `test_paper_trading_api.py`) cover:
+`get_latest_tick` against nothing published and against multiple ticks
+(returns the most recent), `is_broker_configured` in all three states
+(no encryption key, an empty store, a real credential), and the full
+HTTP endpoint across zero open positions, an open position marked
+against a real published tick (asserted to the cent against
+`(tick.price - avg_cost) * quantity`), an open position with no tick
+yet, and RBAC across all 4 roles.
+
+**Live-verified** against a real `uvicorn` + local Postgres/Redis:
+`GET /api/v1/paper-trading/pnl/unrealized` on a genuinely pre-existing
+open position from earlier live-verification work in this project's
+history (50 `DEMOSTOCK` @ avg cost `99.64`, still sitting in this dev
+Postgres) first correctly reported `positions_unpriced: 1,
+unrealized_pnl: null` (no tick had ever been published for that symbol
+in this dev Redis) — publishing one real tick at `105.50` via
+`publish_tick` immediately flipped it to `positions_priced: 1,
+unrealized_pnl: 293.0`, exactly `(105.50 - 99.64) * 50`. Demo user and
+the published tick's Redis stream key deleted afterward; the
+pre-existing open position itself left untouched, not created by this
+verification pass.
 
 **Live-verified:** enrolled a real paper-trading subscription on a known
 BUY-signal day, confirmed the endpoint reads `0.0`/`0` fills before any

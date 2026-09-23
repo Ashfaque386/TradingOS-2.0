@@ -9,7 +9,7 @@ import httpx
 from cryptography.fernet import Fernet
 
 from src.brokers.base import BrokerCredentials
-from src.brokers.tick_source import BrokerQuoteTickSource, build_tick_source
+from src.brokers.tick_source import BrokerQuoteTickSource, build_tick_source, is_broker_configured
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.config import get_settings
 from src.engine.paper_trading.tick_feed import MockTickSource
@@ -75,5 +75,45 @@ def test_build_tick_source_uses_broker_quotes_when_credentials_configured(tmp_pa
         source = build_tick_source()
         assert isinstance(source, BrokerQuoteTickSource)
         assert source.adapter.broker_name == "zerodha"
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_is_broker_configured_is_false_with_no_encryption_key(monkeypatch):
+    monkeypatch.delenv("SECRETS_ENCRYPTION_KEY", raising=False)
+    _reset_settings_and_store_caches()
+    try:
+        assert is_broker_configured() is False
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_is_broker_configured_is_false_with_an_empty_store(tmp_path, monkeypatch):
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(tmp_path / "secrets.enc"))
+    _reset_settings_and_store_caches()
+    try:
+        assert is_broker_configured() is False
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_is_broker_configured_is_true_once_a_broker_has_real_credentials(tmp_path, monkeypatch):
+    """Same real credential lookup `build_tick_source()` uses -- proving
+    `is_broker_configured()` agrees with which `TickSource` is actually
+    running, not an independently-drifting check."""
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_settings_and_store_caches()
+    try:
+        store = SecretsStore(store_path, key)
+        store.set_credentials("upstox", BrokerCredentials(api_key="k", access_token="t"))
+        get_secrets_store.cache_clear()
+
+        assert is_broker_configured() is True
+        assert isinstance(build_tick_source(), BrokerQuoteTickSource)
     finally:
         _reset_settings_and_store_caches()

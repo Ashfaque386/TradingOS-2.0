@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, OrbitControls, Sparkles } from '@react-three/drei'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Mesh } from 'three'
-import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi } from 'lucide-react'
+import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
@@ -19,11 +19,13 @@ import {
   type SignoffSnapshot,
   type SystemVitals,
   type TodaysPaperPnl,
+  type UnrealizedPaperPnl,
   getAgents,
   getKillSwitch,
   getMarketHours,
   getSystemVitals,
   getTodaysPaperPnl,
+  getUnrealizedPaperPnl,
   listRuns,
   resetKillSwitch,
 } from '@/lib/api'
@@ -173,17 +175,19 @@ export default function Home() {
   const [resettingMode, setResettingMode] = useState<KillSwitchMode | null>(null)
   const [resetError, setResetError] = useState<string | null>(null)
   const [todaysPnl, setTodaysPnl] = useState<TodaysPaperPnl | null>(null)
+  const [unrealizedPnl, setUnrealizedPnl] = useState<UnrealizedPaperPnl | null>(null)
 
   const canResetKillSwitch = role === 'SystemAdministrator' || role === 'RiskManager'
 
   const load = useCallback(async () => {
-    const [agentsRes, runsRes, paperKs, liveKs, hours, pnl] = await Promise.allSettled([
+    const [agentsRes, runsRes, paperKs, liveKs, hours, pnl, unrealizedPnlRes] = await Promise.allSettled([
       getAgents(),
       listRuns(),
       getKillSwitch('paper'),
       getKillSwitch('live'),
       getMarketHours(),
       getTodaysPaperPnl(),
+      getUnrealizedPaperPnl(),
     ])
     if (agentsRes.status === 'fulfilled') setAgents(agentsRes.value)
     if (runsRes.status === 'fulfilled') setRuns(runsRes.value)
@@ -191,6 +195,7 @@ export default function Home() {
     if (liveKs.status === 'fulfilled') setLiveKillSwitch(liveKs.value)
     if (hours.status === 'fulfilled') setMarketHours(hours.value)
     if (pnl.status === 'fulfilled') setTodaysPnl(pnl.value)
+    if (unrealizedPnlRes.status === 'fulfilled') setUnrealizedPnl(unrealizedPnlRes.value)
   }, [])
 
   useEffect(() => {
@@ -264,6 +269,7 @@ export default function Home() {
         <div><Radio /><span>LIVE RUNS<strong>{liveRunsCount.toString().padStart(2, '0')}</strong></span></div>
         <div className={pendingSignoffs > 0 ? 'kpi-alert' : ''}><AlertTriangle /><span>PENDING SIGN-OFFS<strong>{pendingSignoffs.toString().padStart(2, '0')}</strong></span></div>
         <div><TrendingUp /><span>TODAY'S REALIZED P&L<strong className={todaysPnl === null ? 'text-muted-foreground' : todaysPnl.realized_pnl < 0 ? 'text-rose-300' : todaysPnl.realized_pnl > 0 ? 'text-emerald-300' : ''}>{todaysPnl === null ? '—' : `${todaysPnl.realized_pnl >= 0 ? '+' : '-'}₹${Math.abs(todaysPnl.realized_pnl).toFixed(0)}`}</strong></span></div>
+        <div><LineChart /><span>UNREALIZED P&L{unrealizedPnl ? ` · ${unrealizedPnl.price_source.toUpperCase()}` : ''}<strong className={unrealizedPnl?.unrealized_pnl == null ? 'text-muted-foreground' : unrealizedPnl.unrealized_pnl < 0 ? 'text-rose-300' : unrealizedPnl.unrealized_pnl > 0 ? 'text-emerald-300' : ''}>{unrealizedPnl?.unrealized_pnl == null ? '—' : `${unrealizedPnl.unrealized_pnl >= 0 ? '+' : '-'}₹${Math.abs(unrealizedPnl.unrealized_pnl).toFixed(0)}`}</strong></span></div>
         <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : 'OFF · ARMED'}</strong>
           {killSwitchTripped && canResetKillSwitch && (
             <span className="kill-switch-reset-controls">

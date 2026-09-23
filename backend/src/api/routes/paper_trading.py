@@ -7,10 +7,11 @@ runs itself without either endpoint ever being called.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,12 +24,16 @@ from src.api.schemas import (
     ProcessTickRequest,
     RunDailySignalRequest,
     TodaysPaperPnlResponse,
+    UnrealizedPaperPnlResponse,
 )
+from src.brokers.tick_source import is_broker_configured
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.core.redis_client import get_redis
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
+from src.engine.paper_trading.tick_feed import get_latest_tick
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.models.daily_signal import DailySignal
 from src.models.paper_fill import PaperFill
@@ -47,6 +52,7 @@ _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("POST", "/api/v1/paper-trading/subscriptions", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/paper-trading/pnl/today", roles=list(Role))
+register_policy("GET", "/api/v1/paper-trading/pnl/unrealized", roles=list(Role))
 register_policy("GET", "/api/v1/paper-trading/subscriptions/{subscription_id}", roles=list(Role))
 register_policy(
     "GET", "/api/v1/paper-trading/subscriptions/{subscription_id}/position", roles=list(Role)
@@ -127,6 +133,51 @@ async def todays_paper_pnl_endpoint(
         as_of_date=start_of_day_ist.date().isoformat(),
         realized_pnl=float(total_realized),
         fill_count=fill_count,
+    )
+
+
+@router.get("/pnl/unrealized")
+async def unrealized_paper_pnl_endpoint(
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    _current_user: User = Depends(require_role),
+) -> UnrealizedPaperPnlResponse:
+    """Mark-to-market P&L (docs/phase16-wiring-audit.md Follow-up F, the
+    part /pnl/today deliberately leaves out) for every currently-open
+    position (`PaperPosition.quantity != 0`), priced off the last tick on
+    each symbol's `paper:ticks:{symbol}` stream -- whichever `TickSource`
+    is actually feeding paper trading right now, real broker quotes or
+    `MockTickSource`'s synthetic walk. `price_source` says which one, so
+    the two are never blended into one unlabeled figure. Not date-scoped,
+    unlike /pnl/today: an open position may have been opened on an
+    earlier day and is still marked as of now."""
+    result = await db.execute(select(PaperPosition).where(PaperPosition.quantity != 0))
+    open_positions = result.scalars().all()
+
+    positions_priced = 0
+    positions_unpriced = 0
+    priced_total = 0.0
+    for position in open_positions:
+        tick = await get_latest_tick(redis, position.symbol)
+        if tick is None:
+            positions_unpriced += 1
+            continue
+        positions_priced += 1
+        priced_total += (tick.price - position.avg_cost) * position.quantity
+
+    if not open_positions:
+        unrealized_pnl = 0.0
+    elif positions_priced == 0:
+        unrealized_pnl = None
+    else:
+        unrealized_pnl = priced_total
+
+    return UnrealizedPaperPnlResponse(
+        as_of=datetime.now(UTC).isoformat(),
+        price_source="real" if is_broker_configured() else "synthetic",
+        unrealized_pnl=unrealized_pnl,
+        positions_priced=positions_priced,
+        positions_unpriced=positions_unpriced,
     )
 
 

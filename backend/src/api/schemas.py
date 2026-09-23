@@ -390,6 +390,27 @@ class TodaysPaperPnlResponse(BaseModel):
     fill_count: int
 
 
+class UnrealizedPaperPnlResponse(BaseModel):
+    """Mark-to-market P&L for currently-open paper positions -- not
+    date-scoped, unlike `TodaysPaperPnlResponse`, since a position may
+    have been opened on an earlier day and is still marked as of now.
+    `price_source` is `"real"` only when a broker is actually configured
+    and feeding real quotes into the tick stream, `"synthetic"` when
+    `MockTickSource`'s random walk is the only source -- the two are
+    never blended into one unlabeled number. `unrealized_pnl` is `0.0`
+    when there are genuinely no open positions (a real, correct zero),
+    but `None` when open positions exist yet none of them has a
+    published tick to mark against (unknown, never fabricated as `0.0`).
+    `positions_unpriced` says when the figure covers less than every open
+    position."""
+
+    as_of: str
+    price_source: Literal["real", "synthetic"]
+    unrealized_pnl: float | None
+    positions_priced: int
+    positions_unpriced: int
+
+
 class DailySignalResponse(BaseModel):
     id: uuid.UUID
     subscription_id: uuid.UUID
