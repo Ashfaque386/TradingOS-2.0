@@ -145,6 +145,16 @@ class Settings(BaseSettings):
     # src.observability.metrics compares every real dispatch against.
     order_dispatch_latency_budget_ms: float = 500.0
 
+    # Risk-free rate assumption for src.engine.options_pricing's Black-
+    # Scholes implied-volatility solver (Zerodha's live option chain --
+    # Kite Connect has no options-greeks field of any kind, unlike
+    # Upstox's real broker-reported IV). 7% roughly tracks India's own
+    # short-term government-securities yield at the time this build was
+    # written; every options-IV solver needs some rate assumption, and
+    # this one is a documented, configurable modeling input, never
+    # presented as a measured figure the way a real quote is.
+    risk_free_rate: float = 0.07
+
     # Phase 12 (Build Spec §18): encrypted local store for notification
     # channel config (Telegram/Discord/Slack bot tokens, webhook URLs,
     # inbound signing secrets, verified-sender allowlists) -- same Fernet

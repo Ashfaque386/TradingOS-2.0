@@ -286,6 +286,19 @@ function ProvidersTab() {
   )
 }
 
+function IvCell({ real, computed }: { real: number | null; computed: number | null }) {
+  if (real !== null) return <td className="mono">{real}</td>
+  if (computed !== null) {
+    return (
+      <td className="mono" title="Computed via Black-Scholes from LTP -- not reported by this broker">
+        {computed.toFixed(1)}
+        <span className="atm-tag">CALC</span>
+      </td>
+    )
+  }
+  return <td className="mono">—</td>
+}
+
 function LiveOptionChainPanel() {
   const [underlyingInput, setUnderlyingInput] = useState('')
   const [expiries, setExpiries] = useState<string[] | null>(null)
@@ -370,11 +383,11 @@ function LiveOptionChainPanel() {
               {chain.entries.map((e) => (
                 <tr key={e.strike} className={chain.atm_strike !== null && e.strike === chain.atm_strike ? 'atm-row' : undefined}>
                   <td className="mono">{e.call_oi ?? '—'}</td>
-                  <td className="mono">{e.call_iv ?? '—'}</td>
+                  <IvCell real={e.call_iv} computed={e.call_iv_computed} />
                   <td className="mono">{e.call_ltp ?? '—'}</td>
                   <td className="strike-cell">{e.strike}{chain.atm_strike !== null && e.strike === chain.atm_strike && <span className="atm-tag">ATM</span>}</td>
                   <td className="mono">{e.put_ltp ?? '—'}</td>
-                  <td className="mono">{e.put_iv ?? '—'}</td>
+                  <IvCell real={e.put_iv} computed={e.put_iv_computed} />
                   <td className="mono">{e.put_oi ?? '—'}</td>
                 </tr>
               ))}

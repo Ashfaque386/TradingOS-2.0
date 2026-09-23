@@ -47,6 +47,7 @@ from src.engine.indicators import (
     relative_strength_index,
     simple_moving_average,
 )
+from src.engine.options_pricing import implied_volatility, year_fraction
 from src.engine.paper_trading.market_hours import is_market_open_ist
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.instrument import Instrument
@@ -301,26 +302,61 @@ async def live_option_chain_endpoint(
         if underlying_ltp is not None:
             atm_strike = min(entries, key=lambda e: abs(e.strike - underlying_ltp)).strike
 
+    # Best-effort Black-Scholes IV, only ever filling a gap the broker's
+    # own API genuinely cannot answer (Zerodha -- Kite Connect has no
+    # options-greeks field at all) -- never computed, let alone shown,
+    # when the broker already reported a real call_iv/put_iv (Upstox).
+    # A missing spot price or a malformed/already-elapsed expiry simply
+    # leaves every computed field None, same "best-effort, never breaks
+    # the real per-strike data" posture as the ATM block above.
+    time_to_expiry: float | None = None
+    if underlying_ltp is not None:
+        try:
+            time_to_expiry = year_fraction(
+                date_type.fromisoformat(expiry), datetime.now(UTC).date()
+            )
+        except ValueError:
+            time_to_expiry = None
+    rate = get_settings().risk_free_rate
+
+    def _computed_iv(
+        option_type: str, strike: float, ltp: float | None, real_iv: float | None
+    ) -> float | None:
+        if real_iv is not None or ltp is None or underlying_ltp is None or not time_to_expiry:
+            return None
+        return implied_volatility(
+            option_type=option_type,
+            market_price=ltp,
+            spot=underlying_ltp,
+            strike=strike,
+            time_to_expiry=time_to_expiry,
+            rate=rate,
+        )
+
+    response_entries = [
+        LiveOptionChainEntryResponse(
+            strike=e.strike,
+            call_symbol=e.call_symbol,
+            put_symbol=e.put_symbol,
+            call_ltp=e.call_ltp,
+            put_ltp=e.put_ltp,
+            call_oi=e.call_oi,
+            put_oi=e.put_oi,
+            call_iv=e.call_iv,
+            put_iv=e.put_iv,
+            call_iv_computed=_computed_iv("CE", e.strike, e.call_ltp, e.call_iv),
+            put_iv_computed=_computed_iv("PE", e.strike, e.put_ltp, e.put_iv),
+        )
+        for e in entries
+    ]
+
     return LiveOptionChainResponse(
         broker=adapter.broker_name,
         underlying=underlying,
         expiry=expiry,
         underlying_ltp=underlying_ltp,
         atm_strike=atm_strike,
-        entries=[
-            LiveOptionChainEntryResponse(
-                strike=e.strike,
-                call_symbol=e.call_symbol,
-                put_symbol=e.put_symbol,
-                call_ltp=e.call_ltp,
-                put_ltp=e.put_ltp,
-                call_oi=e.call_oi,
-                put_oi=e.put_oi,
-                call_iv=e.call_iv,
-                put_iv=e.put_iv,
-            )
-            for e in entries
-        ],
+        entries=response_entries,
     )
 
 
