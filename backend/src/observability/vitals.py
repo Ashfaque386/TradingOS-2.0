@@ -161,6 +161,7 @@ async def build_system_vitals(
     prometheus_base_url: str,
     latency_budget_ms: float,
     active_provider: str | None,
+    provider_health: list[dict],
 ) -> dict:
     now = datetime.now(UTC)
     token_usage_today = await get_token_usage_today(redis, token_usage_providers)
@@ -170,6 +171,7 @@ async def build_system_vitals(
         "llm": {
             "active_provider": active_provider,
             "token_usage_today": token_usage_today,
+            "provider_health": provider_health,
         },
         "latency": {
             "order_dispatch_p50_ms": latency["order_dispatch_p50_ms"],

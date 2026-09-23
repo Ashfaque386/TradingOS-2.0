@@ -21,6 +21,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 import httpx
@@ -366,6 +367,13 @@ class LlmRouter:
     def health_for(self, provider: LlmProvider) -> ProviderHealth:
         return self._health[provider]
 
+    def fallback_order(self) -> list[LlmProvider]:
+        """Public read-only wrapper around `_fallback_order()` with no
+        preferred-provider override -- for read-only surfaces like GET
+        /api/v1/system/vitals that need the router's real current
+        fallback order without going through a completion call."""
+        return self._fallback_order()
+
     async def _record_usage(
         self, provider: LlmProvider, prompt_tokens: int | None, completion_tokens: int | None
     ) -> None:
@@ -624,3 +632,35 @@ def active_llm_provider() -> str | None:
         return None
     order = config.infra.llm_providers.order
     return order[0].value if order else None
+
+
+def _iso_or_none(epoch_seconds: float | None) -> str | None:
+    if epoch_seconds is None:
+        return None
+    return datetime.fromtimestamp(epoch_seconds, UTC).isoformat()
+
+
+def llm_provider_health_vitals() -> list[dict]:
+    """Real per-provider failure/success tracking (requirement 1's "per-
+    provider failure tracking", `ProviderHealth` above) -- for GET
+    /api/v1/system/vitals's `llm.provider_health` field, replacing the
+    Overview page's stale "Provider health is not exposed yet" caption.
+    This health data has been tracked on the process-wide `get_llm_router()`
+    singleton since Phase 3 (every real completion call already updates it
+    -- src.orchestration.strategies/chat/strategy_suggestions,
+    src.notifications.inbound_router), it was simply never read by any API
+    route until now. In the router's live fallback order, same as
+    `active_llm_provider()` above."""
+    router = get_llm_router()
+    result = []
+    for provider in router.fallback_order():
+        health = router.health_for(provider)
+        result.append(
+            {
+                "provider": provider.value,
+                "last_failure_at": _iso_or_none(health.last_failure_at),
+                "last_success_at": _iso_or_none(health.last_success_at),
+                "served_as_fallback": health.served_as_fallback,
+            }
+        )
+    return result

@@ -6,6 +6,8 @@ sandbox has no LLM provider keys and blocked egress, so the real httpx
 clients are never exercised here.
 """
 
+from datetime import datetime
+
 import pytest
 
 from src.agents.llm_router import (
@@ -16,6 +18,7 @@ from src.agents.llm_router import (
     LlmRouter,
     LlmRouterExhaustedError,
     OllamaClient,
+    llm_provider_health_vitals,
 )
 from src.gateway.apply import apply_config_text
 from src.gateway.schema import LlmProvider
@@ -267,3 +270,57 @@ async def test_custom_provider_client_reports_a_graceful_error_on_connection_fai
     client = CustomProviderClient(base_url="http://127.0.0.1:1")
     with pytest.raises(LlmProviderError, match="custom: connection failed"):
         await client.complete(model="local-model", prompt="hi")
+
+
+async def test_llm_provider_health_vitals_reports_the_real_singleton_routers_state(
+    db_session_factory, monkeypatch
+):
+    """GET /api/v1/system/vitals's `llm.provider_health` field -- reads
+    the same process-wide `get_llm_router()` singleton every real caller
+    (orchestration/strategies.py, chat.py, notifications/inbound_router.py)
+    already updates, not a fresh, always-empty router."""
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic", "openai"), source="t")
+
+    router = LlmRouter(
+        clients={
+            LlmProvider.ANTHROPIC: _AlwaysFails(),
+            LlmProvider.OPENAI: _AlwaysSucceeds("hi"),
+        }
+    )
+    monkeypatch.setattr("src.agents.llm_router._router", router)
+
+    await router.complete(agent_id="ceo-agent", prompt="hi")
+
+    health = llm_provider_health_vitals()
+    assert [entry["provider"] for entry in health] == ["anthropic", "openai"]
+
+    anthropic_entry, openai_entry = health
+    assert anthropic_entry["last_success_at"] is None
+    assert anthropic_entry["served_as_fallback"] is False
+    # ISO-8601 with timezone, never a raw epoch float.
+    datetime.fromisoformat(anthropic_entry["last_failure_at"])
+
+    assert openai_entry["last_failure_at"] is None
+    assert openai_entry["served_as_fallback"] is True
+    datetime.fromisoformat(openai_entry["last_success_at"])
+
+
+async def test_llm_provider_health_vitals_reports_an_unused_provider_as_honestly_untouched(
+    db_session_factory, monkeypatch
+):
+    async with db_session_factory() as db:
+        await apply_config_text(db, _config_with_order("anthropic"), source="t")
+
+    router = LlmRouter(clients={LlmProvider.ANTHROPIC: _AlwaysSucceeds("hi")})
+    monkeypatch.setattr("src.agents.llm_router._router", router)
+
+    health = llm_provider_health_vitals()
+    assert health == [
+        {
+            "provider": "anthropic",
+            "last_failure_at": None,
+            "last_success_at": None,
+            "served_as_fallback": False,
+        }
+    ]

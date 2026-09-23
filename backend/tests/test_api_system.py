@@ -39,6 +39,15 @@ async def test_system_vitals_returns_the_full_documented_shape_over_real_http(
     }
     assert "active_provider" in body["llm"]
     assert isinstance(body["llm"]["token_usage_today"], dict)
+    assert isinstance(body["llm"]["provider_health"], list)
+    assert body["llm"]["provider_health"], "every configured provider must be listed"
+    for entry in body["llm"]["provider_health"]:
+        assert set(entry.keys()) == {
+            "provider",
+            "last_failure_at",
+            "last_success_at",
+            "served_as_fallback",
+        }
     assert set(body["latency"].keys()) == {
         "order_dispatch_p50_ms",
         "order_dispatch_p95_ms",

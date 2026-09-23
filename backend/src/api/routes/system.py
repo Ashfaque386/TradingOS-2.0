@@ -12,7 +12,7 @@ codebase (not `/metrics`'s unauthenticated Prometheus scrape convention).
 from fastapi import APIRouter, Depends
 from redis.asyncio import Redis
 
-from src.agents.llm_router import active_llm_provider
+from src.agents.llm_router import active_llm_provider, llm_provider_health_vitals
 from src.api.schemas import SystemVitalsResponse
 from src.core.config import get_settings
 from src.core.rbac import Role, register_policy, require_role
@@ -38,5 +38,6 @@ async def system_vitals_endpoint(
         prometheus_base_url=settings.prometheus_url,
         latency_budget_ms=settings.order_dispatch_latency_budget_ms,
         active_provider=active_llm_provider(),
+        provider_health=llm_provider_health_vitals(),
     )
     return SystemVitalsResponse(**payload)

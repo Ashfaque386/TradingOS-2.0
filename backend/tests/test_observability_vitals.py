@@ -152,6 +152,14 @@ async def test_build_system_vitals_assembles_the_full_documented_shape(redis_cli
         prometheus_base_url="http://prometheus.invalid",
         latency_budget_ms=settings.order_dispatch_latency_budget_ms,
         active_provider="anthropic",
+        provider_health=[
+            {
+                "provider": "anthropic",
+                "last_failure_at": None,
+                "last_success_at": "2025-01-06T09:15:00+00:00",
+                "served_as_fallback": False,
+            }
+        ],
     )
     assert set(payload.keys()) == {"host", "llm", "latency", "market", "as_of"}
     assert set(payload["host"].keys()) == {
@@ -161,6 +169,14 @@ async def test_build_system_vitals_assembles_the_full_documented_shape(redis_cli
         "uptime_seconds",
     }
     assert payload["llm"]["active_provider"] == "anthropic"
+    assert payload["llm"]["provider_health"] == [
+        {
+            "provider": "anthropic",
+            "last_failure_at": None,
+            "last_success_at": "2025-01-06T09:15:00+00:00",
+            "served_as_fallback": False,
+        }
+    ]
     assert payload["latency"]["budget_ms"] == settings.order_dispatch_latency_budget_ms
     assert payload["latency"]["window"] == "5m"
     assert isinstance(payload["market"]["is_open"], bool)

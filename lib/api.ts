@@ -819,9 +819,19 @@ export type Instrument = {
 export const listInstruments = () => apiGet<Instrument[]>('/api/v1/market-data/instruments')
 
 // ---- System vitals (Phase 17 real-world testing pass) ----
+export type LlmProviderHealthVitals = {
+  provider: string
+  last_failure_at: string | null
+  last_success_at: string | null
+  served_as_fallback: boolean
+}
 export type SystemVitals = {
   host: { cpu_percent: number; memory_percent: number; memory_used_mb: number; uptime_seconds: number }
-  llm: { active_provider: string | null; token_usage_today: Record<string, number> }
+  llm: {
+    active_provider: string | null
+    token_usage_today: Record<string, number>
+    provider_health: LlmProviderHealthVitals[]
+  }
   latency: {
     order_dispatch_p50_ms: number | null
     order_dispatch_p95_ms: number | null
