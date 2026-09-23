@@ -550,6 +550,14 @@ class EnrollLiveTradingRequest(BaseModel):
     stop_loss_pct: float = Field(default=3.0, gt=0)
     position_size_pct: float = Field(default=5.0, gt=0, le=100)
     intent_expiry_seconds: int = Field(default=90, gt=0, le=300)
+    # Phase 18 Part 3's standing caps -- conservative defaults, editable
+    # here at enrollment (or later via a direct update); never optional
+    # once autonomy is enabled. Deliberately no `autonomous_trading_enabled`
+    # field here -- see EnrollLiveTradingRequest's sibling
+    # SetAutonomousTradingRequest below, the only way to actually enable it.
+    max_intents_per_window: int = Field(default=5, gt=0)
+    rate_limit_window_minutes: int = Field(default=60, gt=0)
+    max_notional_per_intent: float = Field(default=50_000.0, gt=0)
 
 
 class LiveTradingSubscriptionResponse(BaseModel):
@@ -564,6 +572,19 @@ class LiveTradingSubscriptionResponse(BaseModel):
     position_size_pct: float
     intent_expiry_seconds: int
     is_active: bool
+    autonomous_trading_enabled: bool
+    autonomy_enabled_by: str | None
+    autonomy_enabled_at: str | None
+    max_intents_per_window: int
+    rate_limit_window_minutes: int
+    max_notional_per_intent: float
+
+
+class SetAutonomousTradingRequest(BaseModel):
+    """The master switch's only HTTP entry point (Non-Negotiable Rule
+    #1) -- deliberately just one field, no partial-update ambiguity."""
+
+    enabled: bool
 
 
 class GenerateLiveOrderIntentRequest(BaseModel):
@@ -584,25 +605,6 @@ class LiveOrderIntentResponse(BaseModel):
     approved_at: str | None
     resulting_order_id: uuid.UUID | None
     batch_authorization_id: uuid.UUID | None
-
-
-class CreateBatchAuthorizationRequest(BaseModel):
-    strategy_id: uuid.UUID
-    max_intents: int = Field(gt=0)
-    max_notional_per_intent: float = Field(gt=0)
-    window_start: datetime_type
-    window_end: datetime_type
-
-
-class LiveBatchAuthorizationResponse(BaseModel):
-    id: uuid.UUID
-    strategy_id: uuid.UUID
-    authorized_by: str
-    max_intents: int
-    max_notional_per_intent: float
-    intents_used: int
-    window_start: str
-    window_end: str
 
 
 class LivePositionResponse(BaseModel):

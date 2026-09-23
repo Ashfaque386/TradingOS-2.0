@@ -366,46 +366,84 @@ Backtesting → Evaluator →[PASS]→ Optimization → Risk Manager → Deploym
 
 ---
 
-## 12. Live Trading & Order Management — Human-Gated by Design
+## 12. Live Trading & Order Management — Autonomous Execution, Deterministic Safety Layer Only
 
-This is the section that operationalizes the product owner's decision: full autonomy through paper trading, mandatory human validation for anything that touches real money.
+**Phase 18 redesign.** The original design below this heading (human-gated: every order intent sat in `PENDING_APPROVAL` until a person clicked Approve/Reject within an expiry window) is retired. It is kept struck through in this section's history for context, not as a currently-true description of the system. The product owner's decision changed: TradingOS now runs live capital exactly as autonomously as paper capital, matching OpenClaw's own autonomy model — the only thing standing between a real-money order and the broker is the deterministic safety layer (Kill Switch, standing per-strategy rate/notional caps, Compliance Checker, Correlation Constraint, Naked-Options Scanner), never a human clicking Approve. See Non-Negotiable Rule #1 (`docs/CLAUDE.md`) for the precise, binding statement of this; this section describes how it's implemented.
+
+Removing the per-order human gate does **not** remove human control of the system — it moves that control to two places that sit above individual orders: the one-time Go-Live Readiness Gate (unchanged, §7) that admits a strategy to live eligibility at all, and a new, separately-confirmed **master autonomy switch** per strategy (§12.2) that a human must deliberately flip before that strategy's signals can ever reach a broker. Once both are on, execution is synchronous and human-free — there is no queue, no expiry window, and no multi-second decision point for anything to race against.
 
 ### 12.1 Flow
 
 ```
-[Strategy passes Go-Live Readiness Gate]
+[Strategy passes Go-Live Readiness Gate]              ← one-time per strategy, unchanged
         │
         ▼
-[Human sign-off: "approve strategy for live eligibility"]   ← one-time per strategy
+[Human sign-off: "approve strategy for live eligibility"]
         │
         ▼
-[LiveExecutionPipeline generates order INTENTS automatically]
-  (same tick-driven signal logic as the paper engine, running live)
+[Human enrolls the strategy in live trading]           ← creates a LiveTradingSubscription,
+        │                                                 autonomous_trading_enabled defaults
+        │                                                 to FALSE even here — no exceptions
+        ▼
+[Human explicitly flips the "Live Autonomous Trading"   ← its own confirmation step (not a
+ master switch ON for this strategy]                       plain toggle), its own audit-log
+        │                                                   entry, one flip = one strategy
+        ▼
+[A triggering tick calls generate_live_order_intent]   ← every tick, scheduler or manual
         │
         ▼
-[live_order_intents table — status: PENDING_APPROVAL]
-        │  appears in the Mission Control Sign-off Queue in real time,
-        │  with a configurable expiry window (default 90 seconds)
-        ▼
-   ┌────────────────┬─────────────────────┐
-   │  Human APPROVES │  Human REJECTS or   │
-   │  within window  │  window expires     │
-   ▼                 ▼
-[Broker submission]  [Intent marked EXPIRED/REJECTED — no order placed]
+   ┌─ 1. Master switch off? ─────────────────► no intent generated at all, nothing written
+   │
+   ▼ on
+   ┌─ 2. Kill Switch tripped ("live")? ───────► no intent generated, KillSwitchTrippedError
+   │       (assert_not_tripped, checked before
+   │        the standing cap and before any
+   │        broker call)
+   ▼ not tripped
+   ┌─ 3. No BUY/SELL candidate this tick? ────► no intent generated (nothing to act on)
+   │
+   ▼ candidate exists
+   ┌─ 4. Standing rate/notional cap exceeded? ─► LiveOrderIntent written with status=CAPPED,
+   │       (max_intents_per_window rolling-         audited (live_order_intent.capped),
+   │        window count, or max_notional_          never reaches the broker
+   │        per_intent) — always-on, mandatory,
+   │        not opt-in
+   ▼ within cap
+[LiveOrderIntent written with status=GENERATED]
         │
         ▼
-[Order/Trade rows written; hash-chained audit entry]
+[_submit_intent_to_broker: re-runs the FULL risk gate    ← create_order_intent: Kill Switch
+ (create_order_intent) synchronously, then places           (again — the only window that
+ the order via the configured BrokerAdapter]                 replaces the old human-decision
+        │                                                     window is these few milliseconds),
+        │                                                     Compliance Checker, Naked-Options
+        │                                                     Scanner, Correlation Constraint
+        ▼
+   ┌────────────────────┬──────────────────────────┐
+   │ Risk gate passes,   │ Risk gate rejects, or     │
+   │ broker accepts      │ broker call fails         │
+   ▼                     ▼
+[status=SUBMITTED;    [status=FAILED; reason
+ Order/Trade rows       logged; no order placed]
+ written; hash-chained
+ audit entry]
 ```
 
-### 12.2 Rules
-- A strategy being "live-eligible" (passed the Go-Live Gate + human sign-off) is necessary but never sufficient — every individual order intent still requires per-intent human approval.
-- The expiry window is configurable per strategy (some setups tolerate a 2-minute window; fast-moving intraday setups may need 30 seconds) but has a hard platform-wide **maximum** of 5 minutes — an intent that a human hasn't acted on is designed to expire into "no trade," never into "auto-trade."
-- A human may also pre-authorize a **bounded batch approval** (e.g., "approve up to 3 intents for Strategy X in the next 30 minutes, max ₹Y notional each") to reduce click-fatigue during active sessions — this is still an explicit, logged human action taken in advance, not silent automation; the bounds are enforced server-side, not just suggested in the UI.
-- Manual order placement (a human directly placing/canceling a live order outside the agent pipeline) remains available via the API exactly as a manual trading terminal would, independent of the intent-queue flow.
-- The Kill Switch, once tripped, halts new order **intents** from being generated at all — it doesn't just block submission at the approval step.
+No step in this flow is skippable and no code path bypasses it: `generate_live_order_intent` is the only function that creates a `LiveOrderIntent`, and it is the only thing the live-trading scheduler and the manual "simulate a tick" UI control both call.
 
-### 12.3 New table: `live_order_intents`
-Columns: `id`, `strategy_id`, `symbol`, `side`, `quantity`, `intent_type` (`entry`/`exit`/`stop`), `generated_at`, `expires_at`, `status` (`pending_approval`/`approved`/`rejected`/`expired`/`submitted`/`failed`), `approved_by`, `approved_at`, `resulting_order_id`, `batch_authorization_id` (nullable, for the pre-authorized batch flow).
+### 12.2 Rules
+- **The master autonomy switch is per-strategy, defaults OFF, and requires its own deliberate action.** `LiveTradingSubscription.autonomous_trading_enabled` cannot be set at enrollment time — `enroll_in_live_trading` has no parameter for it at all, so an autonomous subscription cannot be created by construction, not merely by default. It is flipped only through `set_autonomous_trading(db, subscription_id, *, enabled, actor)`, which requires a real, non-empty `actor`, is idempotent (no-op and no audit row on a call that doesn't change state), and writes a `live_trading_subscription.autonomy_enabled`/`.autonomy_disabled` audit entry on every genuine flip. The frontend gates this behind its own typed confirmation modal (not a plain toggle) and surfaces the current state prominently on the Overview console — more prominently than the Kill Switch state, since "is real money being risked autonomously right now" is the single most consequential fact about the system's current state.
+- **There is no per-order human approval step and no expiry window to race against.** A triggering tick either resolves to a real broker attempt (`submitted`/`failed`) or is blocked by a named, deterministic check (`capped`, a `KillSwitchTrippedError`, or simply no signal) — all inside the one synchronous call to `generate_live_order_intent`. The "intent that nobody acted on in time" failure mode this section used to describe cannot occur, because there is no longer a window in which an intent waits for a human decision. (`expire_stale_intents` still exists, but only to sweep the rare case of a `generated` row that was written but never reached submission, e.g. no broker configured — not to enforce a human decision deadline.)
+- **The standing rate/notional cap is mandatory and always-on for every autonomous strategy, never optional.** Every `LiveTradingSubscription` carries `max_intents_per_window` (default 5), `rate_limit_window_minutes` (default 60), and `max_notional_per_intent` (default ₹50,000) — required, positive-only configuration, not a pre-authorized batch a human sets up in advance. `generate_live_order_intent` checks a rolling-window count of real attempts (`generated`/`submitted`/`failed`/`expired` — a `capped` intent is deliberately excluded from its own count) against `max_intents_per_window`, and the tick's own notional against `max_notional_per_intent`, before ever calling `_submit_intent_to_broker`. An intent that would exceed either bound is written with `status=capped` and audited (`live_order_intent.capped`, with the specific reason and the numbers involved) — logged and inspectable, never silently dropped. This is what stops a misconfigured strategy firing on every tick from doing real damage, independent of and in addition to the Kill Switch.
+- **The pre-authorized batch-approval mechanism (`LiveBatchAuthorization`) is retired**, superseded by the always-on standing cap above — a human no longer needs to pre-authorize a bounded window of trades, because every autonomous strategy already has a bounded window by construction. The table and its FK on `live_order_intents.batch_authorization_id` are kept (migrations are additive-only, Non-Negotiable Rule #8) for historical rows only; no code path creates, reads, or writes a `LiveBatchAuthorization` row anymore.
+- Manual order placement (a human directly placing/canceling a live order outside the agent pipeline) remains available via the API exactly as a manual trading terminal would, independent of the autonomous-generation flow described here.
+- **The Kill Switch, once tripped, halts new order intents from being generated at all** — checked as step 2 of `generate_live_order_intent`, before the standing cap and before any broker call — and is re-checked again inside `_submit_intent_to_broker` via `create_order_intent`, so a trip that happens in the brief window between generation and submission still blocks the order. That few-millisecond window is the only thing that replaces the old multi-minute human-decision window, and it is covered by its own test (`test_kill_switch_tripped_mid_flight_still_blocks_submission`).
+- **Check order is deliberate and never reordered:** master switch, then Kill Switch, then signal computation, then the standing cap, then submission (which re-runs Kill Switch, Compliance Checker, Naked-Options Scanner, and Correlation Constraint together via `create_order_intent`, §8). The master switch is checked before the Kill Switch on purpose — a strategy with autonomy off must produce zero observable live-trading activity regardless of kill-switch state, so "is autonomy on" is always the very first question asked.
+
+### 12.3 Table: `live_order_intents`
+Columns: `id`, `strategy_id`, `symbol`, `side`, `quantity`, `intent_type` (`entry`/`exit`/`stop`), `generated_at`, `expires_at`, `status`, `approved_by`, `approved_at`, `resulting_order_id`, `batch_authorization_id` (nullable, historical rows only — see §12.2).
+
+`status` is `IN ('pending_approval','approved','rejected','expired','submitted','failed','generated','capped')` at the database level — a deliberate union of the old and new vocabularies, not a replacement, because Postgres validates every existing row when a CHECK constraint changes and a real deployment may carry historical `pending_approval` rows (Non-Negotiable Rule #8: migrations are additive). New code never writes `pending_approval`, `approved`, or `rejected` — those three values exist in the constraint only so historical rows remain valid, and are shown in the UI/API exactly as `submitted`/`failed`/`generated`/`capped` are, with no special-casing. `approved_by`/`approved_at` are always `NULL` on every row written by current code (nothing approves an intent anymore); they're read-only historical columns for the same reason. New table: `LiveTradingSubscription` gained `autonomous_trading_enabled` (bool, default false), `autonomy_enabled_by`/`autonomy_enabled_at` (nullable, set only by `set_autonomous_trading`), and the three standing-cap columns described in §12.2, all `CheckConstraint(... > 0)`.
 
 ---
 

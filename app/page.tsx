@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, OrbitControls, Sparkles } from '@react-three/drei'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Mesh } from 'three'
-import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi } from 'lucide-react'
+import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi, Zap } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
@@ -14,6 +14,7 @@ import {
   type AgentSummary,
   type KillSwitchMode,
   type KillSwitchState,
+  type LiveTradingSubscriptionDto,
   type MarketHours,
   type OrganizationRun,
   type SignoffSnapshot,
@@ -26,6 +27,7 @@ import {
   getSystemVitals,
   getTodaysPaperPnl,
   getUnrealizedPaperPnl,
+  listLiveSubscriptions,
   listRuns,
   resetKillSwitch,
 } from '@/lib/api'
@@ -176,11 +178,12 @@ export default function Home() {
   const [resetError, setResetError] = useState<string | null>(null)
   const [todaysPnl, setTodaysPnl] = useState<TodaysPaperPnl | null>(null)
   const [unrealizedPnl, setUnrealizedPnl] = useState<UnrealizedPaperPnl | null>(null)
+  const [liveSubscriptions, setLiveSubscriptions] = useState<LiveTradingSubscriptionDto[]>([])
 
   const canResetKillSwitch = role === 'SystemAdministrator' || role === 'RiskManager'
 
   const load = useCallback(async () => {
-    const [agentsRes, runsRes, paperKs, liveKs, hours, pnl, unrealizedPnlRes] = await Promise.allSettled([
+    const [agentsRes, runsRes, paperKs, liveKs, hours, pnl, unrealizedPnlRes, liveSubsRes] = await Promise.allSettled([
       getAgents(),
       listRuns(),
       getKillSwitch('paper'),
@@ -188,6 +191,7 @@ export default function Home() {
       getMarketHours(),
       getTodaysPaperPnl(),
       getUnrealizedPaperPnl(),
+      listLiveSubscriptions(),
     ])
     if (agentsRes.status === 'fulfilled') setAgents(agentsRes.value)
     if (runsRes.status === 'fulfilled') setRuns(runsRes.value)
@@ -196,6 +200,7 @@ export default function Home() {
     if (hours.status === 'fulfilled') setMarketHours(hours.value)
     if (pnl.status === 'fulfilled') setTodaysPnl(pnl.value)
     if (unrealizedPnlRes.status === 'fulfilled') setUnrealizedPnl(unrealizedPnlRes.value)
+    if (liveSubsRes.status === 'fulfilled') setLiveSubscriptions(liveSubsRes.value)
   }, [])
 
   useEffect(() => {
@@ -241,7 +246,10 @@ export default function Home() {
 
   useWebSocketChannel<SignoffSnapshot>('/ws/sign-off-queue', {}, setSignoff)
 
-  const pendingSignoffs = (signoff?.approvals.length ?? 0) + (signoff?.intents.length ?? 0)
+  // signoff.intents is always [] since Phase 18 -- no LiveOrderIntent is
+  // ever pending_approval anymore.
+  const pendingSignoffs = signoff?.approvals.length ?? 0
+  const autonomousSubscriptions = liveSubscriptions.filter((s) => s.autonomous_trading_enabled && s.is_active)
   const killSwitchTripped = Boolean(paperKillSwitch?.tripped || liveKillSwitch?.tripped)
   const liveRunsCount = runs.filter((r) => NON_TERMINAL_RUN_STATUSES.has(r.status)).length
   const activeAgentsCount = agents.filter((a) => a.enabled).length
@@ -261,6 +269,13 @@ export default function Home() {
   const entityTypes = useMemo(() => ['All', ...Array.from(new Set(activities.map((a) => a.entity_type)))], [activities])
 
   return <ShellLayout><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
+    <div className={`autonomy-banner ${autonomousSubscriptions.length > 0 ? 'autonomy-banner-active' : 'autonomy-banner-idle'}`}>
+      {autonomousSubscriptions.length > 0 ? <Zap /> : <ShieldAlert />}
+      <div>
+        <strong>{autonomousSubscriptions.length > 0 ? `LIVE AUTONOMOUS TRADING IS ON — ${autonomousSubscriptions.length} strateg${autonomousSubscriptions.length === 1 ? 'y' : 'ies'} trading real capital` : 'No strategies are trading autonomously right now'}</strong>
+        <small>{autonomousSubscriptions.length > 0 ? `${autonomousSubscriptions.map((s) => s.symbol).join(', ')} — every real signal submits straight to the broker, gated only by the Kill Switch, Compliance Checker, Correlation Constraint, and each subscription's own standing rate/notional cap.` : 'Every live order requires a strategy’s master autonomy switch to be explicitly enabled first (Strategies page) — no per-order human approval exists once it is.'}</small>
+      </div>
+    </div>
     <section className={`pulse-hero pulse-state-${state.toLowerCase().replaceAll(' ', '-')}`} style={{ '--pulse-color': config.color, '--pulse-glow': config.glow } as React.CSSProperties}>
       <div className="pulse-header"><div><p className="eyebrow">TRADINGOS // ORGANIZATION PULSE</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">The intelligence layer is <span style={{ color: config.color }}>{state.toLowerCase()}.</span></h1><p className="mt-2 text-sm text-muted-foreground">{config.copy} · NSE / BSE synchronized</p></div></div>
       <div className="pulse-orb"><PulseScene state={state} reduceMotion={powerSave} /><div className="pulse-status" style={{ borderColor: config.color, color: config.color }}><span className="status-dot" />{state}<small>{state === 'AWAITING APPROVAL' ? `${pendingSignoffs} pending` : state === 'RISK ALERT' ? 'PERIMETER BREACH' : 'LIVE'}</small></div></div>

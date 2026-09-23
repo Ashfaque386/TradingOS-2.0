@@ -60,33 +60,3 @@ export function parseSeedOutput(output: string): Record<string, string> {
   }
   return result
 }
-
-const API_BASE_URL = 'http://localhost:8000'
-
-/** Mission Control's Live Order Intents queue card shows only symbol/side/
- * quantity/type/time -- never the intent id -- so a test can't disambiguate
- * "the one I just seeded" from a stale pending intent left over by an
- * earlier run (a flaky/interrupted test, or manual debugging against this
- * same dev DB) purely from the DOM. Clearing every pending intent before
- * seeding a fresh one keeps each signoff-queue spec deterministic: exactly
- * one DEMOSTOCK card, always the one this test created. */
-export async function rejectAllPendingLiveIntents(): Promise<void> {
-  const loginRes = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(E2E_USERS.risk),
-  })
-  const { access_token: token } = (await loginRes.json()) as { access_token: string }
-
-  const intentsRes = await fetch(`${API_BASE_URL}/api/v1/live-trading/intents`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  const intents = (await intentsRes.json()) as { id: string; status: string }[]
-
-  for (const intent of intents.filter((i) => i.status === 'pending_approval')) {
-    await fetch(`${API_BASE_URL}/api/v1/live-trading/intents/${intent.id}/reject`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-  }
-}

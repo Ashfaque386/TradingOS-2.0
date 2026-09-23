@@ -9,23 +9,33 @@ from src.models.base import Base
 
 
 class LiveOrderIntent(Base):
-    """Build Spec §12.3, verbatim column set: `id`, `strategy_id`,
-    `symbol`, `side`, `quantity`, `intent_type` (`entry`/`exit`/`stop`),
-    `generated_at`, `expires_at`, `status`
-    (`pending_approval`/`approved`/`rejected`/`expired`/`submitted`/
-    `failed`), `approved_by`, `approved_at`, `resulting_order_id`,
-    `batch_authorization_id` (nullable, for the pre-authorized batch
-    flow).
+    """Build Spec §12.3's column set, `status` vocabulary redesigned in
+    Phase 18: `id`, `strategy_id`, `symbol`, `side`, `quantity`,
+    `intent_type` (`entry`/`exit`/`stop`), `generated_at`, `expires_at`,
+    `status`, `approved_by`, `approved_at`, `resulting_order_id`,
+    `batch_authorization_id`.
 
-    This table is the whole point of Build Spec §12: every row starts
-    `pending_approval` and NOTHING in this codebase writes `submitted`
-    directly from generation -- see src.orchestration.live_trading's
-    module docstring for the full state machine and exactly which
-    functions may perform which transition. `status='failed'` covers both
-    a risk-gate rejection re-checked at approval time and a broker-level
-    failure at submission time; either way, no order reached the broker
-    in a way that could place real capital at risk beyond what the human
-    approver explicitly authorized.
+    **Phase 18 removed the per-order human-approval gate** -- see
+    src.orchestration.live_trading's module docstring for the full
+    rationale and the new state machine. A row now starts `generated`
+    (not `pending_approval`) and resolves, synchronously in the same call
+    that created it, to `submitted` or `failed`; it can also resolve to
+    `capped` (the standing rate/notional cap blocked it before it was
+    ever attempted) or `expired` (the rare case nothing could submit it
+    at generation time -- no broker adapter configured -- and the sweep
+    later resolves it). `approved_by`/`approved_at`/`batch_authorization_id`
+    are never written by any code path anymore -- no human ever approves
+    an intent now, so there is honestly nothing to record there; they
+    stay on this table only because migrations here are additive-only
+    (Non-Negotiable Rule #8), never because they're still meaningful.
+
+    The CHECK constraint below is deliberately the *union* of the old and
+    new vocabularies, not a replacement -- a production database may
+    still hold historical rows with `pending_approval`/`approved`/
+    `rejected` from before this phase, and Postgres validates a new CHECK
+    constraint against every existing row when it's added. New code never
+    writes those three values again; they remain valid only so old rows
+    don't retroactively violate the schema.
     """
 
     __tablename__ = "live_order_intents"
@@ -36,7 +46,7 @@ class LiveOrderIntent(Base):
         ),
         CheckConstraint(
             "status IN ('pending_approval','approved','rejected','expired',"
-            "'submitted','failed')",
+            "'submitted','failed','generated','capped')",
             name="ck_live_order_intents_status",
         ),
     )

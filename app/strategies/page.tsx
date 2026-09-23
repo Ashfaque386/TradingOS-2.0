@@ -1,25 +1,32 @@
 'use client'
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Code2, Gauge, MessageSquare, RefreshCw, ShieldCheck, Sparkles, Terminal, TrendingUp, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Code2, Gauge, MessageSquare, RefreshCw, ShieldAlert, ShieldCheck, Sparkles, Terminal, TrendingUp, X, Zap } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
+  type EnrollLiveTradingInput,
   type GoLiveReadinessInput,
   type GoLiveReadinessResult,
+  type LiveOrderIntentDto,
+  type LiveTradingSubscriptionDto,
   type Strategy,
   type SuggestionDto,
   ApiError,
   approveLiveEligibility,
   checkGoLiveReadiness,
   createStrategy,
+  enrollLiveTrading,
+  generateLiveIntent,
   getStrategy,
+  listLiveSubscriptions,
   listStrategies,
   promoteStrategy,
   regenerateFromSuggestion,
   requestLiveEligibility,
   requestPromotion,
   reviewSuggestion,
+  setLiveAutonomy,
   submitSuggestion,
 } from '@/lib/api'
 
@@ -50,6 +57,136 @@ const READINESS_DEFAULTS: GoLiveReadinessInput = {
   clean_shadow_mode_streak_days: 0,
   live_win_rate: null,
   backtest_win_rate: null,
+}
+
+const ENROLL_DEFAULTS: Omit<EnrollLiveTradingInput, 'strategy_id'> = {
+  symbol: '',
+  broker_name: 'zerodha',
+  builtin_strategy: 'sma_crossover',
+  sma_window: 15,
+  initial_capital: 100_000,
+  stop_loss_pct: 3,
+  position_size_pct: 5,
+  intent_expiry_seconds: 90,
+  max_intents_per_window: 5,
+  rate_limit_window_minutes: 60,
+  max_notional_per_intent: 50_000,
+}
+
+function LiveTradingPanel({ strategyId, canOperate, canSignOffLive }: { strategyId: string; canOperate: boolean; canSignOffLive: boolean }) {
+  const [subscription, setSubscription] = useState<LiveTradingSubscriptionDto | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [enrollForm, setEnrollForm] = useState({ ...ENROLL_DEFAULTS })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState<'enable' | 'disable' | null>(null)
+  const [confirmText, setConfirmText] = useState('')
+  const [tickPrice, setTickPrice] = useState('')
+  const [lastIntent, setLastIntent] = useState<LiveOrderIntentDto | null>(null)
+
+  async function reload() {
+    const subs = await listLiveSubscriptions()
+    setSubscription(subs.find((s) => s.strategy_id === strategyId) ?? null)
+    setLoaded(true)
+  }
+
+  useEffect(() => {
+    reload()
+  }, [strategyId])
+
+  async function handleEnroll(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!enrollForm.symbol.trim() || !enrollForm.broker_name.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      await enrollLiveTrading({
+        strategy_id: strategyId,
+        ...enrollForm,
+        symbol: enrollForm.symbol.trim().toUpperCase(),
+      })
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to enroll in live trading')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleConfirmAutonomy() {
+    if (!subscription) return
+    setBusy(true)
+    setError(null)
+    try {
+      const updated = await setLiveAutonomy(subscription.id, confirmOpen === 'enable')
+      setSubscription(updated)
+      setConfirmOpen(null)
+      setConfirmText('')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update autonomous trading state')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleGenerateTick() {
+    if (!subscription || !tickPrice.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      const intent = await generateLiveIntent(subscription.id, Number(tickPrice))
+      setLastIntent(intent)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to generate an intent from this tick')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!loaded) return null
+
+  return <div className="mt-6 rounded-xl border border-white/10 p-4">
+    <p className="eyebrow">LIVE TRADING · AUTONOMOUS EXECUTION</p>
+    {!subscription && <>
+      <p className="mt-2 text-xs text-muted-foreground">No live-trading subscription yet for this strategy. Enrolling wires it into the autonomous execution pipeline -- autonomy itself stays off, by default, until explicitly enabled below.</p>
+      {canOperate ? <form onSubmit={handleEnroll} className="mt-3 grid grid-cols-2 gap-3 text-xs">
+        <label className="flex flex-col gap-1">Symbol<input value={enrollForm.symbol} onChange={(e) => setEnrollForm({ ...enrollForm, symbol: e.target.value })} placeholder="e.g. RELIANCE" className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
+        <label className="flex flex-col gap-1">Broker<select value={enrollForm.broker_name} onChange={(e) => setEnrollForm({ ...enrollForm, broker_name: e.target.value })} className="rounded border border-white/10 bg-black/20 px-2 py-1"><option value="zerodha">Zerodha</option><option value="upstox">Upstox</option></select></label>
+        <label className="flex flex-col gap-1">Max orders / window (standing cap)<input type="number" value={enrollForm.max_intents_per_window} onChange={(e) => setEnrollForm({ ...enrollForm, max_intents_per_window: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
+        <label className="flex flex-col gap-1">Window (minutes)<input type="number" value={enrollForm.rate_limit_window_minutes} onChange={(e) => setEnrollForm({ ...enrollForm, rate_limit_window_minutes: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
+        <label className="flex flex-col gap-1">Max notional / order (₹)<input type="number" value={enrollForm.max_notional_per_intent} onChange={(e) => setEnrollForm({ ...enrollForm, max_notional_per_intent: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
+        <label className="flex flex-col gap-1">Position size (% of capital)<input type="number" value={enrollForm.position_size_pct} onChange={(e) => setEnrollForm({ ...enrollForm, position_size_pct: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
+        <div className="col-span-2"><button type="submit" disabled={busy || !enrollForm.symbol.trim()} className="button-secondary">Enroll in live trading</button></div>
+      </form> : <p className="mt-3 text-xs text-muted-foreground">Your role can view live-trading state but not enroll a subscription.</p>}
+    </>}
+    {subscription && <>
+      <div className="danger-banner mt-3">
+        {subscription.autonomous_trading_enabled ? <Zap className="size-4 text-emerald-300" /> : <ShieldAlert className="size-4" />}
+        <div>
+          <strong className={subscription.autonomous_trading_enabled ? 'text-emerald-300' : ''}>{subscription.autonomous_trading_enabled ? 'LIVE AUTONOMOUS TRADING IS ON' : 'Autonomous trading is OFF'}</strong>
+          <small>{subscription.symbol} via {subscription.broker_name} · {subscription.autonomous_trading_enabled ? `enabled by ${subscription.autonomy_enabled_by ?? 'unknown'}${subscription.autonomy_enabled_at ? ` at ${new Date(subscription.autonomy_enabled_at).toLocaleString()}` : ''}` : 'no order can be generated for this strategy until this is explicitly enabled'}</small>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+        <span>Standing cap: {subscription.max_intents_per_window} orders / {subscription.rate_limit_window_minutes}m</span>
+        <span>Max notional/order: ₹{subscription.max_notional_per_intent.toLocaleString()}</span>
+      </div>
+      {canOperate && <div className="mt-4 rounded-lg border border-white/10 p-3">
+        <p className="eyebrow">SIMULATE A TICK · OPS VISIBILITY, NEVER REQUIRED</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">Exercises the exact same generate_live_order_intent the scheduler calls automatically -- the pipeline runs on its own once a strategy is enrolled and a real signal exists.</p>
+        <div className="mt-2 flex gap-2"><input type="number" value={tickPrice} onChange={(e) => setTickPrice(e.target.value)} placeholder="tick price" className="min-w-0 flex-1 rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /><button disabled={busy || !tickPrice.trim()} onClick={handleGenerateTick} className="button-secondary">Generate intent</button></div>
+        {lastIntent === null && <p className="mt-2 text-[11px] text-muted-foreground">No intent yet this session.</p>}
+        {lastIntent && <p className="mt-2 text-[11px] text-muted-foreground">Last result: <strong className="text-foreground">{lastIntent.side.toUpperCase()} {lastIntent.quantity} {lastIntent.symbol}</strong> · status <strong className="text-foreground">{lastIntent.status.toUpperCase()}</strong></p>}
+      </div>}
+      {canSignOffLive ? <div className="mt-3">
+        {subscription.autonomous_trading_enabled
+          ? <button disabled={busy} onClick={() => setConfirmOpen('disable')} className="button-danger">Disable autonomous trading</button>
+          : <button disabled={busy} onClick={() => setConfirmOpen('enable')} className="button-primary"><Zap className="size-3" />Enable autonomous trading</button>}
+      </div> : <p className="mt-3 text-xs text-muted-foreground">Only SystemAdministrator/RiskManager can flip the autonomy switch.</p>}
+    </>}
+    {error && <div className="mt-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
+    {confirmOpen && subscription && <div className="confirm-backdrop"><div className="confirm-modal"><button className="modal-close" onClick={() => { setConfirmOpen(null); setConfirmText('') }}><X className="size-4" /></button><ShieldAlert className="modal-icon" /><p className="eyebrow">{confirmOpen === 'enable' ? 'ENABLE LIVE AUTONOMOUS TRADING' : 'DISABLE LIVE AUTONOMOUS TRADING'}</p><h2>{subscription.symbol}</h2><p>{confirmOpen === 'enable' ? "Once enabled, every real signal this strategy generates submits straight to the broker with no per-order human approval -- only the Kill Switch, Compliance Checker, Correlation Constraint, and this subscription's own standing rate/notional caps can stop an order." : 'This strategy stops generating any new live orders immediately.'} Type the symbol below to confirm.</p><input autoFocus placeholder={`Type ${subscription.symbol} to confirm`} value={confirmText} onChange={(e) => setConfirmText(e.target.value.toUpperCase())} /><button className="submit-live" disabled={busy || confirmText !== subscription.symbol} onClick={handleConfirmAutonomy}>{confirmOpen === 'enable' ? 'Confirm and enable autonomy' : 'Confirm and disable autonomy'}</button></div></div>}
+  </div>
 }
 
 function Review({ strategyId, onBack, canOperate, canSignOffLive }: { strategyId: string; onBack: () => void; canOperate: boolean; canSignOffLive: boolean }) {
@@ -162,6 +299,7 @@ function Review({ strategyId, onBack, canOperate, canSignOffLive }: { strategyId
           <div className="mt-3 flex gap-2"><button disabled={busy} onClick={handleCheckReadiness} className="button-secondary">Check readiness</button><button disabled={busy} onClick={() => handleLifecycleAction('approve-live')} className="button-primary"><Check className="size-3" />Approve live-eligibility</button></div>
           {readinessResult && <div className="readiness-list mt-4">{Object.entries(readinessResult.checks).map(([label, pass]) => <div className="readiness-row" key={label}><div className="flex items-center justify-between gap-3"><span>{label}</span><strong className={pass ? 'pass' : ''}>{pass ? 'PASS' : 'PENDING'}</strong></div></div>)}{readinessResult.reasons.length > 0 && <p className="mt-2 text-xs text-amber-200">{readinessResult.reasons.join(' · ')}</p>}</div>}
         </div>}
+        {(stage === 'Live Eligible' || stage === 'Live') && <LiveTradingPanel strategyId={strategy.id} canOperate={canOperate} canSignOffLive={canSignOffLive} />}
         {!canOperate && !canSignOffLive && <p className="mt-4 text-xs text-muted-foreground">Your role has read-only access to lifecycle actions.</p>}
       </div>}
     </div>

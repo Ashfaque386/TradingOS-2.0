@@ -336,7 +336,8 @@ export const listApprovals = (statusFilter?: string) =>
 export const decideApproval = (approvalId: string, approve: boolean, reason?: string) =>
   apiPost<ApprovalRequestDto>(`/api/v1/approvals/${approvalId}/decide`, { approve, reason })
 
-// ---- Live trading intents (real-money sign-off queue) ----
+// ---- Live trading (Phase 18: fully autonomous once explicitly enabled --
+// no per-order approve/reject, see backend Non-Negotiable Rule #1) ----
 export type LiveOrderIntentDto = {
   id: string
   strategy_id: string
@@ -357,10 +358,59 @@ export const listLiveIntents = (statusFilter?: string) =>
   apiGet<LiveOrderIntentDto[]>(
     `/api/v1/live-trading/intents${statusFilter ? `?status_filter=${statusFilter}` : ''}`,
   )
-export const approveLiveIntent = (intentId: string) =>
-  apiPost<LiveOrderIntentDto>(`/api/v1/live-trading/intents/${intentId}/approve`)
-export const rejectLiveIntent = (intentId: string) =>
-  apiPost<LiveOrderIntentDto>(`/api/v1/live-trading/intents/${intentId}/reject`)
+
+export type LiveTradingSubscriptionDto = {
+  id: string
+  strategy_id: string
+  symbol: string
+  broker_name: string
+  builtin_strategy: string
+  sma_window: number
+  initial_capital: number
+  stop_loss_pct: number
+  position_size_pct: number
+  intent_expiry_seconds: number
+  is_active: boolean
+  autonomous_trading_enabled: boolean
+  autonomy_enabled_by: string | null
+  autonomy_enabled_at: string | null
+  max_intents_per_window: number
+  rate_limit_window_minutes: number
+  max_notional_per_intent: number
+}
+
+export type EnrollLiveTradingInput = {
+  strategy_id: string
+  symbol: string
+  broker_name: string
+  builtin_strategy?: string
+  sma_window?: number
+  initial_capital?: number
+  stop_loss_pct?: number
+  position_size_pct?: number
+  intent_expiry_seconds?: number
+  max_intents_per_window?: number
+  rate_limit_window_minutes?: number
+  max_notional_per_intent?: number
+}
+
+export const listLiveSubscriptions = () =>
+  apiGet<LiveTradingSubscriptionDto[]>('/api/v1/live-trading/subscriptions')
+export const enrollLiveTrading = (body: EnrollLiveTradingInput) =>
+  apiPost<LiveTradingSubscriptionDto>('/api/v1/live-trading/subscriptions', body)
+export const setLiveAutonomy = (subscriptionId: string, enabled: boolean) =>
+  apiPost<LiveTradingSubscriptionDto>(
+    `/api/v1/live-trading/subscriptions/${subscriptionId}/autonomy`,
+    { enabled },
+  )
+// Manual intent-generation trigger -- exercises the exact same
+// generate_live_order_intent function the scheduler calls automatically;
+// useful for ops visibility and demonstration, never a required step.
+export const generateLiveIntent = (subscriptionId: string, tickPrice: number) =>
+  apiPost<LiveOrderIntentDto | null>(
+    `/api/v1/live-trading/subscriptions/${subscriptionId}/generate-intent`,
+    { tick_price: tickPrice },
+  )
 
 // ---- WebSocket payload shapes (src/api/routes/websockets.py) ----
 export type ActivityEvent = {

@@ -9,21 +9,22 @@ from src.models.base import Base
 
 
 class LiveBatchAuthorization(Base):
-    """A human's bounded, in-advance pre-authorization to reduce click-
-    fatigue during an active session (Build Spec §12.2): "approve up to
-    `max_intents` intents for this strategy between `window_start` and
-    `window_end`, each capped at `max_notional_per_intent`." This row IS
-    the logged human action -- `authorized_by` is required and never
-    defaulted, same posture as src.orchestration.kill_switch.
-    reset_kill_switch's `reset_by`.
-
-    `intents_used` is the server's own running count, incremented only by
-    src.orchestration.live_trading's own enforcement code inside the same
-    transaction that consumes a slot -- never trusted from, or settable
-    by, an API caller. That plus the two CheckConstraints below is what
-    "enforced server-side, not just suggested in the UI" (Build Spec
-    §12.2) means concretely: even a client that already knows this row's
-    id cannot make it authorize more than what it was created with.
+    """**Retired by Phase 18, table kept only for historical rows.** This
+    was a human's bounded, in-advance pre-authorization to reduce click-
+    fatigue during an active human-approval session (the original Build
+    Spec §12.2 design: "approve up to `max_intents` intents for this
+    strategy between `window_start` and `window_end`"). Phase 18 removed
+    the per-order human-approval gate entirely and replaced it with a
+    standing, always-on cap directly on `LiveTradingSubscription`
+    (`max_intents_per_window`/`rate_limit_window_minutes`/
+    `max_notional_per_intent`) that every autonomous order is checked
+    against unconditionally -- there is no more "batch" of approvals to
+    pre-authorize. No code anywhere in this codebase creates, reads, or
+    writes a row here anymore (`_find_eligible_batch_authorization` and
+    `create_batch_authorization` were deleted in the same change); this
+    model and its table stay only because migrations here are additive-
+    only (Non-Negotiable Rule #8) and `live_order_intents.
+    batch_authorization_id` still has a live FK to it for old rows.
     """
 
     __tablename__ = "live_batch_authorizations"
