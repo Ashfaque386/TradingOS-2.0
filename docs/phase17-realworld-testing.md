@@ -138,6 +138,48 @@ the live `uvicorn` log, the same "real attempt, sandbox-blocked" evidence
 Phases 8/9/16 already established. Demo user and credentials deleted
 afterward.
 
+### Part 2's "Step 1" finding — resolved in a later pass
+
+The literal `_ = rng  # reserved for future F&O instrument generation`
+gap named above (`FakeMarketDataProvider.instrument_master()` never
+generating an options row for any underlying) was left unfixed at the
+time since Follow-up D's live option chain never needed it. Fixed in a
+later pass, once picked up as a standalone item: each equity symbol now
+also gets a monthly futures contract plus a 5-strike option chain
+(CE/PE) per upcoming monthly expiry — the last Thursday of the month,
+rolled back to a real NSE trading day via `previous_nse_trading_day`
+when that Thursday is a holiday, never an invented date — with strikes
+centered on the symbol's own latest synthetic close (the same real
+anchor `intraday_minute_bars` already uses) rather than an arbitrary
+fixed price. `isin` stays `None` for every F&O row, since NSE genuinely
+never assigns one to a derivative contract. 11 new tests
+(`backend/tests/test_data_providers.py`) cover the expiry-rollback rule
+against the real calendar, the strike-step/ATM-centering logic, one
+shared lot size across a symbol's whole F&O chain (matching real NSE
+convention), symbol uniqueness within the 32-char column width, and
+determinism.
+
+This was previously a genuinely dead frontend feature, not a
+speculative one: `app/analysis/page.tsx`'s `OptionChainTab` ("Option
+instrument master" panel) already filtered
+`instrument_type === 'option'` and derived its underlying-symbol
+dropdown from the instrument master — built correctly, but permanently
+rendering "No option instruments found for this underlying" since the
+backend had never produced a single row for it to show. No frontend
+change was needed; it was only ever waiting on real backend data.
+
+**Live-verified** against a real `uvicorn` + local Postgres/Redis:
+`POST /api/v1/market-data/ingest/instrument-master` for `RELIANCE`
+genuinely ingested 23 rows (1 equity + 2 monthly futures + 20 options,
+10 CE/10 PE across 2 expiries) over real HTTP, and `GET
+/api/v1/market-data/instruments` returned them with the exact shape
+`OptionChainTab` consumes (`symbol`, `strike_price`, `option_type`,
+`expiry_date`, `underlying_symbol`, `lot_size`, `tick_size`) — confirming
+that panel now genuinely renders real rows instead of the empty-state
+message it always showed before. Full backend suite: 849 passed;
+`ruff format --check`/`ruff check` clean. Rows, provenance record, and
+demo user deleted afterward.
+
 ## Part 3 — System Vitals
 
 The Phase 16 Follow-up E design deliberately stopped short: it read
