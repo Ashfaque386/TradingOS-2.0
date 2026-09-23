@@ -25,11 +25,65 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
+from src.data.nse_calendar import previous_nse_trading_day
+
 
 def _stable_seed_for(*parts: str) -> int:
     """Deterministic, process-stable seed (crc32, not Python's salted
     `hash()`) -- see Phase 7's `price_data._stable_seed_for` for why."""
     return zlib.crc32("|".join(parts).encode("utf-8")) % 1_000_000
+
+
+def _last_thursday_of_month(year: int, month: int) -> date:
+    first_of_next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    day = first_of_next_month - timedelta(days=1)
+    while day.weekday() != 3:  # Monday=0 ... Thursday=3
+        day -= timedelta(days=1)
+    return day
+
+
+def _monthly_expiries(today: date, *, count: int = 2) -> list[date]:
+    """Real NSE monthly F&O expiry convention: the last Thursday of the
+    month, rolled back to the nearest actual trading day
+    (`previous_nse_trading_day`) when that Thursday is itself a holiday
+    -- the same real rule NSE applies, never an invented date. Returns
+    the next `count` such expiries on or after `today`, skipping an
+    already-elapsed current-month expiry."""
+    expiries: list[date] = []
+    year, month = today.year, today.month
+    while len(expiries) < count:
+        thursday = _last_thursday_of_month(year, month)
+        candidate = previous_nse_trading_day(thursday + timedelta(days=1))
+        if candidate >= today:
+            expiries.append(candidate)
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return expiries
+
+
+def _strike_step(spot: float) -> float:
+    """A realistic NSE strike-price increment for the given spot price --
+    real exchanges use a coarser step for higher-priced underlyings, not
+    one fixed increment for every stock."""
+    if spot < 100:
+        return 2.5
+    if spot < 250:
+        return 5.0
+    if spot < 1000:
+        return 10.0
+    if spot < 2500:
+        return 20.0
+    if spot < 5000:
+        return 50.0
+    return 100.0
+
+
+# Real, actually-used NSE lot-size values -- a deterministic pick from
+# this set per underlying (NSE fixes one lot size per underlying across
+# all its F&O contracts, not a fresh one per strike/expiry).
+_REALISTIC_LOT_SIZES = (25, 50, 75, 100, 150, 200, 250, 300, 500, 1000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +194,20 @@ class FakeMarketDataProvider:
         )
 
     def instrument_master(self, symbols: list[str]) -> list[InstrumentRecord]:
+        """Real NSE F&O instrument-master shape (previously a documented
+        gap -- see docs/phase17-realworld-testing.md Part 2 -- the schema
+        supported it since Phase 10, but nothing populated it): each
+        equity also gets a monthly futures contract plus a 5-strike
+        option chain (CE/PE) per upcoming monthly expiry, strikes
+        centered on this symbol's own latest synthetic close (the same
+        real anchor `intraday_minute_bars` already uses for its own base
+        price) rather than an arbitrary fixed price. `isin` stays `None`
+        for F&O rows -- NSE genuinely never assigns one to a derivative
+        contract, only to the underlying security -- never a fabricated
+        one."""
         records = []
+        today = date.today()
+        expiries = _monthly_expiries(today)
         for symbol in symbols:
             seed = _stable_seed_for("instrument", symbol)
             rng = np.random.default_rng(seed)
@@ -155,7 +222,46 @@ class FakeMarketDataProvider:
                     is_active=True,
                 )
             )
-            _ = rng  # reserved for future F&O instrument generation
+
+            daily_row = self._full_daily_series(symbol).loc[: pd.Timestamp(today)].tail(1)
+            spot = float(daily_row["close"].iloc[0]) if not daily_row.empty else self.start_price
+            step = _strike_step(spot)
+            atm_strike = round(spot / step) * step
+            lot_size = int(rng.choice(_REALISTIC_LOT_SIZES))
+
+            for expiry in expiries:
+                month_code = expiry.strftime("%y%b").upper()
+                records.append(
+                    InstrumentRecord(
+                        symbol=f"{symbol}{month_code}FUT",
+                        exchange="NFO",
+                        instrument_type="future",
+                        isin=None,
+                        lot_size=lot_size,
+                        tick_size=0.05,
+                        underlying_symbol=symbol,
+                        expiry_date=expiry,
+                    )
+                )
+                for offset in (-2, -1, 0, 1, 2):
+                    strike = round(atm_strike + offset * step, 2)
+                    if strike <= 0:
+                        continue
+                    for option_type in ("CE", "PE"):
+                        records.append(
+                            InstrumentRecord(
+                                symbol=f"{symbol}{month_code}{strike:g}{option_type}",
+                                exchange="NFO",
+                                instrument_type="option",
+                                isin=None,
+                                lot_size=lot_size,
+                                tick_size=0.05,
+                                underlying_symbol=symbol,
+                                expiry_date=expiry,
+                                strike_price=strike,
+                                option_type=option_type,
+                            )
+                        )
         return records
 
     def corporate_actions(self, symbol: str, since: date) -> list[CorporateActionRecord]:
