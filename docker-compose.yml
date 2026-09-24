@@ -28,6 +28,9 @@ services:
       # calls get silently CORS-blocked (which the frontend can only
       # report as a generic "unreachable" network error, not a 403).
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_HOST_PORT:-3000}}
+      # Broker OAuth sends the browser back to the Settings page here, on
+      # the frontend's (possibly launcher-bumped) port -- not the backend's.
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:${FRONTEND_HOST_PORT:-3000}}
       AGENT_GATEWAY_CONFIG_PATH: /app/config/tradingos.config.json
       NSE_HOLIDAYS_PATH: /app/config/nse_holidays.json
       # redis/temporal are their own containers/images (no Postgres+API-style
@@ -55,6 +58,13 @@ services:
       # tick feed fallback, src.brokers.tick_source.build_tick_source).
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       SECRETS_STORE_PATH: /app/secrets/broker_credentials.enc
+    security_opt:
+      # Docker's default seccomp profile plus exactly one rule: unshare()
+      # for user+network namespaces only, which the strategy sandbox needs
+      # to cut its worker off the network (src/engine/sandbox/
+      # process_runtime.py). No added capabilities -- the far broader
+      # cap_add: SYS_ADMIN alternative was deliberately rejected.
+      - seccomp=./deploy/seccomp/backend.json
     extra_hosts:
       # Lets the backend reach a host-machine service (e.g. a local Ollama
       # instance at 11434) via `host.docker.internal` from inside this
@@ -71,21 +81,30 @@ services:
       # a specific interface IP) only if you deliberately want that, e.g.
       # reaching the Console from another device on your own LAN.
       - "${BIND_HOST:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
-      # POSTGRES_HOST_PORT is opt-in: Postgres and the API talk to each
-      # other over localhost inside this one container regardless, so
-      # nothing needs port 5432 published on the host by default — that's
-      # exactly the port most dev machines already have something bound
-      # to. Set POSTGRES_HOST_PORT to publish it anyway (e.g. for psql/a
-      # GUI client from the host); leave it unset and this line publishes
-      # nothing, so a fresh `git pull` + `docker compose up` never hits a
-      # host port conflict here again.
-      - "${POSTGRES_HOST_PORT:+$POSTGRES_HOST_PORT:}5432"
+      # Postgres (5432) is deliberately NOT published here: the API reaches
+      # it over localhost inside this same container. To reach it from a
+      # host tool (psql, a GUI client), opt in to
+      # docker-compose.postgres-port.yml (see its header). It can't live
+      # here behind an empty-by-default variable: Compose has no
+      # conditional ports, and a bare "5432" entry publishes on a random
+      # host port bound to 0.0.0.0 (seen live: 0.0.0.0:53790->5432, i.e.
+      # the whole LAN, default password).
     volumes:
       - tradingos-2.0_pgdata:/var/lib/postgresql/data
       # Bind mount, not a named volume: config/tradingos.config.json is
       # meant to be hand-edited from the host while the container runs —
       # the Agent Gateway hot-reloads on any change (Build Spec §6.2).
       - ./config:/app/config
+      # The encrypted Settings stores (broker_credentials.enc,
+      # llm_provider_credentials.enc, notification_channels.enc -- all
+      # under /app/secrets, see src/core/config.py) must outlive the
+      # container: without this, the documented `docker compose down &&
+      # up --build` recreate silently wiped every saved broker/LLM/
+      # notification credential. Named volume (not a bind mount) so the
+      # store's 0600 file permissions hold on Docker Desktop for Windows.
+      # Useless without the same SECRETS_ENCRYPTION_KEY each boot -- back
+      # that key up alongside this volume.
+      - tradingos-2.0_secrets:/app/secrets
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -231,6 +250,8 @@ services:
 volumes:
   tradingos-2.0_pgdata:
     name: tradingos-2.0_pgdata
+  tradingos-2.0_secrets:
+    name: tradingos-2.0_secrets
   tradingos-2.0_prometheus_data:
     name: tradingos-2.0_prometheus_data
   tradingos-2.0_grafana_data:

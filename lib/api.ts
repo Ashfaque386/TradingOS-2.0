@@ -698,7 +698,11 @@ export type BrokerCredentialStatus = {
   configured: boolean
   token_status: BrokerTokenStatus
   token_expires_at: string | null
+  // Always set by the backend (custom override, else the default) -- it has
+  // to be registered with the broker before they'll issue an API key.
   redirect_uri: string | null
+  default_redirect_uri?: string | null
+  redirect_uri_is_custom?: boolean
   token_duration: string | null
 }
 export const KNOWN_BROKERS = ['zerodha', 'upstox'] as const
@@ -712,8 +716,19 @@ export type BrokerCircuitBreakerStatus = {
 }
 export const listBrokerCircuitBreakerStatus = () =>
   apiGet<BrokerCircuitBreakerStatus[]>('/api/v1/broker-credentials/circuit-breaker')
-export const writeBrokerCredentials = (broker: string, apiKey: string, apiSecret?: string, accessToken?: string) =>
-  apiPost<void>(`/api/v1/broker-credentials/${broker}`, { api_key: apiKey, api_secret: apiSecret || null, access_token: accessToken || null })
+export const writeBrokerCredentials = (broker: string, apiKey: string, apiSecret?: string, accessToken?: string, redirectUri?: string) =>
+  apiPost<void>(`/api/v1/broker-credentials/${broker}`, {
+    api_key: apiKey,
+    api_secret: apiSecret || null,
+    access_token: accessToken || null,
+    ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+  })
+// null resets to the default callback URL.
+export const writeBrokerRedirectUri = (broker: string, redirectUri: string | null) =>
+  apiPut<void>(`/api/v1/broker-credentials/${broker}/redirect-uri`, { redirect_uri: redirectUri })
+// Shown only if the status call itself failed -- the backend's value wins.
+export const fallbackBrokerRedirectUri = (broker: string) =>
+  `${API_BASE_URL}/api/v1/broker-credentials/${broker}/callback`
 export const deleteBrokerCredentials = (broker: string) => apiDelete<void>(`/api/v1/broker-credentials/${broker}`)
 
 // ---- Broker OAuth (real Zerodha/Upstox login completion) ----
@@ -731,11 +746,13 @@ export type LlmProviderName =
   | 'deepseek'
   | 'ollama'
   | 'custom'
+  | 'huggingface'
 export const LLM_PROVIDERS: LlmProviderName[] = [
   'anthropic',
   'openai',
   'gemini',
   'deepseek',
+  'huggingface',
   'ollama',
   'custom',
 ]
@@ -746,12 +763,17 @@ export const LLM_PROVIDER_LABELS: Record<LlmProviderName, string> = {
   deepseek: 'DeepSeek',
   ollama: 'Ollama (local)',
   custom: 'Custom / Local',
+  huggingface: 'Hugging Face',
 }
 export type LlmProviderStatus = {
   provider: string
   configured: boolean
   base_url: string | null
   in_fallback_order: boolean
+  // What an agent's "auto" model resolves to here: the chosen one, else the
+  // built-in default (null for Ollama/Custom/Hugging Face, which need one).
+  default_model?: string | null
+  builtin_default_model?: string | null
 }
 export type LlmProviderTestResult = {
   provider: string
@@ -767,6 +789,9 @@ export const writeLlmProviderCredentials = (provider: string, apiKey?: string, b
     api_key: apiKey || null,
     base_url: baseUrl || null,
   })
+// null clears the choice (falls back to the built-in default, if any).
+export const setLlmProviderDefaultModel = (provider: string, model: string | null) =>
+  apiPut<void>(`/api/v1/settings/llm-providers/${provider}/default-model`, { model })
 export const deleteLlmProviderCredentials = (provider: string) =>
   apiDelete<void>(`/api/v1/settings/llm-providers/${provider}`)
 export const testLlmProvider = (provider: string, model?: string) =>

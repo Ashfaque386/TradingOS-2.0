@@ -97,3 +97,54 @@ def test_no_hardcoded_0_0_0_0_in_any_ports_mapping():
         "binding must go through ${BIND_HOST:-127.0.0.1} instead, so the safe "
         "loopback-only default stays a single, overridable knob."
     )
+
+
+# Opt-in override that publishes the backend's embedded Postgres. It used
+# to be a `"${POSTGRES_HOST_PORT:+$POSTGRES_HOST_PORT:}5432"` entry in
+# docker-compose.yml itself, documented as "publishes nothing" when unset
+# -- but a bare "5432" publishes on a random host port bound to 0.0.0.0
+# (seen live: `0.0.0.0:53790->5432`). The checks above missed it: they
+# only looked at entries naming the four known *_HOST_PORT variables.
+POSTGRES_OVERRIDE_PATH = COMPOSE_PATH.parent / "docker-compose.postgres-port.yml"
+
+
+def _ports_entries(text: str) -> list[str]:
+    """Every list item under any `ports:` key, whatever it references."""
+    entries: list[str] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() != "ports:":
+            continue
+        indent = len(line) - len(line.lstrip())
+        for item in lines[i + 1 :]:
+            stripped = item.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if len(item) - len(item.lstrip()) <= indent:
+                break
+            if stripped.startswith("- "):
+                entries.append(stripped[2:].strip().strip("\"'"))
+    return entries
+
+
+def test_every_published_port_in_every_compose_file_binds_through_bind_host():
+    for path in (COMPOSE_PATH, POSTGRES_OVERRIDE_PATH):
+        assert path.is_file(), f"{path.name} not found at {path}"
+        entries = _ports_entries(path.read_text(encoding="utf-8"))
+        assert entries, f"no ports: entries parsed from {path.name}"
+        for entry in entries:
+            assert entry.startswith(REQUIRED_BIND_PREFIX.strip('"')), (
+                f"{path.name}: ports entry {entry!r} has no ${{BIND_HOST}} host IP -- "
+                "Docker publishes it on 0.0.0.0 (every interface)."
+            )
+
+
+def test_base_compose_never_publishes_postgres():
+    entries = _ports_entries(_compose_text())
+    # endswith, not ":5432": the original bug was `...:}5432`.
+    assert not [e for e in entries if e.endswith("5432")], entries
+
+
+def test_postgres_override_is_loopback_with_an_overridable_host_port():
+    entries = _ports_entries(POSTGRES_OVERRIDE_PATH.read_text(encoding="utf-8"))
+    assert entries == ["${BIND_HOST:-127.0.0.1}:${POSTGRES_HOST_PORT:-5433}:5432"]

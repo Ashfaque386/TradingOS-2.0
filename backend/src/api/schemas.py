@@ -478,6 +478,16 @@ class WriteBrokerCredentialsRequest(BaseModel):
     api_key: str = Field(min_length=1)
     api_secret: str | None = None
     access_token: str | None = None
+    # Optional custom OAuth callback URL, saved alongside the keys so an
+    # operator can set it before any credential exists. Omitted keeps
+    # whatever override was already stored.
+    redirect_uri: str | None = None
+
+
+class WriteBrokerRedirectUriRequest(BaseModel):
+    """`null` resets to the default, request-derived callback URL."""
+
+    redirect_uri: str | None = None
 
 
 class BrokerCredentialStatusResponse(BaseModel):
@@ -489,7 +499,12 @@ class BrokerCredentialStatusResponse(BaseModel):
     configured: bool
     token_status: str = "never-connected"  # "never-connected" | "valid" | "expired"
     token_expires_at: str | None = None
+    # Always populated, even before any credential is saved: it has to be
+    # registered in the broker's developer console *before* the broker
+    # issues the API key. The custom override when set, else the default.
     redirect_uri: str | None = None
+    default_redirect_uri: str | None = None
+    redirect_uri_is_custom: bool = False
     token_duration: str | None = None
 
 
@@ -876,6 +891,15 @@ class WriteLlmProviderCredentialsRequest(BaseModel):
 
     api_key: str | None = None
     base_url: str | None = None
+    # What `model: "auto"` resolves to on this provider. Omitted keeps the
+    # stored one, so re-entering a key doesn't lose the chosen model.
+    default_model: str | None = None
+
+
+class WriteLlmProviderDefaultModelRequest(BaseModel):
+    """`null` clears it (falls back to the built-in default, if any)."""
+
+    model: str | None = Field(default=None, max_length=200)
 
 
 class LlmProviderStatusResponse(BaseModel):
@@ -883,6 +907,10 @@ class LlmProviderStatusResponse(BaseModel):
     configured: bool
     base_url: str | None = None
     in_fallback_order: bool
+    # Operator-chosen model for `auto`, and the built-in one used when
+    # none is chosen (None for Ollama/Custom/Hugging Face, which need one).
+    default_model: str | None = None
+    builtin_default_model: str | None = None
 
 
 class LlmProviderTestResult(BaseModel):

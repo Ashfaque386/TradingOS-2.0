@@ -250,6 +250,47 @@ class CustomProviderClient:
         )
 
 
+# What an agent's `model: "auto"` means on each hosted provider when the
+# operator hasn't picked a default model in Settings. Ollama, Custom and
+# Hugging Face have no universal default (a local server's or HF's model
+# catalogue is whatever the operator chose), so they need a stored one.
+HOSTED_DEFAULT_MODELS: dict[LlmProvider, str] = {
+    LlmProvider.ANTHROPIC: "claude-3-5-haiku-20241022",
+    LlmProvider.OPENAI: "gpt-4o-mini",
+    LlmProvider.GEMINI: "gemini-1.5-flash",
+    LlmProvider.DEEPSEEK: "deepseek-chat",
+}
+
+AUTO_MODEL = "auto"
+
+
+def stored_default_models() -> dict[LlmProvider, str]:
+    """Per-provider default models saved in Settings (LLM provider store).
+    An unavailable store (no SECRETS_ENCRYPTION_KEY) is simply "none set",
+    same graceful degradation as default_clients()."""
+    try:
+        store = get_llm_provider_store()
+        rows = {p: store.get_credentials(p.value) for p in LlmProvider}
+    except Exception:  # noqa: BLE001 - store unavailable is not a router failure
+        return {}
+    return {p: row.default_model for p, row in rows.items() if row and row.default_model}
+
+
+def resolve_model(provider: LlmProvider, model: str, defaults: dict[LlmProvider, str]) -> str:
+    """`model` unchanged unless it is "auto", which becomes the provider's
+    stored default, else its built-in hosted default. No default at all is
+    a provider failure (so the router falls through to the next provider),
+    never a request for a model literally named "auto"."""
+    if model != AUTO_MODEL:
+        return model
+    resolved = defaults.get(provider) or HOSTED_DEFAULT_MODELS.get(provider)
+    if resolved is None:
+        raise LlmProviderError(
+            f"{provider.value}: no default model set -- pick one in Settings > LLM Providers"
+        )
+    return resolved
+
+
 def default_clients() -> dict[LlmProvider, LlmProviderClient]:
     """Credentials come from src.security.llm_provider_store (a real,
     runtime-editable, encrypted store -- Settings redesign) when a provider
@@ -300,6 +341,15 @@ def default_clients() -> dict[LlmProvider, LlmProviderClient]:
         LlmProvider.CUSTOM: CustomProviderClient(
             base_url=(custom_creds.base_url if custom_creds else "") or "",
             api_key=custom_creds.api_key if custom_creds else None,
+        ),
+        # Hugging Face Inference Providers speak the OpenAI chat-completions
+        # format; model ids are HF repo ids (e.g. "meta-llama/Llama-3.1-8B-Instruct").
+        LlmProvider.HUGGINGFACE: OpenAiCompatibleClient(
+            api_key=_api_key(LlmProvider.HUGGINGFACE, settings.huggingface_api_key),
+            base_url=_base_url(
+                LlmProvider.HUGGINGFACE, "https://router.huggingface.co/v1/chat/completions"
+            ),
+            provider_name="huggingface",
         ),
     }
 
@@ -358,11 +408,35 @@ class LlmRouter:
     immediately without constructing a new router.
     """
 
-    def __init__(self, clients: dict[LlmProvider, LlmProviderClient] | None = None) -> None:
-        self._clients = clients if clients is not None else default_clients()
+    def __init__(
+        self,
+        clients: dict[LlmProvider, LlmProviderClient] | None = None,
+        default_models: dict[LlmProvider, str] | None = None,
+    ) -> None:
+        # Injected clients (tests) are fixed. Otherwise clients and default
+        # models are re-read from the Settings store on every call: this
+        # router is a process-wide singleton, and building them once meant
+        # a key saved in Settings never reached a real agent call until a
+        # backend restart.
+        self._injected_clients = clients
+        self._injected_defaults = default_models
         self._health: dict[LlmProvider, ProviderHealth] = {
             provider: ProviderHealth() for provider in LlmProvider
         }
+
+    def _live(self) -> tuple[dict[LlmProvider, LlmProviderClient], dict[LlmProvider, str]]:
+        if self._injected_clients is not None:
+            return self._injected_clients, self._injected_defaults or {}
+        return default_clients(), stored_default_models()
+
+    def _model_for(
+        self, provider: LlmProvider, model: str, defaults: dict[LlmProvider, str]
+    ) -> str:
+        if self._injected_clients is not None and self._injected_defaults is None:
+            # Pre-existing contract for injected fake clients: model passes
+            # through untouched.
+            return model
+        return resolve_model(provider, model, defaults)
 
     def health_for(self, provider: LlmProvider) -> ProviderHealth:
         return self._health[provider]
@@ -427,14 +501,16 @@ class LlmRouter:
     ) -> LlmCompletionResult:
         order = self._fallback_order(preferred_provider)
         errors: list[tuple[LlmProvider, str]] = []
+        clients, defaults = self._live()
 
         for idx, provider in enumerate(order):
-            client = self._clients.get(provider)
+            client = clients.get(provider)
             if client is None:
                 errors.append((provider, "no client configured for this provider"))
                 continue
             try:
-                payload = await client.complete(model=model, prompt=prompt)
+                resolved = self._model_for(provider, model, defaults)
+                payload = await client.complete(model=resolved, prompt=prompt)
             except Exception as exc:  # noqa: BLE001 - any provider failure triggers fallback
                 self._health[provider].last_failure_at = time.time()
                 errors.append((provider, str(exc)))
@@ -493,9 +569,10 @@ class LlmRouter:
         """
         order = self._fallback_order(preferred_provider)
         errors: list[tuple[LlmProvider, str]] = []
+        clients, defaults = self._live()
 
         for idx, provider in enumerate(order):
-            client = self._clients.get(provider)
+            client = clients.get(provider)
             if client is None:
                 errors.append((provider, "no client configured for this provider"))
                 continue
@@ -505,12 +582,15 @@ class LlmRouter:
             prompt_tokens: int | None = None
             completion_tokens: int | None = None
             try:
+                resolved = self._model_for(provider, model, defaults)
                 if isinstance(client, AnthropicClient):
-                    async for text_delta in _stream_anthropic(client, model=model, prompt=prompt):
+                    async for text_delta in _stream_anthropic(
+                        client, model=resolved, prompt=prompt
+                    ):
                         any_yielded = True
                         yield LlmStreamChunk(text=text_delta, done=False)
                 else:
-                    payload = await client.complete(model=model, prompt=prompt)
+                    payload = await client.complete(model=resolved, prompt=prompt)
                     prompt_tokens = payload.prompt_tokens
                     completion_tokens = payload.completion_tokens
                     for word_chunk in _word_chunks(payload.text):

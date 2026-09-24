@@ -37,6 +37,9 @@ class LlmProvider(StrEnum):
     # isn't literally Ollama, or Ollama reached at a non-default URL under
     # a name the operator wants distinct from the built-in "ollama" entry.
     CUSTOM = "custom"
+    # Hugging Face Inference Providers: OpenAI-compatible chat completions
+    # at router.huggingface.co/v1, authenticated with an HF access token.
+    HUGGINGFACE = "huggingface"
 
 
 class BrokerId(StrEnum):

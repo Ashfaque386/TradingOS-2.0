@@ -49,7 +49,31 @@ def parse_config_text(text: str) -> dict:
             raw_text=text,
             errors=["top-level value is not an object"],
         )
-    return data
+    try:
+        return _join_surrogate_pairs(data)
+    except UnicodeDecodeError as exc:
+        raise ConfigLoadError(
+            "Config contains an unpaired UTF-16 surrogate escape",
+            raw_text=text,
+            errors=[f"invalid \\u escape sequence: {exc.reason}"],
+        ) from exc
+
+
+def _join_surrogate_pairs(value):
+    """json5 decodes an escaped astral character (e.g. "\\ud83e\\udde0", which
+    is how Python's json.dumps writes the agent emoji) into two lone
+    surrogates instead of one character, unlike the stdlib json module.
+    Those can't be encoded as UTF-8, so storing the config crashed with a
+    500. Rejoin every pair; a truly unpaired one raises UnicodeDecodeError."""
+    if isinstance(value, str):
+        if any("\ud800" <= ch <= "\udfff" for ch in value):
+            return value.encode("utf-16", "surrogatepass").decode("utf-16")
+        return value
+    if isinstance(value, list):
+        return [_join_surrogate_pairs(v) for v in value]
+    if isinstance(value, dict):
+        return {_join_surrogate_pairs(k): _join_surrogate_pairs(v) for k, v in value.items()}
+    return value
 
 
 def validate_config_dict(data: dict, *, raw_text: str | None = None) -> TradingOSConfig:

@@ -42,6 +42,7 @@ label.
 
 import hashlib
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
@@ -52,10 +53,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.routes.broker_credentials import get_broker_credentials_store
+from src.api.routes.broker_credentials import (
+    effective_redirect_uri,
+    get_broker_credentials_store,
+    request_base_url,
+)
 from src.api.schemas import BrokerOAuthLoginUrlResponse
 from src.audit.service import write_audit_entry
-from src.brokers.base import BrokerCredentials
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
@@ -89,24 +93,18 @@ async def get_oauth_http_client() -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
-def _request_base(request: Request) -> str:
-    settings = get_settings()
-    return (settings.public_base_url or str(request.base_url)).rstrip("/")
-
-
-def _redirect_uri(request: Request, broker: str) -> str:
-    return f"{_request_base(request)}/api/v1/broker-credentials/{broker}/callback"
-
-
 def _settings_redirect(
     request: Request, *, broker: str, result: str, error: str | None = None
 ) -> RedirectResponse:
     params = {"section": "broker", "broker": broker, "oauth": result}
     if error:
         params["error"] = error
-    return RedirectResponse(
-        f"{_request_base(request)}/settings?{urlencode(params)}", status_code=302
-    )
+    # The Settings page lives on the frontend's origin. In the
+    # multi-container compose stack that's a different port from this
+    # backend (whose own /settings is a 404), so FRONTEND_BASE_URL points
+    # there; the single-origin all-in-one image leaves it unset.
+    frontend = (get_settings().frontend_base_url or request_base_url(request)).rstrip("/")
+    return RedirectResponse(f"{frontend}/settings?{urlencode(params)}", status_code=302)
 
 
 def _next_6am_ist(after: datetime) -> str:
@@ -133,21 +131,11 @@ async def zerodha_login_url_endpoint(
             status.HTTP_400_BAD_REQUEST,
             "save a Zerodha API key first (Broker Config), then connect",
         )
-    redirect_uri = _redirect_uri(request, "zerodha")
-    # Persist the redirect_uri so the status endpoint can keep showing it
-    # (the operator needs the exact same value saved in Kite Connect's
-    # developer console, which they may revisit well after this call).
+    redirect_uri = effective_redirect_uri(request, "zerodha", creds)
+    # Persist the redirect_uri actually used for this login, so the
+    # callback's token exchange and the status endpoint agree with it.
     if creds.redirect_uri != redirect_uri:
-        store.set_credentials(
-            "zerodha",
-            BrokerCredentials(
-                api_key=creds.api_key,
-                api_secret=creds.api_secret,
-                access_token=creds.access_token,
-                redirect_uri=redirect_uri,
-                token_expires_at=creds.token_expires_at,
-            ),
-        )
+        store.set_credentials("zerodha", replace(creds, redirect_uri=redirect_uri))
     login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={quote(creds.api_key)}"
     return BrokerOAuthLoginUrlResponse(login_url=login_url, redirect_uri=redirect_uri)
 
@@ -212,13 +200,7 @@ async def zerodha_callback_endpoint(
 
     store.set_credentials(
         "zerodha",
-        BrokerCredentials(
-            api_key=creds.api_key,
-            api_secret=creds.api_secret,
-            access_token=access_token,
-            redirect_uri=creds.redirect_uri,
-            token_expires_at=token_expires_at,
-        ),
+        replace(creds, access_token=access_token, token_expires_at=token_expires_at),
     )
     await write_audit_entry(
         db,
@@ -249,18 +231,10 @@ async def upstox_login_url_endpoint(
             status.HTTP_400_BAD_REQUEST,
             "save an Upstox API key first (Broker Config), then connect",
         )
-    redirect_uri = _redirect_uri(request, "upstox")
+    redirect_uri = effective_redirect_uri(request, "upstox", creds)
     if creds.redirect_uri != redirect_uri or creds.token_duration != duration:
         store.set_credentials(
-            "upstox",
-            BrokerCredentials(
-                api_key=creds.api_key,
-                api_secret=creds.api_secret,
-                access_token=creds.access_token,
-                redirect_uri=redirect_uri,
-                token_expires_at=creds.token_expires_at,
-                token_duration=duration,
-            ),
+            "upstox", replace(creds, redirect_uri=redirect_uri, token_duration=duration)
         )
     query = urlencode(
         {
@@ -297,7 +271,7 @@ async def upstox_callback_endpoint(
             request, broker="upstox", result="error", error="Upstox API key/secret not configured"
         )
 
-    redirect_uri = creds.redirect_uri or _redirect_uri(request, "upstox")
+    redirect_uri = creds.redirect_uri or effective_redirect_uri(request, "upstox", creds)
 
     try:
         resp = await client.post(
@@ -345,13 +319,11 @@ async def upstox_callback_endpoint(
 
     store.set_credentials(
         "upstox",
-        BrokerCredentials(
-            api_key=creds.api_key,
-            api_secret=creds.api_secret,
+        replace(
+            creds,
             access_token=access_token,
             redirect_uri=redirect_uri,
             token_expires_at=token_expires_at,
-            token_duration=creds.token_duration,
         ),
     )
     await write_audit_entry(
