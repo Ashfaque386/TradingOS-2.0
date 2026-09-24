@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.core.db as db_module
+import src.core.security as security
 from src.api.routes.audit import get_audit_archive_root
 from src.core.config import get_settings
 from src.core.roles import Role
@@ -73,6 +74,36 @@ async def redis_client() -> AsyncIterator[Redis]:
     client = Redis.from_url(settings.redis_url, decode_responses=True)
     yield client
     await client.aclose()
+
+
+@pytest.fixture(autouse=True)
+def _reset_jwt_signing_key_cache():
+    """`get_current_signing_key`'s in-process cache (src.core.security) is
+    a module-level global, deliberately -- production only ever has one
+    live process to keep in sync. Each test gets a fresh, empty database
+    (see `db_session_factory` above) but that global would otherwise carry
+    a stale key across tests, so a test never actually exercises the
+    real "no row yet, bootstrap from settings.jwt_secret_key" path except
+    the first test in the whole run. Reset before every test instead.
+    """
+    security.invalidate_signing_key_cache()
+    yield
+    security.invalidate_signing_key_cache()
+
+
+@pytest.fixture(autouse=True)
+def _disable_ambient_rate_limit():
+    """`RateLimitMiddleware` (src.observability.rate_limit_middleware) is
+    IP-keyed, and every test in this suite shares one fixed client IP via
+    `httpx.ASGITransport` -- a production-sized limit would eventually
+    trip partway through some unrelated test purely from this suite's own
+    aggregate request volume. Set high (in effect off) for the ambient
+    suite; that middleware's own dedicated tests override this fixture's
+    value back down to exercise the real 429 path.
+    """
+    app.state.rate_limit_per_minute = 10**9
+    yield
+    del app.state.rate_limit_per_minute
 
 
 @pytest_asyncio.fixture

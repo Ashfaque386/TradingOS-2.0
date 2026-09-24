@@ -1,0 +1,60 @@
+from fastapi import APIRouter
+
+from src.api.routes import (
+    admin,
+    agents,
+    approvals,
+    audit,
+    auth,
+    backtests,
+    broker_credentials,
+    broker_oauth,
+    chat,
+    gateway,
+    investor_reports,
+    kill_switch,
+    live_trading,
+    llm_providers,
+    market_data,
+    notification_channels,
+    operator_guidance,
+    orchestration,
+    orders,
+    paper_trading,
+    risk,
+    risk_limits,
+    shadow_mode,
+    strategies,
+    system,
+    webhooks,
+    websockets,
+)
+
+api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(auth.router)
+api_router.include_router(admin.router)
+api_router.include_router(orchestration.router)
+api_router.include_router(agents.router)
+api_router.include_router(strategies.router)
+api_router.include_router(approvals.router)
+api_router.include_router(backtests.router)
+api_router.include_router(kill_switch.router)
+api_router.include_router(risk_limits.router)
+api_router.include_router(risk.router)
+api_router.include_router(paper_trading.router)
+api_router.include_router(broker_credentials.router)
+api_router.include_router(broker_oauth.router)
+api_router.include_router(shadow_mode.router)
+api_router.include_router(live_trading.router)
+api_router.include_router(market_data.router)
+api_router.include_router(audit.router)
+api_router.include_router(notification_channels.router)
+api_router.include_router(webhooks.router)
+api_router.include_router(chat.router)
+api_router.include_router(orders.router)
+api_router.include_router(gateway.router)
+api_router.include_router(llm_providers.router)
+api_router.include_router(system.router)
+api_router.include_router(investor_reports.router)
+api_router.include_router(operator_guidance.router)
+api_router.include_router(websockets.router)

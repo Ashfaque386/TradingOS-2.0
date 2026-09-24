@@ -1,0 +1,746 @@
+"""LLM router (Build Spec §7.1, §16): completes a prompt against a
+multi-provider fallback chain read *live* from the Agent Gateway config
+(`infra.llm_providers.order`, Phase 1) via src.gateway.state.get_state() —
+the same hot-reloadable config surface the watcher already keeps current, so
+reordering providers in config/tradingos.config.json takes effect on the
+very next call with no restart, satisfying requirement 1 without any new
+reload plumbing.
+
+Every provider call goes through an LlmProviderClient (a thin httpx
+wrapper below, one per provider). This sandbox has no provider API keys and
+blocked egress to provider APIs, so the real clients are never exercised
+here or in CI — same honest-stub posture as orchestration/planner.py's
+fake_llm_planner(). Callers (real agent code, tests) can inject their own
+`clients` mapping into LlmRouter to run entirely offline/deterministically;
+production code uses the default real clients built from Settings.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Protocol
+
+import httpx
+import structlog
+
+from src.core.config import get_settings
+from src.core.redis_client import get_redis
+from src.gateway.schema import LlmProvider
+from src.gateway.state import get_state
+from src.observability.metrics import llm_token_usage_total
+from src.observability.vitals import record_token_usage_today
+from src.security.llm_provider_store import get_llm_provider_store
+
+logger = structlog.get_logger(__name__)
+
+
+class LlmProviderError(Exception):
+    """Raised by an LlmProviderClient for any failed completion attempt —
+    a bad/missing API key, a non-2xx response, a network error, anything.
+    The router treats every LlmProviderError (and any other exception a
+    client raises) identically: this provider failed, fall to the next.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class LlmCompletionPayload:
+    """What a single provider call actually returned -- the completion
+    text plus real usage counts when the provider's own response includes
+    them (Anthropic/OpenAI/DeepSeek/Ollama all report usage natively;
+    Gemini's `usageMetadata` is likewise parsed where present). Neither
+    token count is ever guessed or estimated when a provider's response
+    doesn't carry them -- `None` means "not reported", not "zero", the
+    same honesty this codebase applies to every other metric that can be
+    genuinely undefined (see e.g. `src.engine.backtest.comparison`'s null
+    correlation rule).
+    """
+
+    text: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+class LlmProviderClient(Protocol):
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicClient:
+    api_key: str | None
+    base_url: str = "https://api.anthropic.com/v1/messages"
+
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        if not self.api_key:
+            raise LlmProviderError("anthropic: no API key configured")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                self.base_url,
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+        if resp.status_code != 200:
+            raise LlmProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        try:
+            text = data["content"][0]["text"]
+        except (KeyError, IndexError) as exc:
+            raise LlmProviderError(f"anthropic: unexpected response shape: {data!r}") from exc
+        usage = data.get("usage") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("input_tokens"),
+            completion_tokens=usage.get("output_tokens"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAiCompatibleClient:
+    """OpenAI and DeepSeek both speak the same chat-completions wire
+    format; DeepSeek is OpenAI-API-compatible at a different base URL.
+    """
+
+    api_key: str | None
+    base_url: str
+    provider_name: str
+
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        if not self.api_key:
+            raise LlmProviderError(f"{self.provider_name}: no API key configured")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                self.base_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+            )
+        if resp.status_code != 200:
+            raise LlmProviderError(
+                f"{self.provider_name}: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        data = resp.json()
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise LlmProviderError(
+                f"{self.provider_name}: unexpected response shape: {data!r}"
+            ) from exc
+        usage = data.get("usage") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class GeminiClient:
+    api_key: str | None
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        if not self.api_key:
+            raise LlmProviderError("gemini: no API key configured")
+        url = f"{self.base_url}/{model}:generateContent"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                url,
+                params={"key": self.api_key},
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+            )
+        if resp.status_code != 200:
+            raise LlmProviderError(f"gemini: HTTP {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError) as exc:
+            raise LlmProviderError(f"gemini: unexpected response shape: {data!r}") from exc
+        usage = data.get("usageMetadata") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("promptTokenCount"),
+            completion_tokens=usage.get("candidatesTokenCount"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OllamaClient:
+    base_url: str
+
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": model, "prompt": prompt, "stream": False},
+                )
+        except httpx.HTTPError as exc:
+            # A bare `localhost` base URL inside the backend's own Docker
+            # container is the single most common way to hit this -- it
+            # refers to the container itself, not the host machine running
+            # Ollama. Caught here rather than left to propagate as an
+            # unhandled 500, same `except httpx.HTTPError` pattern already
+            # used by every other outbound call in this codebase
+            # (src.notifications.senders, src.api.routes.broker_oauth).
+            raise LlmProviderError(f"ollama: connection failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise LlmProviderError(f"ollama: HTTP {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        try:
+            text = data["response"]
+        except KeyError as exc:
+            raise LlmProviderError(f"ollama: unexpected response shape: {data!r}") from exc
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=data.get("prompt_eval_count"),
+            completion_tokens=data.get("eval_count"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CustomProviderClient:
+    """Any self-hosted/local model server that speaks the OpenAI-compatible
+    chat-completions wire format at an operator-supplied base_url (Settings
+    redesign's "Custom / Local" provider) -- Ollama itself, LM Studio,
+    vLLM's OpenAI-compatible server, etc. all implement this same surface.
+    api_key is optional: most local servers need none; Authorization is
+    only sent when one is configured.
+    """
+
+    base_url: str
+    api_key: str | None = None
+
+    async def complete(self, *, model: str, prompt: str) -> LlmCompletionPayload:
+        if not self.base_url:
+            raise LlmProviderError("custom: no base URL configured")
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{self.base_url.rstrip('/')}/v1/chat/completions",
+                    headers=headers,
+                    json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+                )
+        except httpx.HTTPError as exc:
+            # Same "localhost means the container, not the host" trap as
+            # OllamaClient above -- see its comment.
+            raise LlmProviderError(f"custom: connection failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise LlmProviderError(f"custom: HTTP {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise LlmProviderError(f"custom: unexpected response shape: {data!r}") from exc
+        usage = data.get("usage") or {}
+        return LlmCompletionPayload(
+            text=text,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+
+
+# What an agent's `model: "auto"` means on each hosted provider when the
+# operator hasn't picked a default model in Settings. Ollama, Custom and
+# Hugging Face have no universal default (a local server's or HF's model
+# catalogue is whatever the operator chose), so they need a stored one.
+HOSTED_DEFAULT_MODELS: dict[LlmProvider, str] = {
+    LlmProvider.ANTHROPIC: "claude-3-5-haiku-20241022",
+    LlmProvider.OPENAI: "gpt-4o-mini",
+    LlmProvider.GEMINI: "gemini-1.5-flash",
+    LlmProvider.DEEPSEEK: "deepseek-chat",
+}
+
+AUTO_MODEL = "auto"
+
+
+def stored_default_models() -> dict[LlmProvider, str]:
+    """Per-provider default models saved in Settings (LLM provider store).
+    An unavailable store (no SECRETS_ENCRYPTION_KEY) is simply "none set",
+    same graceful degradation as default_clients()."""
+    try:
+        store = get_llm_provider_store()
+        rows = {p: store.get_credentials(p.value) for p in LlmProvider}
+    except Exception:  # noqa: BLE001 - store unavailable is not a router failure
+        return {}
+    return {p: row.default_model for p, row in rows.items() if row and row.default_model}
+
+
+def resolve_model(provider: LlmProvider, model: str, defaults: dict[LlmProvider, str]) -> str:
+    """`model` unchanged unless it is "auto", which becomes the provider's
+    stored default, else its built-in hosted default. No default at all is
+    a provider failure (so the router falls through to the next provider),
+    never a request for a model literally named "auto"."""
+    if model != AUTO_MODEL:
+        return model
+    resolved = defaults.get(provider) or HOSTED_DEFAULT_MODELS.get(provider)
+    if resolved is None:
+        raise LlmProviderError(
+            f"{provider.value}: no default model set -- pick one in Settings > LLM Providers"
+        )
+    return resolved
+
+
+def default_clients() -> dict[LlmProvider, LlmProviderClient]:
+    """Credentials come from src.security.llm_provider_store (a real,
+    runtime-editable, encrypted store -- Settings redesign) when a provider
+    has a row there, falling back to the original env-var-backed Settings
+    fields otherwise so an existing env-only deployment keeps working
+    unchanged. The store itself being unavailable (no
+    SECRETS_ENCRYPTION_KEY configured at all) degrades the same way --
+    silently falls back to env vars -- rather than failing router
+    construction, matching src.brokers.factory.build_configured_adapter's
+    same graceful-degradation posture for the analogous broker case.
+    """
+    settings = get_settings()
+    try:
+        store = get_llm_provider_store()
+        stored = {p: store.get_credentials(p.value) for p in LlmProvider}
+    except Exception:  # noqa: BLE001 - store unavailable is not a router failure
+        stored = {}
+
+    def _api_key(provider: LlmProvider, env_value: str | None) -> str | None:
+        row = stored.get(provider)
+        return row.api_key if row and row.api_key else env_value
+
+    def _base_url(provider: LlmProvider, env_value: str) -> str:
+        row = stored.get(provider)
+        return row.base_url if row and row.base_url else env_value
+
+    custom_creds = stored.get(LlmProvider.CUSTOM)
+    return {
+        LlmProvider.ANTHROPIC: AnthropicClient(
+            api_key=_api_key(LlmProvider.ANTHROPIC, settings.anthropic_api_key)
+        ),
+        LlmProvider.OPENAI: OpenAiCompatibleClient(
+            api_key=_api_key(LlmProvider.OPENAI, settings.openai_api_key),
+            base_url="https://api.openai.com/v1/chat/completions",
+            provider_name="openai",
+        ),
+        LlmProvider.GEMINI: GeminiClient(
+            api_key=_api_key(LlmProvider.GEMINI, settings.gemini_api_key)
+        ),
+        LlmProvider.DEEPSEEK: OpenAiCompatibleClient(
+            api_key=_api_key(LlmProvider.DEEPSEEK, settings.deepseek_api_key),
+            base_url="https://api.deepseek.com/chat/completions",
+            provider_name="deepseek",
+        ),
+        LlmProvider.OLLAMA: OllamaClient(
+            base_url=_base_url(LlmProvider.OLLAMA, settings.ollama_base_url)
+        ),
+        LlmProvider.CUSTOM: CustomProviderClient(
+            base_url=(custom_creds.base_url if custom_creds else "") or "",
+            api_key=custom_creds.api_key if custom_creds else None,
+        ),
+        # Hugging Face Inference Providers speak the OpenAI chat-completions
+        # format; model ids are HF repo ids (e.g. "meta-llama/Llama-3.1-8B-Instruct").
+        LlmProvider.HUGGINGFACE: OpenAiCompatibleClient(
+            api_key=_api_key(LlmProvider.HUGGINGFACE, settings.huggingface_api_key),
+            base_url=_base_url(
+                LlmProvider.HUGGINGFACE, "https://router.huggingface.co/v1/chat/completions"
+            ),
+            provider_name="huggingface",
+        ),
+    }
+
+
+@dataclass(slots=True)
+class ProviderHealth:
+    last_failure_at: float | None = None
+    last_success_at: float | None = None
+    # True if the most recent successful completion from this provider was
+    # served as a fallback (i.e. it was not first in the config's order).
+    served_as_fallback: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class LlmCompletionResult:
+    provider: LlmProvider
+    text: str
+    used_fallback: bool
+    failed_providers: tuple[LlmProvider, ...]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LlmStreamChunk:
+    """One increment of a streamed completion (Build Spec §18's in-app
+    chat "streaming responses"). `text` is this chunk's delta only, never
+    the accumulated text so far -- a consumer concatenates chunks itself.
+    The final chunk for a call always has `done=True`; every field after
+    `text` is `None`/absent until then, since only the last chunk carries
+    the completed call's provider/fallback/usage summary (mirroring
+    LlmCompletionResult).
+    """
+
+    text: str
+    done: bool
+    provider: LlmProvider | None = None
+    used_fallback: bool | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+class LlmRouterExhaustedError(Exception):
+    def __init__(self, agent_id: str, errors: list[tuple[LlmProvider, str]]):
+        self.agent_id = agent_id
+        self.errors = errors
+        joined = "; ".join(f"{p.value}: {msg}" for p, msg in errors)
+        super().__init__(f"llm_router: every provider failed for agent {agent_id!r}: {joined}")
+
+
+class LlmRouter:
+    """Stateful per-process router: holds per-provider failure-tracking
+    health (requirement 1's "per-provider failure tracking") across calls.
+    Fallback *order* is never cached here — _fallback_order() re-reads the
+    live Gateway config every call, so a hot-reloaded config takes effect
+    immediately without constructing a new router.
+    """
+
+    def __init__(
+        self,
+        clients: dict[LlmProvider, LlmProviderClient] | None = None,
+        default_models: dict[LlmProvider, str] | None = None,
+    ) -> None:
+        # Injected clients (tests) are fixed. Otherwise clients and default
+        # models are re-read from the Settings store on every call: this
+        # router is a process-wide singleton, and building them once meant
+        # a key saved in Settings never reached a real agent call until a
+        # backend restart.
+        self._injected_clients = clients
+        self._injected_defaults = default_models
+        self._health: dict[LlmProvider, ProviderHealth] = {
+            provider: ProviderHealth() for provider in LlmProvider
+        }
+
+    def _live(self) -> tuple[dict[LlmProvider, LlmProviderClient], dict[LlmProvider, str]]:
+        if self._injected_clients is not None:
+            return self._injected_clients, self._injected_defaults or {}
+        return default_clients(), stored_default_models()
+
+    def _model_for(
+        self, provider: LlmProvider, model: str, defaults: dict[LlmProvider, str]
+    ) -> str:
+        if self._injected_clients is not None and self._injected_defaults is None:
+            # Pre-existing contract for injected fake clients: model passes
+            # through untouched.
+            return model
+        return resolve_model(provider, model, defaults)
+
+    def health_for(self, provider: LlmProvider) -> ProviderHealth:
+        return self._health[provider]
+
+    def fallback_order(self) -> list[LlmProvider]:
+        """Public read-only wrapper around `_fallback_order()` with no
+        preferred-provider override -- for read-only surfaces like GET
+        /api/v1/system/vitals that need the router's real current
+        fallback order without going through a completion call."""
+        return self._fallback_order()
+
+    async def _record_usage(
+        self, provider: LlmProvider, prompt_tokens: int | None, completion_tokens: int | None
+    ) -> None:
+        """The one choke point every real completion's usage counts pass
+        through -- feeds both the long-lived Prometheus counter (`/metrics`,
+        Grafana) and, as of the Phase 17 real-world testing pass, the
+        purpose-built Redis per-provider-per-day total GET
+        /api/v1/system/vitals reads for "today's" token usage (never
+        derived from the Prometheus counter itself -- see
+        src.observability.vitals's docstring for why)."""
+        total = 0
+        if prompt_tokens is not None:
+            llm_token_usage_total.labels(provider=provider.value, token_type="prompt").inc(
+                prompt_tokens
+            )
+            total += prompt_tokens
+        if completion_tokens is not None:
+            llm_token_usage_total.labels(provider=provider.value, token_type="completion").inc(
+                completion_tokens
+            )
+            total += completion_tokens
+        if total > 0:
+            await record_token_usage_today(get_redis(), provider.value, total)
+
+    def _fallback_order(self, preferred_provider: LlmProvider | None = None) -> list[LlmProvider]:
+        config = get_state().get_config()
+        if config is None:
+            # No Gateway config loaded yet (e.g. very early boot) — fall
+            # back to declaration order rather than refusing to route.
+            base_order = list(LlmProvider)
+        else:
+            base_order = list(config.infra.llm_providers.order)
+
+        if preferred_provider is None:
+            return base_order
+        # Phase 12 (Build Spec §18): in-app chat's per-session model
+        # switch -- a session pins a single preferred provider without
+        # touching the global Gateway config, tried first with the rest
+        # of the fallback chain kept intact as a safety net (never a
+        # provider-or-nothing choice).
+        rest = [p for p in base_order if p != preferred_provider]
+        return [preferred_provider, *rest]
+
+    async def complete(
+        self,
+        *,
+        agent_id: str,
+        prompt: str,
+        model: str = "auto",
+        preferred_provider: LlmProvider | None = None,
+    ) -> LlmCompletionResult:
+        order = self._fallback_order(preferred_provider)
+        errors: list[tuple[LlmProvider, str]] = []
+        clients, defaults = self._live()
+
+        for idx, provider in enumerate(order):
+            client = clients.get(provider)
+            if client is None:
+                errors.append((provider, "no client configured for this provider"))
+                continue
+            try:
+                resolved = self._model_for(provider, model, defaults)
+                payload = await client.complete(model=resolved, prompt=prompt)
+            except Exception as exc:  # noqa: BLE001 - any provider failure triggers fallback
+                self._health[provider].last_failure_at = time.time()
+                errors.append((provider, str(exc)))
+                logger.warning(
+                    "llm_router.provider_failed",
+                    provider=provider.value,
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+                continue
+
+            used_fallback = idx > 0
+            self._health[provider].last_success_at = time.time()
+            self._health[provider].served_as_fallback = used_fallback
+            if used_fallback:
+                logger.info(
+                    "llm_router.served_via_fallback",
+                    provider=provider.value,
+                    agent_id=agent_id,
+                    failed_providers=[p.value for p, _ in errors],
+                )
+            await self._record_usage(provider, payload.prompt_tokens, payload.completion_tokens)
+            return LlmCompletionResult(
+                provider=provider,
+                text=payload.text,
+                used_fallback=used_fallback,
+                failed_providers=tuple(p for p, _ in errors),
+                prompt_tokens=payload.prompt_tokens,
+                completion_tokens=payload.completion_tokens,
+            )
+
+        raise LlmRouterExhaustedError(agent_id, errors)
+
+    async def stream_complete(
+        self,
+        *,
+        agent_id: str,
+        prompt: str,
+        model: str = "auto",
+        preferred_provider: LlmProvider | None = None,
+    ) -> AsyncIterator[LlmStreamChunk]:
+        """Streams a completion (Build Spec §18's in-app chat). Real,
+        incremental SSE streaming for Anthropic (the only provider client
+        this router streams natively) -- every other provider's client
+        has no streaming call at all, so this falls back to running that
+        provider's ordinary `complete()` and yielding its full text as
+        word-chunks, an honestly-simulated stream sourced from one
+        complete response rather than a fabricated multi-chunk provider
+        stream. Same fallback-chain shape as `complete()`, with one
+        genuine constraint streaming introduces that a single request/
+        response call never has: **fallback to the next provider only
+        happens before this provider has yielded its first chunk** --
+        once real output has reached the caller, a later failure ends the
+        stream with an exception instead of silently splicing in a
+        different provider's content mid-response.
+        """
+        order = self._fallback_order(preferred_provider)
+        errors: list[tuple[LlmProvider, str]] = []
+        clients, defaults = self._live()
+
+        for idx, provider in enumerate(order):
+            client = clients.get(provider)
+            if client is None:
+                errors.append((provider, "no client configured for this provider"))
+                continue
+
+            used_fallback = idx > 0
+            any_yielded = False
+            prompt_tokens: int | None = None
+            completion_tokens: int | None = None
+            try:
+                resolved = self._model_for(provider, model, defaults)
+                if isinstance(client, AnthropicClient):
+                    async for text_delta in _stream_anthropic(
+                        client, model=resolved, prompt=prompt
+                    ):
+                        any_yielded = True
+                        yield LlmStreamChunk(text=text_delta, done=False)
+                else:
+                    payload = await client.complete(model=resolved, prompt=prompt)
+                    prompt_tokens = payload.prompt_tokens
+                    completion_tokens = payload.completion_tokens
+                    for word_chunk in _word_chunks(payload.text):
+                        any_yielded = True
+                        yield LlmStreamChunk(text=word_chunk, done=False)
+            except Exception as exc:  # noqa: BLE001 - any provider failure triggers fallback
+                self._health[provider].last_failure_at = time.time()
+                errors.append((provider, str(exc)))
+                logger.warning(
+                    "llm_router.provider_failed",
+                    provider=provider.value,
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+                if any_yielded:
+                    # Already streamed real content to the caller -- can't
+                    # transparently splice in a different provider now.
+                    raise
+                continue
+
+            self._health[provider].last_success_at = time.time()
+            self._health[provider].served_as_fallback = used_fallback
+            await self._record_usage(provider, prompt_tokens, completion_tokens)
+            yield LlmStreamChunk(
+                text="",
+                done=True,
+                provider=provider,
+                used_fallback=used_fallback,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+            return
+
+        raise LlmRouterExhaustedError(agent_id, errors)
+
+
+def _word_chunks(text: str) -> list[str]:
+    """Splits a complete response into word-plus-trailing-space pieces so
+    the non-natively-streaming fallback path in `stream_complete` still
+    yields multiple chunks rather than the whole text at once -- a real
+    (if coarse) stream, not a single disguised blob."""
+    if not text:
+        return []
+    words = text.split(" ")
+    return [w + " " for w in words[:-1]] + [words[-1]]
+
+
+async def _stream_anthropic(
+    client: AnthropicClient, *, model: str, prompt: str
+) -> AsyncIterator[str]:
+    """Real Anthropic Messages API SSE streaming (`"stream": true`),
+    parsed by hand (no SDK dependency) -- yields each
+    `content_block_delta` event's text piece as it arrives. Raises
+    `LlmProviderError` (caught by `stream_complete`, same as the
+    non-streaming path) for a non-200 response, checked *before* any
+    chunk is yielded, so a bad key/network failure here falls back to the
+    next provider exactly like `complete()` does.
+    """
+    if not client.api_key:
+        raise LlmProviderError("anthropic: no API key configured")
+    async with (
+        httpx.AsyncClient(timeout=30.0) as http_client,
+        http_client.stream(
+            "POST",
+            client.base_url,
+            headers={
+                "x-api-key": client.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 1024,
+                "stream": True,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        ) as response,
+    ):
+        if response.status_code != 200:
+            body = await response.aread()
+            raise LlmProviderError(f"anthropic: HTTP {response.status_code}: {body[:200]!r}")
+        async for line in response.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            raw = line[len("data: ") :].strip()
+            if not raw:
+                continue
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "content_block_delta":
+                delta = event.get("delta") or {}
+                text = delta.get("text")
+                if text:
+                    yield text
+
+
+_router: LlmRouter | None = None
+
+
+def get_llm_router() -> LlmRouter:
+    global _router
+    if _router is None:
+        _router = LlmRouter()
+    return _router
+
+
+def active_llm_provider() -> str | None:
+    """The provider genuinely first in the router's real fallback order
+    right now (Agent Gateway config, hot-reloadable) -- for GET
+    /api/v1/system/vitals's `llm.active_provider` field. `None` only when
+    no Gateway config has loaded yet (very early boot), never a guessed
+    default -- same "no config -> honestly absent" posture `_fallback_order`
+    itself falls back to declaration order for, just surfaced here instead
+    of silently substituted."""
+    config = get_state().get_config()
+    if config is None:
+        return None
+    order = config.infra.llm_providers.order
+    return order[0].value if order else None
+
+
+def _iso_or_none(epoch_seconds: float | None) -> str | None:
+    if epoch_seconds is None:
+        return None
+    return datetime.fromtimestamp(epoch_seconds, UTC).isoformat()
+
+
+def llm_provider_health_vitals() -> list[dict]:
+    """Real per-provider failure/success tracking (requirement 1's "per-
+    provider failure tracking", `ProviderHealth` above) -- for GET
+    /api/v1/system/vitals's `llm.provider_health` field, replacing the
+    Overview page's stale "Provider health is not exposed yet" caption.
+    This health data has been tracked on the process-wide `get_llm_router()`
+    singleton since Phase 3 (every real completion call already updates it
+    -- src.orchestration.strategies/chat/strategy_suggestions,
+    src.notifications.inbound_router), it was simply never read by any API
+    route until now. In the router's live fallback order, same as
+    `active_llm_provider()` above."""
+    router = get_llm_router()
+    result = []
+    for provider in router.fallback_order():
+        health = router.health_for(provider)
+        result.append(
+            {
+                "provider": provider.value,
+                "last_failure_at": _iso_or_none(health.last_failure_at),
+                "last_success_at": _iso_or_none(health.last_success_at),
+                "served_as_fallback": health.served_as_fallback,
+            }
+        )
+    return result
