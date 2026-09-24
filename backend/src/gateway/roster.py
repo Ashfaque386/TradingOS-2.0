@@ -1,7 +1,16 @@
-"""The fixed 24-agent roster (Build Spec §7.1). Curated, not user-creatable:
-the Agent Gateway configures these 24 agents, it does not create or delete
-them. Every agentId referenced anywhere in the config file (agents.entries,
-bindings, agentToAgentPolicy) must be one of these.
+"""The fixed 30-agent roster (Build Spec §7.1, extended by Phase 19).
+Curated, not user-creatable: the Agent Gateway configures these agents, it
+does not create or delete them. Every agentId referenced anywhere in the
+config file (agents.entries, bindings, agentToAgentPolicy) must be one of
+these.
+
+Phase 19 added 6 agents (screener/fundamentals/valuation/macro/
+post-trade-review/investor-reporting agents, docs/phase19-audit.md) found
+missing by comparing this roster against the 18-agent "AI Hedge Fund"
+reference design. None of the six are LangGraph pipeline nodes (see
+src/agents/roster.py's PIPELINE_NODE_AGENTS, still exactly 13) -- they are
+scheduled/operational agents, the same pattern data-ingestion-agent and
+notification-agent already use.
 """
 
 from enum import StrEnum
@@ -12,6 +21,7 @@ class Department(StrEnum):
     EXECUTIVE = "Executive"
     MARKET_INTELLIGENCE = "Market Intelligence"
     RESEARCH = "Research"
+    FUNDAMENTAL_RESEARCH = "Fundamental Research"
     QUANT = "Quant"
     RISK_AND_GOVERNANCE = "Risk & Governance"
     PORTFOLIO = "Portfolio"
@@ -52,9 +62,18 @@ ROSTER: tuple[RosterAgent, ...] = (
     RosterAgent("skill-registry-manager", "Skill Registry Manager", Department.OPERATIONS),
     RosterAgent("execution-agent", "Execution Agent", Department.OPERATIONS),
     RosterAgent("paper-trading-engine", "Paper Trading Engine", Department.OPERATIONS),
+    # Phase 19 additions -- docs/phase19-audit.md.
+    RosterAgent("screener-agent", "Screener Agent", Department.FUNDAMENTAL_RESEARCH),
+    RosterAgent("fundamentals-agent", "Fundamentals Agent", Department.FUNDAMENTAL_RESEARCH),
+    RosterAgent("valuation-agent", "Valuation Agent", Department.FUNDAMENTAL_RESEARCH),
+    RosterAgent("macro-agent", "Macro / Economic Calendar Agent", Department.MARKET_INTELLIGENCE),
+    RosterAgent(
+        "post-trade-review-agent", "Post-Trade Review Agent", Department.RISK_AND_GOVERNANCE
+    ),
+    RosterAgent("investor-reporting-agent", "Investor Reporting Agent", Department.OPERATIONS),
 )
 
-assert len(ROSTER) == 24, f"Fixed roster must have exactly 24 agents, got {len(ROSTER)}"
+assert len(ROSTER) == 30, f"Fixed roster must have exactly 30 agents, got {len(ROSTER)}"
 
 ROSTER_BY_ID: dict[str, RosterAgent] = {agent.agent_id: agent for agent in ROSTER}
 

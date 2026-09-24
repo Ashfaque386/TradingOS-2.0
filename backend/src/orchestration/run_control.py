@@ -18,6 +18,7 @@ from src.models.organization_run import (
 )
 from src.models.task import Task, TaskStatus
 from src.orchestration import events
+from src.orchestration.operator_guidance import fold_guidance_into_objective
 from src.orchestration.planner import CannotPlanError, PlannerFn, create_plan, fake_llm_planner
 from src.orchestration.task_engine import drive_run_to_quiescence
 from src.orchestration.transitions import conditional_transition
@@ -55,7 +56,14 @@ async def create_run(
 
     try:
         async with session_factory() as db:
-            await create_plan(db, run_id, objective, planner_fn=planner_fn)
+            # Phase 19 (docs/phase19-audit.md Part 2.6/3.1): every active
+            # OperatorGuidance row is folded into the objective the
+            # planner actually receives here -- OrganizationRun.objective
+            # above stays exactly what the operator typed, so the UI
+            # still shows their original text, but the real planning
+            # input includes standing guidance.
+            planning_objective = await fold_guidance_into_objective(db, objective)
+            await create_plan(db, run_id, planning_objective, planner_fn=planner_fn)
     except CannotPlanError:
         async with session_factory() as db:
             await events.emit(db, redis, run_id=run_id, event_type="run.cannot_plan", payload={})
@@ -187,7 +195,8 @@ async def rerun_run(
 
     try:
         async with session_factory() as db:
-            await create_plan(db, new_run_id, objective, planner_fn=planner_fn)
+            planning_objective = await fold_guidance_into_objective(db, objective)
+            await create_plan(db, new_run_id, planning_objective, planner_fn=planner_fn)
     except CannotPlanError:
         async with session_factory() as db:
             return await db.get(OrganizationRun, new_run_id)

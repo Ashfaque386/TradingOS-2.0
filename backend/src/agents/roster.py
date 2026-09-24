@@ -47,6 +47,23 @@ AGENT_CAPABILITIES: dict[str, frozenset[str]] = {
     "skill-registry-manager": frozenset({"skill-registry-manage"}),
     "execution-agent": frozenset({"order-execute"}),
     "paper-trading-engine": frozenset({"paper-order-execute"}),
+    # Phase 19 additions -- docs/phase19-audit.md. None are pipeline nodes;
+    # each runs on its own schedule (src/orchestration/screener_scheduler.py,
+    # post_trade_review_scheduler.py, investor_reporting_scheduler.py) the
+    # same way data-ingestion-agent and notification-agent already do.
+    "screener-agent": frozenset({"instrument-screen"}),
+    # fundamentals-agent/valuation-agent/macro-agent: no real data source
+    # exists anywhere in this codebase for any of these (confirmed by the
+    # Phase 19 audit's exhaustive grep, docs/phase19-audit.md §3.2) -- the
+    # capability names below are honest about what they'd read, and the
+    # orchestration layer that would serve them returns an explicit gap
+    # notice rather than a fabricated number. See src/orchestration/
+    # fundamentals.py.
+    "fundamentals-agent": frozenset({"fundamentals-read"}),
+    "valuation-agent": frozenset({"valuation-read"}),
+    "macro-agent": frozenset({"macro-calendar-read"}),
+    "post-trade-review-agent": frozenset({"trade-review-write"}),
+    "investor-reporting-agent": frozenset({"investor-report-generate"}),
 }
 
 assert (
@@ -85,3 +102,19 @@ PIPELINE_NODE_AGENTS: tuple[tuple[str, str], ...] = (
 )
 
 assert len(PIPELINE_NODE_AGENTS) == 13, "Build Spec §7.2 pipeline has exactly 13 nodes"
+
+# Phase 19 (docs/phase19-audit.md §3.2): these agents' read capability
+# names a real thing (fundamentals, valuation, macro/economic calendar)
+# that no data source anywhere in this codebase actually provides -- the
+# audit's exhaustive grep confirmed zero fundamentals/macro fields exist
+# in any model. Frontend surfaces (Agent Fleet's detail view) use this set
+# to render an honest gap notice for these three agents specifically,
+# rather than a fabricated number or a silently-empty panel that looks
+# like real data just hasn't loaded yet.
+NO_DATA_SOURCE_AGENTS: frozenset[str] = frozenset(
+    {"fundamentals-agent", "valuation-agent", "macro-agent"}
+)
+
+assert (
+    NO_DATA_SOURCE_AGENTS <= ROSTER_IDS
+), "NO_DATA_SOURCE_AGENTS must only name real roster agents"

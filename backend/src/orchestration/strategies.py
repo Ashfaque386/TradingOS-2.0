@@ -74,6 +74,7 @@ from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
 from src.models.strategy_version import StrategyVersion
 from src.notifications.dispatch import notify
 from src.notifications.types import AlertLevel
+from src.orchestration.prompt_versions import get_active_prompt_content
 from src.orchestration.transitions import ApprovalGate, conditional_transition
 
 PROMOTION_TRANSITION_TYPE = "backtesting_to_papertrading"
@@ -136,13 +137,22 @@ def _fallback_code(objective: str) -> str:
     return _FALLBACK_CODE_TEMPLATE.format(objective_summary=summary)
 
 
-async def generate_strategy_code(objective: str, *, router: LlmRouter | None = None) -> str:
+async def generate_strategy_code(
+    objective: str, *, router: LlmRouter | None = None, db: AsyncSession | None = None
+) -> str:
+    task_prompt = f"Write a run_backtest(data, config) -> dict implementation for: {objective}"
+    # Phase 19 (docs/phase19-audit.md Part 2.2): the real effect of
+    # activating a prompt version for "python-code-generator". `db` is
+    # optional -- callers with no DB session available (none exist today,
+    # but kept honest for any future one) get exactly the prior behavior.
+    if db is not None:
+        active_prompt = await get_active_prompt_content(db, "python-code-generator")
+        if active_prompt:
+            task_prompt = f"{active_prompt}\n\n{task_prompt}"
+
     router = router or get_llm_router()
     try:
-        result = await router.complete(
-            agent_id="python-code-generator",
-            prompt=f"Write a run_backtest(data, config) -> dict implementation for: {objective}",
-        )
+        result = await router.complete(agent_id="python-code-generator", prompt=task_prompt)
         return result.text
     except LlmRouterExhaustedError:
         return _fallback_code(objective)
@@ -328,7 +338,7 @@ async def run_strategy_pipeline(
     strategy = await create_strategy(
         db, name=name, objective=objective, instrument_class=instrument_class, created_by=created_by
     )
-    code = await generate_strategy_code(objective, router=router)
+    code = await generate_strategy_code(objective, router=router, db=db)
     version = await create_version_with_validation(db, strategy, code, created_by=created_by)
 
     if version.static_validation_passed:

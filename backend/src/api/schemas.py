@@ -92,6 +92,15 @@ class AgentSummaryResponse(BaseModel):
     avatar: str | None
     theme: str | None
     voice: str | None
+    # Phase 19 (docs/phase19-audit.md §3.2): False only for the 3 agents
+    # whose read capability names a real thing (fundamentals, valuation,
+    # macro/economic calendar) no data source in this codebase provides --
+    # see src.agents.roster.NO_DATA_SOURCE_AGENTS. Every other agent is
+    # True, including ones with no pipeline node at all (data-ingestion,
+    # notification, etc.), since "no data source" here specifically means
+    # "this agent's own subject matter has no backing data anywhere," not
+    # "this agent isn't wired to the LangGraph pipeline."
+    has_data_source: bool
 
 
 class RunPipelineRequest(BaseModel):
@@ -133,6 +142,41 @@ class PromptVersionResponse(BaseModel):
 
 class CreatePromptVersionRequest(BaseModel):
     content: str = Field(min_length=1)
+
+
+class AgentHeartbeatEntryResponse(BaseModel):
+    status: str
+    details: dict | None
+    checked_at: str
+
+
+class AgentTaskEntryResponse(BaseModel):
+    """A real orchestration Task (src.models.task.Task) whose `capability`
+    is one this agent is registered for (src.agents.roster.capabilities_for)
+    -- the only per-agent execution-outcome signal this codebase has for a
+    pipeline-node agent, since Task itself carries no agent_id column."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    name: str
+    status: str
+    last_error: str | None
+    created_at: str
+    completed_at: str | None
+
+
+class AgentActivityResponse(BaseModel):
+    """Phase 19 (docs/phase19-audit.md Part 2.2/3.2): the audit's own
+    finding was that Agent Fleet had no per-agent activity/performance
+    history anywhere. Both lists here are real rows scoped to this one
+    agent, never fabricated -- `heartbeats` is empty for any agent whose
+    heartbeat is disabled (see AgentSummaryResponse.heartbeat_enabled),
+    and `tasks` is empty for any agent with no capability ever claimed by
+    the task engine."""
+
+    agent_id: str
+    heartbeats: list[AgentHeartbeatEntryResponse]
+    tasks: list[AgentTaskEntryResponse]
 
 
 class CreateStrategyRequest(BaseModel):

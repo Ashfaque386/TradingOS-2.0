@@ -22,12 +22,14 @@ from src.models.daily_signal import DailySignal
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
 from src.models.instrument import Instrument
+from src.models.investor_report import InvestorReport
 from src.models.kill_switch_state import KillSwitchState
 from src.models.live_batch_authorization import LiveBatchAuthorization
 from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
 from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.market_data_provenance import MarketDataProvenance
+from src.models.operator_guidance import OperatorGuidance
 from src.models.optimization_run import OptimizationRun
 from src.models.order import Order
 from src.models.organization_run import (
@@ -56,6 +58,7 @@ from src.models.strategy_version import StrategyVersion
 from src.models.task import Task, TaskStatus
 from src.models.task_dependency import TaskDependency
 from src.models.trade import Trade
+from src.models.trade_review_finding import TradeReviewFinding
 from src.models.user import User
 
 __all__ = [
@@ -87,8 +90,10 @@ __all__ = [
     "LiveBatchAuthorization",
     "LiveOrderIntent",
     "LivePosition",
+    "InvestorReport",
     "LiveTradingSubscription",
     "MarketDataProvenance",
+    "OperatorGuidance",
     "OptimizationRun",
     "Order",
     "OrganizationRun",
@@ -120,5 +125,6 @@ __all__ = [
     "TaskDependency",
     "TaskStatus",
     "Trade",
+    "TradeReviewFinding",
     "User",
 ]

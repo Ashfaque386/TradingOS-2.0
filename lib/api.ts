@@ -210,9 +210,38 @@ export type AgentSummary = {
   avatar: string | null
   theme: string | null
   voice: string | null
+  // Phase 19 (docs/phase19-audit.md §3.2): false only for the 3 agents
+  // whose subject matter (fundamentals, valuation, macro/economic
+  // calendar) has no real backing data source anywhere in this codebase.
+  has_data_source: boolean
 }
 
 export const getAgents = () => apiGet<AgentSummary[]>('/api/v1/agents')
+
+// ---- Per-agent activity (Phase 19 Part 3.2) -- real HeartbeatLog rows
+// plus orchestration Tasks joined by capability, never a fabricated
+// per-agent metric. ----
+export type AgentHeartbeatEntry = {
+  status: string
+  details: Record<string, unknown> | null
+  checked_at: string
+}
+export type AgentTaskEntry = {
+  id: string
+  run_id: string
+  name: string
+  status: string
+  last_error: string | null
+  created_at: string
+  completed_at: string | null
+}
+export type AgentActivity = {
+  agent_id: string
+  heartbeats: AgentHeartbeatEntry[]
+  tasks: AgentTaskEntry[]
+}
+export const getAgentActivity = (agentId: string) =>
+  apiGet<AgentActivity>(`/api/v1/agents/${agentId}/activity`)
 
 export type SetAgentIdentityInput = {
   name?: string
@@ -435,6 +464,41 @@ export type SignoffSnapshot = {
 }
 
 export type OrganizationEventMessage = { type: 'event'; event: Record<string, unknown> }
+
+// ---- Automation schedule (Phase 19, docs/phase19-audit.md Part 1.2) --
+// real live next_run_time read off the running APScheduler instances,
+// never a hardcoded cadence string. Heartbeat is a plain asyncio loop
+// (src.agents.scheduler.start_heartbeat_loop), not an APScheduler job, so
+// it's reported separately as a fixed interval instead of a fabricated
+// next_run_time. ----
+export type ScheduledJob = {
+  scheduler: string
+  job_id: string
+  trigger: string
+  next_run_time: string | null
+}
+export type ScheduledJobsResponse = {
+  jobs: ScheduledJob[]
+  heartbeat_interval_seconds: number
+}
+export const getScheduledJobs = () => apiGet<ScheduledJobsResponse>('/api/v1/system/scheduled-jobs')
+
+// ---- Operator Guidance (Phase 19 Part 2.6/3.1) -- notes the CEO Agent's
+// next planning cycle actually reads, see run_control.py's
+// fold_guidance_into_objective(). ----
+export type OperatorGuidanceDto = {
+  id: string
+  message: string
+  created_by: string
+  is_active: boolean
+  created_at: string
+  deactivated_at: string | null
+}
+export const listOperatorGuidance = () => apiGet<OperatorGuidanceDto[]>('/api/v1/operator-guidance')
+export const createOperatorGuidance = (message: string) =>
+  apiPost<OperatorGuidanceDto>('/api/v1/operator-guidance', { message })
+export const deactivateOperatorGuidance = (guidanceId: string) =>
+  apiPost<OperatorGuidanceDto>(`/api/v1/operator-guidance/${guidanceId}/deactivate`)
 
 // ---- Strategies ----
 export type StrategyVersion = {
@@ -991,5 +1055,28 @@ export const getLiveOptionChain = (underlying: string, expiry: string) =>
   )
 export const getLiveOptionExpiries = (underlying: string) =>
   apiGet<string[]>(`/api/v1/market-data/option-expiries/${encodeURIComponent(underlying)}`)
+
+// ---- Investor Reports (Phase 19, docs/phase19-audit.md Part 2.5/3.3) --
+// real markdown narratives from src.orchestration.investor_reporting,
+// browsable here, plus a manual "generate now" trigger for ops. ----
+export type InvestorReportSummary = {
+  id: string
+  period_start: string
+  period_end: string
+  cadence: string
+  generated_at: string
+}
+export type InvestorReport = InvestorReportSummary & {
+  content_markdown: string
+  generated_by: string
+}
+export const listInvestorReports = () => apiGet<InvestorReportSummary[]>('/api/v1/investor-reports')
+export const getInvestorReport = (reportId: string) =>
+  apiGet<InvestorReport>(`/api/v1/investor-reports/${reportId}`)
+export const generateInvestorReport = (input: {
+  period_start: string
+  period_end: string
+  cadence?: string
+}) => apiPost<InvestorReport>('/api/v1/investor-reports/generate', input)
 
 export { API_BASE_URL }

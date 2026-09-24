@@ -51,11 +51,23 @@ async def _llm_or_fallback(router: LlmRouter, agent_id: str, prompt: str, fallba
         return {"source": "fallback", **fallback}
 
 
+def _with_active_prompt(state: TradingOSGraphState, agent_id: str, task_prompt: str) -> str:
+    """Phase 19 (docs/phase19-audit.md Part 2.2): the real effect of
+    activating a prompt version -- prefixed ahead of the existing
+    task-specific instruction, never replacing it outright, so the node's
+    own task framing (what field to fill, what format is expected) always
+    still reaches the LLM even when an operator has set a custom prompt."""
+    active = state.active_prompts.get(agent_id)
+    return f"{active}\n\n{task_prompt}" if active else task_prompt
+
+
 async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> dict:
     brief = await _llm_or_fallback(
         router,
         "ceo-agent",
-        f"Kick off a trading strategy research objective: {state.objective}",
+        _with_active_prompt(
+            state, "ceo-agent", f"Kick off a trading strategy research objective: {state.objective}"
+        ),
         fallback={"directive": f"Research and propose a strategy for: {state.objective}"},
     )
     return {"ceo_brief": brief, "node_log": [*state.node_log, "ceo_kickoff"]}
@@ -70,7 +82,11 @@ async def _node_strategy_generation(state: TradingOSGraphState, router: LlmRoute
     strategy = await _llm_or_fallback(
         router,
         "strategy-generator",
-        f"Generate a trading strategy given market analysis: {state.market_analysis}",
+        _with_active_prompt(
+            state,
+            "strategy-generator",
+            f"Generate a trading strategy given market analysis: {state.market_analysis}",
+        ),
         fallback={"name": "fallback-momentum-strategy", "kind": "momentum"},
     )
     return {"strategy": strategy, "node_log": [*state.node_log, "strategy_generation"]}
@@ -85,7 +101,11 @@ async def _node_code_generation(state: TradingOSGraphState, router: LlmRouter) -
     result = await _llm_or_fallback(
         router,
         "python-code-generator",
-        f"Write a run_backtest(data, config) implementation for strategy: {state.strategy}",
+        _with_active_prompt(
+            state,
+            "python-code-generator",
+            f"Write a run_backtest(data, config) implementation for strategy: {state.strategy}",
+        ),
         fallback={
             "text": "def run_backtest(data, config):\n    return {'trades': 0}\n",
         },
@@ -263,9 +283,12 @@ async def run_pipeline(
     enabled_agents: frozenset[str] | None = None,
     router: LlmRouter | None = None,
     run_id: str | None = None,
+    active_prompts: dict[str, str] | None = None,
 ) -> TradingOSGraphState:
     compiled = build_graph(enabled_agents, router=router)
-    initial = TradingOSGraphState(objective=objective, run_id=run_id)
+    initial = TradingOSGraphState(
+        objective=objective, run_id=run_id, active_prompts=active_prompts or {}
+    )
     # LangGraph's default recursion_limit (25) is well under the step count
     # a full validator-retry (up to MAX_VALIDATION_ATTEMPTS) plus
     # evaluation-rejection (up to MAX_REJECTIONS full strategy-generation

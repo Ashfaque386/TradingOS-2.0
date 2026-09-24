@@ -41,7 +41,7 @@ def test_valid_json5_with_comments_and_trailing_commas_loads(tmp_path: Path):
 
     assert config.version == 1
     effective = compute_effective_agents(config)
-    assert len(effective) == 24
+    assert len(effective) == 30
     assert effective["ceo-agent"].identity_name == "CEO"
     assert effective["ceo-agent"].heartbeat_interval_minutes == 10
     # An agent with no override still gets the roster/defaults fallback.

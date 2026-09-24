@@ -84,3 +84,43 @@ async def test_system_vitals_readable_by_every_role(client: AsyncClient, make_us
 async def test_system_vitals_requires_authentication(client: AsyncClient):
     resp = await client.get("/api/v1/system/vitals")
     assert resp.status_code in (401, 403)
+
+
+async def test_scheduled_jobs_reports_real_live_state_from_the_registry(
+    client: AsyncClient, make_user
+):
+    """Phase 19 (docs/phase19-audit.md Part 1.2): the endpoint reads real,
+    live APScheduler state -- registered here exactly the way
+    src.main's lifespan registers the app's real schedulers -- never a
+    hardcoded cadence string."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    from src.observability.scheduler_registry import register_scheduler, unregister_all
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(lambda: None, CronTrigger(hour=18, minute=0), id="fake_job", name="fake")
+    scheduler.start()
+    register_scheduler("fake_scheduler", scheduler)
+    try:
+        await make_user("sched-viewer@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+        token = await _login(client, "sched-viewer@example.com", "supersecret1")
+
+        resp = await client.get("/api/v1/system/scheduled-jobs", headers=_auth(token))
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert "heartbeat_interval_seconds" in body
+        assert body["heartbeat_interval_seconds"] > 0
+        job = next(j for j in body["jobs"] if j["job_id"] == "fake_job")
+        assert job["scheduler"] == "fake_scheduler"
+        assert job["next_run_time"] is not None
+        assert "cron" in job["trigger"].lower()
+    finally:
+        scheduler.shutdown(wait=False)
+        unregister_all()
+
+
+async def test_scheduled_jobs_requires_authentication(client: AsyncClient):
+    resp = await client.get("/api/v1/system/scheduled-jobs")
+    assert resp.status_code in (401, 403)

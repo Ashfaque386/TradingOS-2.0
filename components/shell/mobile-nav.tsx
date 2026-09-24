@@ -7,6 +7,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   Beaker,
+  FileText,
   Home,
   Menu,
   Network,
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { label: 'Backtests', icon: BarChart3, href: '/backtests' },
   { label: 'Orders & Trades', icon: ArrowLeftRight, href: '/orders' },
   { label: 'Market Analysis', icon: Activity, href: '/analysis' },
+  { label: 'Investor Reports', icon: FileText, href: '/investor-reports' },
   { label: 'Audit Log', icon: Shield, href: '/audit' },
   { label: 'Settings', icon: Settings, href: '/settings' },
 ]

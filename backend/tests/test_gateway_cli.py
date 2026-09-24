@@ -93,7 +93,7 @@ def test_agents_list_json(clean_db, config_path: Path):
     result = _invoke(config_path, "agents", "list", "--json")
     assert result.exit_code == 0
     rows = json.loads(result.output)
-    assert len(rows) == 24
+    assert len(rows) == 30
     ceo = next(r for r in rows if r["agentId"] == "ceo-agent")
     assert ceo["name"] == "CEO"
     assert ceo["heartbeatIntervalMinutes"] == 10
