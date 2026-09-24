@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Bell,
@@ -112,7 +112,7 @@ function formatIstTime(iso: string): string {
 
 type StatusChip = { key: string; label: string; detail: string; color: 'green' | 'amber' | 'red' | 'gray'; section: SectionId }
 
-function StatusStrip({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
+function StatusStrip({ onNavigate, refreshKey }: { onNavigate: (s: SectionId) => void; refreshKey: number }) {
   const [chips, setChips] = useState<StatusChip[]>([])
 
   useEffect(() => {
@@ -156,7 +156,13 @@ function StatusStrip({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
     }
     load()
     return () => { cancelled = true }
-  }, [])
+    // refreshKey is bumped by BrokerConfigSection/LlmProvidersSection/
+    // NotificationsSection whenever any of their own data actually
+    // changes (save, delete, toggle, a real OAuth/test round-trip) -- a
+    // save previously left this strip showing the pre-save status until
+    // the whole page was reloaded, since this effect only ran once on
+    // mount.
+  }, [refreshKey])
 
   if (chips.length === 0) return null
 
@@ -550,7 +556,7 @@ function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit
   )
 }
 
-function LlmProvidersSection() {
+function LlmProvidersSection({ onStatusChanged }: { onStatusChanged: () => void }) {
   const { role } = useAuth()
   const canEdit = role === 'SystemAdministrator'
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([])
@@ -560,6 +566,7 @@ function LlmProvidersSection() {
     const [nextStatuses, { order: nextOrder }] = await Promise.all([listLlmProviderStatus(), readGatewayOrder()])
     setStatuses(nextStatuses)
     setOrder(nextOrder)
+    onStatusChanged()
   }
   useEffect(() => { reload() }, [])
 
@@ -767,12 +774,15 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
   )
 }
 
-function BrokerConfigSection({ oauthBanner }: { oauthBanner: { broker: string; ok: boolean; error?: string } | null }) {
+function BrokerConfigSection({ oauthBanner, onStatusChanged }: { oauthBanner: { broker: string; ok: boolean; error?: string } | null; onStatusChanged: () => void }) {
   const { role } = useAuth()
   const canEdit = role === 'SystemAdministrator'
   const [statuses, setStatuses] = useState<BrokerCredentialStatus[]>([])
 
-  async function reload() { setStatuses(await listBrokerCredentialStatus()) }
+  async function reload() {
+    setStatuses(await listBrokerCredentialStatus())
+    onStatusChanged()
+  }
   useEffect(() => { reload() }, [])
 
   return (
@@ -1050,12 +1060,15 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
   )
 }
 
-function NotificationsSection() {
+function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void }) {
   const { role } = useAuth()
   const canEdit = role === 'SystemAdministrator'
   const [statuses, setStatuses] = useState<NotificationChannelStatus[]>([])
 
-  async function reload() { setStatuses(await listNotificationChannels()) }
+  async function reload() {
+    setStatuses(await listNotificationChannels())
+    onStatusChanged()
+  }
   useEffect(() => { reload() }, [])
 
   const byChannel = (name: string) => statuses.find((s) => s.channel === name) ?? { channel: name, configured: false, enabled: false, allowed_sender_ids: [], alert_levels: [] }
@@ -1165,6 +1178,11 @@ function RiskSection() {
 export default function SettingsPage() {
   const [section, setSection] = useState<SectionId>('gateway')
   const [oauthBanner, setOauthBanner] = useState<{ broker: string; ok: boolean; error?: string } | null>(null)
+  // Bumped by whichever of the three status-strip-backing sections
+  // (broker/LLM/notifications) just reloaded its own data, so the strip
+  // re-fetches immediately instead of only on the next full page load.
+  const [statusRefreshKey, setStatusRefreshKey] = useState(0)
+  const bumpStatus = useCallback(() => setStatusRefreshKey((k) => k + 1), [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1187,7 +1205,7 @@ export default function SettingsPage() {
           <p>Gateway configuration, LLM routing, broker connections, notifications, skill grants, and dual-controlled risk limits.</p>
         </header>
 
-        <StatusStrip onNavigate={setSection} />
+        <StatusStrip onNavigate={setSection} refreshKey={statusRefreshKey} />
 
         <div className="set-shell">
           <nav className="set-subnav" aria-label="Settings sections">
@@ -1206,9 +1224,9 @@ export default function SettingsPage() {
 
           <section className="set-content">
             {section === 'gateway' && <GatewaySection />}
-            {section === 'llm' && <LlmProvidersSection />}
-            {section === 'broker' && <BrokerConfigSection oauthBanner={oauthBanner} />}
-            {section === 'notifications' && <NotificationsSection />}
+            {section === 'llm' && <LlmProvidersSection onStatusChanged={bumpStatus} />}
+            {section === 'broker' && <BrokerConfigSection oauthBanner={oauthBanner} onStatusChanged={bumpStatus} />}
+            {section === 'notifications' && <NotificationsSection onStatusChanged={bumpStatus} />}
             {section === 'skills' && <SkillsSection />}
             {section === 'risk' && <RiskSection />}
           </section>
