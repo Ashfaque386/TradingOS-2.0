@@ -520,3 +520,264 @@ check` clean; `tsc --noEmit` clean on the frontend change.
 Phase 16 Follow-up E (`docs/phase16-wiring-audit.md`) is updated to mark
 this specific sub-gap resolved rather than leaving stale text claiming it
 is still open.
+
+## Settings still failing after the first fix — second diagnosis (2026-09-23, local Docker)
+
+The first fix (above) did not fix Settings on `D:\TradingOS-2.0\TradingOS-2.0`.
+This pass diagnosed it from evidence gathered on the running stack before
+changing any code.
+
+### Evidence
+
+- Checkout: `main` == `origin/main` (`efb43e2`). The one local change was
+  `config/tradingos.config.json`, rewritten at runtime by the app itself.
+- **No root `.env` existed.** Only `.env.example` and `backend/.env.example`
+  (where the key is commented out). The key was also absent from the shell
+  and from the Windows User/Machine environment.
+- Inside the running backend: `SECRETS_ENCRYPTION_KEY` length **0**.
+  `CORS_ORIGINS=http://localhost:3003`, which matched the frontend's published
+  port. The frontend bundle had `http://localhost:8000` baked in, which is
+  correct. So this was not CORS and not a stale `NEXT_PUBLIC_API_URL`.
+- Real JWT (SystemAdministrator), curl, Origin `http://localhost:3003`:
+  - `OPTIONS /api/v1/settings/llm-providers/ollama` → 200, allow-origin
+    matches.
+  - `POST /api/v1/settings/llm-providers/ollama` → **503**
+    `{"detail":"SECRETS_ENCRYPTION_KEY is not configured -- ..."}`.
+  - `POST /api/v1/broker-credentials/zerodha` → the same 503.
+  - `GET /api/v1/settings/llm-providers` → the same 503.
+- Backend log for that request (`POST ... 503 Service Unavailable`) was
+  only in `/var/log/supervisor/api.log` **inside the container**.
+  `docker compose logs backend` showed nothing but supervisord's own
+  `spawned`/`RUNNING` lines. The startup warning added by the first fix
+  *had* fired, in that same in-container file, where no one would see it.
+- The only real user, the operator's own account, is SystemAdministrator.
+  This was not RBAC.
+
+### Actual root cause
+
+Every Settings read/write returned 503 because `SECRETS_ENCRYPTION_KEY` was
+empty in the container: no `.env` existed at the repo root for compose to
+read. The first fix documented the variable and added a warning, but the
+warning, like every API log line, was invisible: supervisord sent the
+`api` program's stdout to a file inside the container, not to
+`docker compose logs`.
+
+A second, latent bug would have hit right after the key was set. All three
+encrypted stores (`broker_credentials.enc`,
+`llm_provider_credentials.enc`, `notification_channels.enc`) live in
+`/app/secrets` in the container's writable layer, with **no volume**. The
+documented `docker compose down && up --build` cycle would have silently
+wiped every saved broker/LLM/notification credential on each recreate.
+
+### Fix
+
+- Local only (gitignored, never committed): created `.env` from
+  `.env.example` with a freshly generated Fernet key. **Back up this key
+  together with the `tradingos-2.0_secrets` volume.** The stores cannot
+  be decrypted without it.
+- `backend/supervisord.conf` and `deploy/allinone-supervisord.conf`:
+  `[program:api]` now logs to `/dev/stdout` / `/dev/stderr` (with
+  `*_logfile_maxbytes=0`). The key warning, request logs and tracebacks now
+  appear in `docker compose logs backend` and in `pnpm docker:up`'s
+  attached output.
+- `docker-compose.yml`: named volume `tradingos-2.0_secrets` mounted at
+  `/app/secrets`.
+- `backend/src/brokers/tick_source.py`: logs `tick_source.selected` with
+  `source=mock|broker_quotes` at startup. Previously nothing in the logs
+  said which feed was active.
+- Regression tests: `backend/tests/test_container_settings_persistence.py`
+  checks api→stdout in both supervisord configs, the secrets volume mount
+  and declaration, and that all three store paths resolve under
+  `/app/secrets`. Verified to **fail on the pre-fix files** (2 failures)
+  and pass after.
+
+### Verified after the fix (full `docker compose down` + `pnpm docker:up -d`)
+
+- All six services up: backend/prometheus/redis/temporal healthy, frontend
+  and grafana started. No errors in any service's logs. Key length 44
+  inside the backend.
+- `POST /api/v1/settings/llm-providers/ollama`
+  (`http://host.docker.internal:11434`) → **204**. `GET` reads it back as
+  `configured: true`. `/app/secrets/llm_provider_credentials.enc` written
+  with mode 0600. Request log visible in `docker compose logs backend`.
+- **Survives a full `docker compose down` + recreate** (new container,
+  value still present).
+
+### Parts 3–4 results against the real stack
+
+| Item | Result |
+|---|---|
+| 3.1 LLM providers | **Ollama: passes.** `qwen2.5:0.5b` pulled. `GET .../ollama/models` lists it via `http://host.docker.internal:11434` from inside the backend container. `POST .../ollama/test?model=qwen2.5:0.5b` → `ok: true` (10.9 s, cold model load). Hosted provider: **not yet done** (needs the operator's real API key). |
+| 3.2 Broker OAuth (Zerodha, Upstox) | **Not yet done**: needs the operator's developer-console redirect registration and real logins. Both brokers show `never-connected`. |
+| 3.3 Notification channel | **Not yet done**: needs a real bot token. |
+| 4.1 Live ticks | **Not verifiable yet.** No broker connected, and NSE was closed at test time (next open 09:15 IST). Also a **real gap**: `build_tick_source()` is resolved once in the lifespan, so a broker connected via Settings only drives paper trading after a **backend restart**. The new `tick_source.selected` log line shows which feed is active. |
+| 4.2 Live option chain | **Not verifiable yet.** Same broker/market-hours dependency. |
+| 4.3 System Vitals | `GET /api/v1/system/vitals` returns real host CPU/memory/uptime and market state. `token_usage_today` is empty and p50/p95 are `null`: no LLM call or order dispatch has happened on this fresh stack, not fabricated zeros. Changes over time and UI labelling not yet eyeballed. |
+| 4.4 Paper trade end-to-end | **Passes after the sandbox fix below.** As PortfolioManager: `POST /strategies` 201 → enroll `DEMOSTOCK` 201 → daily-signal-run BUY @ 106.12 → tick → **filled 47 @ 106.17**. It appears in `GET /orders` (`mode: paper, status: filled`) and in the audit log (create, enroll, signal runs, tick). The manual endpoints use the fake daily-price provider (documented honest stub), so this exercises the real engine but not real prices. |
+| 4.5 Kill Switch | Tripped via a real drawdown observation (`POST /kill-switch/paper/check`, 20% ≥ 15%), then reset by RiskManager. PortfolioManager reset correctly refused (403). **Trip and reset both arrived live on `/api/v1/ws/activity-feed`** while subscribed. Visual check of the Organization Pulse orb and System Vitals panel is **not yet done** (needs a logged-in browser session). Left in the reset state. |
+| 4.6 Four roles | Four fixture accounts (`e2e.admin/pm/risk@example.com` via `scripts/seed_e2e_users.py`, plus `e2e.auditor@example.com` via `/auth/register`). Settings reads are allowed for all four roles. Broker/LLM/notification writes are SystemAdministrator-only (others 403). Audit entries are admin + auditor only. Consistent with every `register_policy`. Audit chain verifies (`db_chain_valid: true`). |
+
+Two more issues surfaced in the now-visible logs:
+
+- A browser tab still open on the frontend's *previous* port (3003) got
+  `OPTIONS ... 400` CORS preflight rejections after `docker-up.js` moved
+  the frontend to 3002. After every `pnpm docker:up`, use the frontend URL
+  it prints, not an old tab.
+- Postgres is published as `0.0.0.0:<random>->5432` when
+  `POSTGRES_HOST_PORT` is unset, despite the compose comment saying
+  nothing is published. **Fixed** in this pass: removed from
+  `docker-compose.yml` and moved to the opt-in
+  `docker-compose.postgres-port.yml` (loopback via `BIND_HOST`). Verified
+  live: after `docker compose down` + `docker-up.js -d`, `docker compose ps`
+  shows no 5432 mapping and every published port is on `127.0.0.1`.
+
+During the RBAC sweep, an admin write probe briefly stored placeholder
+values for `deepseek` (LLM) and `upstox` (broker). Both were deleted within
+a minute and both actions are in the audit log. The only credential left
+configured is the Ollama base URL.
+
+### Strategy sandbox fix (operator chose: custom seccomp profile)
+
+Root cause, verified live: creating a network namespace needs
+`CAP_SYS_ADMIN` **unless** it is created inside a new user namespace.
+Docker withholds that capability, and its default seccomp profile also
+gates `unshare()` behind it. Even with seccomp fully unconfined, a bare
+`unshare --net` still fails. So a seccomp change alone could never have
+fixed it.
+
+- `src/engine/sandbox/process_runtime.py`: `UNSHARE_NET_ARGS` is now
+  `unshare --user --map-root-user --net --`. No added capability.
+- `deploy/seccomp/backend.json`: Docker's own default profile
+  (`moby/profiles` `seccomp/default.json`, unmodified) plus **one** rule:
+  `unshare` allowed only when `(flags & 0x2e020000) == 0`, i.e. user and
+  network namespaces only (the same masked-flags style moby uses for
+  `clone`). Applied via `security_opt` on the backend service only.
+  `cap_add: SYS_ADMIN` was considered and rejected as far broader.
+- Verified in a throwaway container under the profile: network
+  unreachable inside the worker (`[Errno 101]`, the same proof the sandbox
+  was originally verified with). `--mount` and `--pid` namespaces still
+  denied. Bare `--net` still denied. Normal networking outside the sandbox
+  unaffected.
+- `Dockerfile.allinone` header documents that a bare `docker run` needs
+  the same `--security-opt` and a `/app/secrets` volume.
+- Regression tests: `backend/tests/test_docker_sandbox_seccomp.py`.
+
+### Backend test suite on this machine
+
+Ran in a throwaway container from the backend image, on a copy of the repo
+(not the live `config/`), against the stack's Postgres (`tradingos_test`)
+and Redis (DB 15), under the new seccomp profile: **894 passed, 3 failed**.
+`ruff check` and `ruff format --check` are clean. The 3 failures are
+environmental:
+
+- 2 × `test_audit_archive.py`: the test's own cleanup calls `chattr`,
+  which the runtime image lacks. Production code
+  (`src/audit/archive.py::_try_make_append_only`) already handles this
+  (catches `OSError`, logs `audit.archive_chattr_unavailable`).
+- 1 × `test_market_data_api.py::test_bhavcopy_fallback_...`: this machine
+  has real internet and fetched the real NSE bhavcopy
+  (`nse_bhavcopy_real`); the test assumes no egress.
+
+The first run of the suite, without the profile and with Redis on
+`localhost`, showed 89 failed / 15 errors: 66 were this sandbox bug and 35
+were Redis being unreachable from the harness. The numbers above are the
+corrected run.
+
+## Broker Config: redirect URL chicken-and-egg, post-login 404, top-bar overlap
+
+Reported from the live console after the Settings fix:
+
+- **Redirect URL only appeared after "Connect", and Connect needs a saved
+  API key.** Zerodha and Upstox only issue that key *after* a redirect URL
+  is registered in their developer console. `GET /api/v1/broker-credentials`
+  now always returns the effective `redirect_uri` (plus
+  `default_redirect_uri` and `redirect_uri_is_custom`), even with nothing
+  saved. The URL is editable: it can be sent with the first key save (the
+  `redirect_uri` field on `POST .../{broker}`), or changed/reset later via
+  the new `PUT .../{broker}/redirect-uri` (SystemAdministrator only)
+  without re-entering the write-only secrets. Only the origin (plus any
+  reverse-proxy path prefix) can change: the path must still end at
+  `/api/v1/broker-credentials/{broker}/callback`, or the login redirect
+  would never reach the token exchange. Connect (`login-url`) uses the
+  custom URL, and Upstox's token exchange sends the same one. Re-saving
+  keys keeps a custom URL. The OAuth routes now rebuild stored credentials
+  with `dataclasses.replace`, so no field gets silently dropped.
+- **After a successful broker login the browser landed on a 404.**
+  `_settings_redirect` used the backend's own origin
+  (`http://localhost:8000/settings`, a 404 in the compose stack). New
+  `FRONTEND_BASE_URL` setting, set by `docker-compose.yml` from
+  `FRONTEND_HOST_PORT` so it follows `docker-up.js`'s port bumps. Unset
+  (the single-origin all-in-one image) keeps the old same-origin behavior.
+  Verified live: it lands on `http://localhost:3002/settings?...`.
+- **Top bar overlapped scrolled content.** The fixed top bar used
+  `--glass-bg` (`rgba(15,20,25,.4)`) with no backdrop blur, so the Settings
+  status strip showed straight through it. It is now `.shell-topbar` (90%
+  `--background` + 18px blur, same recipe as the mobile tab bar).
+  `.shell-main` also used `padding-top: 60px` under a 64px (`h-16`) bar;
+  that is now `4rem`.
+
+Tests: `backend/tests/test_broker_redirect_uri.py` (10). Broker/OAuth/RBAC
+suites: 104 passed. `ruff` clean. `tsc --noEmit` clean (run in the
+frontend's deps image; `next build` ignores type errors). The broker card's
+look is not yet verified in a logged-in browser.
+
+## LLM Providers: Ollama missing from the chain, "auto" never resolved, Hugging Face
+
+Reported: Ollama configured but not in the fallback priority list, and a
+request to add Hugging Face. Root causes found:
+
+1. **The priority list overwrote the order with a stale copy.**
+   `FallbackPriorityList` loaded `infra.llmProviders.order` once into
+   private state. A card's "In fallback priority chain" switch updated the
+   config, but the list never reloaded, and the next drag wrote its stale
+   list back, silently dropping the provider. This is how `ollama` vanished
+   from `config/tradingos.config.json`. The order is now owned by
+   `LlmProvidersSection` and reloaded after every change. Saving a provider
+   for the first time adds it to the chain, and removing it takes it out.
+2. **`model: "auto"` was never translated.** Every real agent call (agent
+   graph, CEO chat, strategy generation, suggestions) routes with
+   `model="auto"`, and every client sent that literally, so each hosted
+   provider was asked for a model named "auto". New
+   `llm_router.resolve_model`: the provider's stored default model (new
+   `default_model` on the LLM credential, set via
+   `PUT /settings/llm-providers/{p}/default-model` or the card's
+   Discover → Set default), else `HOSTED_DEFAULT_MODELS`, else that
+   provider fails and the chain moves on. Ollama, Custom and Hugging Face
+   have no built-in default and show a warning until one is set.
+   `/test` with no `?model=` now tests exactly what "auto" would use.
+3. **The router singleton never saw keys saved in Settings.** It built its
+   clients once at first use. It now re-reads clients and default models
+   from the store on each call (injected test clients unchanged).
+4. **`PUT /gateway/config` returned 500 for valid JSON containing an
+   escaped emoji.** `json5` decodes `"🧠"` (how Python's
+   `json.dumps` writes the CEO agent's 🧠) into two lone surrogates, which
+   Postgres rejects. `gateway/loader.py` now rejoins surrogate pairs, and an
+   unpaired one is a 400 config error. The browser sends the emoji
+   literally, so the UI switch didn't hit this, but any scripted/CLI client
+   did.
+
+**Hugging Face** is a new provider (`huggingface`): Inference Providers'
+OpenAI-compatible API at `router.huggingface.co/v1` (chat completions and
+`/models` discovery), key = an HF access token with the "Make calls to
+Inference Providers" permission, `HUGGINGFACE_API_KEY` env fallback. Model
+ids are HF repo ids; pick a default model after saving the token.
+
+Verified live on the stack: Ollama default `qwen2.5:0.5b`, added to the
+chain (`deepseek → anthropic → gemini → openai → ollama`). A real
+`get_llm_router().complete(model="auto")` was served by DeepSeek (the
+operator's key, `auto` → `deepseek-chat`). With Ollama pinned (chat's
+per-session provider), it answered via `qwen2.5:0.5b`. `/test` with no
+model passes for Ollama. Hugging Face is listed and awaiting a token.
+
+**Top bar, second attempt.** The first fix looked like a flat, near-opaque
+band because the blur never applied: declaring both `backdrop-filter` and
+`-webkit-backdrop-filter` made the CSS pipeline keep only the `-webkit-`
+form, which Chromium ignores. Now only the unprefixed property is written
+(the pipeline adds the prefix itself, as it does for the mobile tab bar),
+with a translucent gradient (74%→58% of `--background`), `blur(22px)
+saturate(165%)`, a faint cyan hairline and a soft drop shadow, in keeping
+with the original glass theme.
+
+Tests: `test_llm_auto_model_and_huggingface.py` (17) and 3 new
+`test_gateway_loader.py` cases (all 3 fail on the pre-fix loader,
+reproducing the live `DataError`). `tsc --noEmit` clean.

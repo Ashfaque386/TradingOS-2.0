@@ -36,6 +36,11 @@ class LlmProviderCredentials:
 
     api_key: str | None = None
     base_url: str | None = None
+    # The model an agent's `model: "auto"` resolves to on this provider
+    # (src.agents.llm_router.resolve_model). Required for providers with
+    # no universal default (Ollama, Custom, Hugging Face); optional
+    # override of the built-in default for the other hosted ones.
+    default_model: str | None = None
 
     def __repr__(self) -> str:
         present = []

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
     deepseek_api_key: str | None = None
+    huggingface_api_key: str | None = None
     ollama_base_url: str = "http://localhost:11434"
 
     # Strategy sandbox (src/engine/sandbox/, Build Spec §9) AND, as of
@@ -122,6 +123,12 @@ class Settings(BaseSettings):
     # scheme/host), the same escape hatch NEXT_PUBLIC_API_URL/CORS_ORIGINS
     # already are for their own analogous problem.
     public_base_url: str | None = None
+
+    # Where the browser lands after a broker OAuth login (the Settings
+    # page). Unset = same origin as this backend, right for the
+    # single-origin all-in-one image; docker-compose.yml sets it to the
+    # frontend's published port, since this backend's own /settings 404s.
+    frontend_base_url: str | None = None
 
     # LLM provider credentials (Settings redesign): a sibling encrypted
     # store to secrets_store_path above, same Fernet key, same

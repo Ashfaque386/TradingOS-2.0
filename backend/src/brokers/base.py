@@ -75,6 +75,11 @@ class BrokerCredentials:
     # Upstox only ("standard" | "extended"); irrelevant to Zerodha, whose
     # access-token lifetime isn't caller-selectable.
     token_duration: str | None = None
+    # Operator-set callback URL (Broker Config), used instead of the one
+    # derived from the request origin -- e.g. a tunnel or LAN hostname
+    # registered in the broker's developer console. `redirect_uri` above
+    # stays "the one last sent to the broker".
+    redirect_uri_override: str | None = None
 
     def __repr__(self) -> str:
         present = ["api_key"]

@@ -30,7 +30,13 @@ from pathlib import Path
 
 from src.engine.sandbox.types import SandboxError, SandboxLimits, SandboxResult
 
-UNSHARE_NET_ARGS: tuple[str, ...] = ("unshare", "--net", "--")
+# --user --map-root-user: a network namespace needs CAP_SYS_ADMIN unless it
+# is created inside a fresh user namespace, and Docker's default capability
+# set withholds CAP_SYS_ADMIN -- so a bare `unshare --net` 500'd every
+# strategy create in the Docker stack. The user namespace grants nothing
+# outside the worker; the backend's seccomp profile
+# (deploy/seccomp/backend.json) allows unshare() for user+net namespaces only.
+UNSHARE_NET_ARGS: tuple[str, ...] = ("unshare", "--user", "--map-root-user", "--net", "--")
 
 
 class SandboxWorkerCrashedError(SandboxError):

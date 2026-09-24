@@ -21,10 +21,14 @@ posture as every other provider in `src.engine.paper_trading`.
 import time
 from dataclasses import dataclass
 
+import structlog
+
 from src.brokers.base import BrokerAdapter
 from src.brokers.factory import build_configured_adapter
 from src.engine.paper_trading.tick_feed import MockTickSource, Tick, TickSource
 from src.security.secrets_store import SecretsStoreError, get_secrets_store
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -37,9 +41,14 @@ class BrokerQuoteTickSource:
 
 
 def build_tick_source() -> TickSource:
+    # Resolved once, at startup (src.main's lifespan) -- a broker connected
+    # later via Settings only takes effect on the next backend restart, so
+    # this line is how an operator confirms which feed is actually live.
     adapter = build_configured_adapter(sandbox=False)
     if adapter is None:
+        logger.info("tick_source.selected", source="mock", reason="no broker configured")
         return MockTickSource()
+    logger.info("tick_source.selected", source="broker_quotes", adapter=type(adapter).__name__)
     return BrokerQuoteTickSource(adapter)
 
 

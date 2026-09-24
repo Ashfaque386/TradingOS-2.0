@@ -17,6 +17,16 @@
 # mounted at /var/lib/postgresql/data if you need the database to survive
 # one (Redis's own data here is disposable -- pub/sub, rate-limit counters,
 # the mock tick stream -- and does not need to persist).
+#
+# Two more runtime requirements docker-compose.yml wires for its backend
+# service but a bare `docker run` of this image does not get for free:
+# - `--security-opt seccomp=deploy/seccomp/backend.json`: without it,
+#   Docker's default profile blocks the strategy sandbox's
+#   `unshare --user --net` and every strategy create 500s. A platform that
+#   can't take a custom seccomp profile can't run strategy creation.
+# - A volume at /app/secrets, plus the same SECRETS_ENCRYPTION_KEY on
+#   every boot, or saved Settings (broker/LLM/notification credentials)
+#   are lost on each redeploy.
 
 # ---- Frontend build (Next.js standalone output) ----
 FROM node:24-alpine AS frontend-deps

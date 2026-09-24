@@ -1,0 +1,17 @@
+# Opt-in override: publish the backend container's embedded Postgres to the
+# host, e.g. for psql or a GUI client. docker-compose.yml never publishes
+# it by default (see the comment in its backend `ports:`).
+#
+# Enable either per command:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres-port.yml up -d
+# or for every command, including `pnpm docker:up`, by adding to .env:
+#   COMPOSE_PATH_SEPARATOR=,
+#   COMPOSE_FILE=docker-compose.yml,docker-compose.postgres-port.yml
+#
+# Loopback-only by default, like every other published port (BIND_HOST).
+# 5433 rather than 5432 so it doesn't collide with a Postgres already
+# running on the host.
+services:
+  backend:
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${POSTGRES_HOST_PORT:-5433}:5432"

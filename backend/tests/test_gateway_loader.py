@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from src.gateway.loader import ConfigLoadError, compute_effective_agents, load_and_validate
+from src.gateway.apply import apply_config_text
+from src.gateway.loader import (
+    ConfigLoadError,
+    compute_effective_agents,
+    load_and_validate,
+    parse_config_text,
+)
+from src.models.agent_config_version import ConfigVersionStatus
 
 VALID_CONFIG_JSON5 = """
 {
@@ -74,3 +81,32 @@ def test_non_object_top_level_raises_config_load_error(tmp_path: Path):
 
     with pytest.raises(ConfigLoadError):
         load_and_validate(config_path)
+
+
+# A Python client's json.dumps writes the agent emoji as an escaped UTF-16
+# surrogate pair. json5 decoded that into two lone surrogates, which then
+# crashed storing the config version in Postgres (PUT /gateway/config 500,
+# seen live in the Phase 17 local pass).
+_ESCAPED_EMOJI_CONFIG = (
+    '{"version": 1, "infra": {"llmProviders": {"order": ["anthropic"]}, '
+    '"brokerFailover": {"primary": "zerodha", "fallback": "upstox"}, '
+    '"riskThresholdRefs": {"maxDrawdownPct": 15, "wsLatencyMs": 100}}, '
+    '"agents": {"entries": {"ceo-agent": {"identity": {"name": "CEO", '
+    '"emoji": "\\ud83e\\udde0"}}}}}'
+)
+
+
+def test_escaped_surrogate_pair_decodes_to_one_character():
+    data = parse_config_text(_ESCAPED_EMOJI_CONFIG)
+    assert data["agents"]["entries"]["ceo-agent"]["identity"]["emoji"] == "🧠"
+
+
+def test_unpaired_surrogate_escape_is_a_config_error_not_a_crash():
+    with pytest.raises(ConfigLoadError, match="unpaired"):
+        parse_config_text('{"version": 1, "x": "\\ud83e"}')
+
+
+async def test_escaped_emoji_config_applies_and_is_stored(db_session_factory):
+    async with db_session_factory() as db:
+        result = await apply_config_text(db, _ESCAPED_EMOJI_CONFIG, source="t")
+    assert result.status == ConfigVersionStatus.ACTIVE, result.errors

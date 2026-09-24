@@ -19,6 +19,7 @@ parallel code path works.
 
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 
 import httpx
 import structlog
@@ -26,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.llm_router import (
+    HOSTED_DEFAULT_MODELS,
     AnthropicClient,
     CustomProviderClient,
     GeminiClient,
@@ -33,6 +35,7 @@ from src.agents.llm_router import (
     OllamaClient,
     OpenAiCompatibleClient,
     default_clients,
+    stored_default_models,
 )
 from src.api.schemas import (
     LlmProviderModel,
@@ -40,6 +43,7 @@ from src.api.schemas import (
     LlmProviderStatusResponse,
     LlmProviderTestResult,
     WriteLlmProviderCredentialsRequest,
+    WriteLlmProviderDefaultModelRequest,
 )
 from src.audit.service import write_audit_entry
 from src.core.db import get_db
@@ -59,21 +63,18 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/settings/llm-providers", tags=["llm-providers"])
 
 _WRITE_ROLES = [Role.SYSTEM_ADMINISTRATOR]
-# A minimal, cheap real completion for /test -- these are this endpoint's
-# OWN default test model per provider, not necessarily what any agent's
-# "auto" model resolves to; callers can override via ?model=.
-_DEFAULT_TEST_MODELS = {
-    LlmProvider.ANTHROPIC: "claude-3-5-haiku-20241022",
-    LlmProvider.OPENAI: "gpt-4o-mini",
-    LlmProvider.GEMINI: "gemini-1.5-flash",
-    LlmProvider.DEEPSEEK: "deepseek-chat",
-}
+# /test with no ?model= uses exactly what an agent's "auto" would: the
+# provider's stored default model, else its built-in hosted default
+# (src.agents.llm_router.HOSTED_DEFAULT_MODELS).
 
 register_policy("GET", "/api/v1/settings/llm-providers", roles=list(Role))
 register_policy("POST", "/api/v1/settings/llm-providers/{provider}", roles=_WRITE_ROLES)
 register_policy("DELETE", "/api/v1/settings/llm-providers/{provider}", roles=_WRITE_ROLES)
 register_policy("POST", "/api/v1/settings/llm-providers/{provider}/test", roles=_WRITE_ROLES)
 register_policy("GET", "/api/v1/settings/llm-providers/{provider}/models", roles=_WRITE_ROLES)
+register_policy(
+    "PUT", "/api/v1/settings/llm-providers/{provider}/default-model", roles=_WRITE_ROLES
+)
 
 
 def _get_store() -> LlmProviderStore:
@@ -115,6 +116,8 @@ async def list_llm_provider_status_endpoint(
                 configured=creds is not None and bool(creds.api_key or creds.base_url),
                 base_url=creds.base_url if creds else None,
                 in_fallback_order=provider in order,
+                default_model=creds.default_model if creds else None,
+                builtin_default_model=HOSTED_DEFAULT_MODELS.get(provider),
             )
         )
     return responses
@@ -133,8 +136,13 @@ async def write_llm_provider_credentials_endpoint(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "custom/local providers require a base_url"
         )
+    existing = store.get_credentials(provider)
+    default_model = body.default_model or (existing.default_model if existing else None)
     store.set_credentials(
-        provider, LlmProviderCredentials(api_key=body.api_key, base_url=body.base_url)
+        provider,
+        LlmProviderCredentials(
+            api_key=body.api_key, base_url=body.base_url, default_model=default_model
+        ),
     )
     await write_audit_entry(
         db,
@@ -171,6 +179,42 @@ async def delete_llm_provider_credentials_endpoint(
     )
 
 
+@router.put("/{provider}/default-model", status_code=status.HTTP_204_NO_CONTENT)
+async def write_llm_provider_default_model_endpoint(
+    provider: str,
+    body: WriteLlmProviderDefaultModelRequest,
+    current_user: User = Depends(require_role),
+    store: LlmProviderStore = Depends(_get_store),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Sets what `model: "auto"` resolves to on this provider, without
+    re-entering its (write-only) key."""
+    _require_known_provider(provider)
+    creds = store.get_credentials(provider)
+    if creds is None or not (creds.api_key or creds.base_url):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"configure {provider} (API key or base URL) before choosing its default model",
+        )
+    model = (body.model or "").strip() or None
+    store.set_credentials(provider, replace(creds, default_model=model))
+    await write_audit_entry(
+        db,
+        actor=current_user.email,
+        action="llm_provider_credentials.default_model_updated",
+        entity_type="llm_provider_credentials",
+        entity_id=provider,
+        details={"default_model": model},
+    )
+    await db.commit()
+    logger.info(
+        "llm_provider_credentials.default_model_updated",
+        provider=provider,
+        default_model=model,
+        updated_by=str(current_user.id),
+    )
+
+
 @router.post("/{provider}/test")
 async def test_llm_provider_endpoint(
     provider: str,
@@ -182,13 +226,17 @@ async def test_llm_provider_endpoint(
     clients = default_clients()
     client = clients[provider_enum]
 
-    test_model = model or _DEFAULT_TEST_MODELS.get(provider_enum, "default")
-    if provider_enum in (LlmProvider.OLLAMA, LlmProvider.CUSTOM) and not model:
-        # No universal default model name for a self-hosted server --
-        # require the caller to pick one from /models first.
+    test_model = (
+        model
+        or stored_default_models().get(provider_enum)
+        or HOSTED_DEFAULT_MODELS.get(provider_enum)
+    )
+    if not test_model:
+        # No universal default for a self-hosted server or Hugging Face --
+        # pick one from /models (or save a default model) first.
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "pass ?model=<name> (see GET .../models) to test a local/custom provider",
+            "pass ?model=<name> (see GET .../models) or save a default model first",
         )
 
     started = time.monotonic()

@@ -58,7 +58,7 @@ export function TopBar({
   const currentPalette = PALETTES.find((p) => p.id === palette)
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-16 bg-[var(--glass-bg)] border-b border-[var(--glass-border)] flex items-center justify-between px-6 z-40">
+    <header className="shell-topbar fixed top-0 left-0 right-0 h-16 border-b border-[var(--glass-border)] flex items-center justify-between px-6 z-40">
       {/* Left: Logo/Brand */}
       <div className="flex items-center gap-3">
         <div className="w-8 h-8 rounded-lg bg-[var(--current-accent)]/20 border border-[var(--current-accent)]/50 flex items-center justify-center">

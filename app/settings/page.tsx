@@ -16,6 +16,7 @@ import {
   History,
   KeyRound,
   Lock,
+  Pencil,
   Plug,
   RefreshCw,
   RotateCcw,
@@ -54,7 +55,9 @@ import {
   applyRiskLimitChange,
   confirmRiskLimitChange,
   deleteBrokerCredentials,
+  fallbackBrokerRedirectUri,
   deleteLlmProviderCredentials,
+  setLlmProviderDefaultModel,
   deleteNotificationChannel,
   detectTelegramChatId,
   getAgents,
@@ -74,6 +77,7 @@ import {
   testNotificationChannel,
   validateGatewayConfig,
   writeBrokerCredentials,
+  writeBrokerRedirectUri,
   writeLlmProviderCredentials,
   writeNotificationChannel,
 } from '@/lib/api'
@@ -325,6 +329,24 @@ async function writeGatewayOrder(parsed: Record<string, any>, order: string[]) {
   await putGatewayConfig(JSON.stringify(parsed))
 }
 
+// Providers with no universal default model: an agent's "auto" can't run on
+// them until the operator picks one (otherwise the router skips them).
+const NEEDS_DEFAULT_MODEL: LlmProviderName[] = ['ollama', 'custom', 'huggingface']
+
+const API_KEY_PLACEHOLDERS: Partial<Record<LlmProviderName, string>> = {
+  huggingface: 'Access token (hf_…)',
+}
+
+async function setProviderInOrder(provider: string, include: boolean) {
+  const { parsed, order } = await readGatewayOrder()
+  if (order.includes(provider) === include) return
+  await writeGatewayOrder(parsed, include ? [...order, provider] : order.filter((p) => p !== provider))
+}
+
+function effectiveDefaultModel(status: LlmProviderStatus): string | null {
+  return status.default_model ?? status.builtin_default_model ?? null
+}
+
 function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderStatus; canEdit: boolean; onChanged: () => void }) {
   const provider = status.provider as LlmProviderName
   const isLocal = LOCAL_PROVIDERS.includes(provider)
@@ -336,48 +358,40 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
   const [discovering, setDiscovering] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const defaultModel = effectiveDefaultModel(status)
+  const missingDefault = status.configured && !defaultModel && NEEDS_DEFAULT_MODEL.includes(provider)
 
-  async function handleSave() {
+  async function run(action: () => Promise<void>, failure: string) {
     setBusy(true)
     setError(null)
     try {
-      await writeLlmProviderCredentials(provider, isLocal ? undefined : apiKey || undefined, baseUrl || undefined)
-      setApiKey('')
+      await action()
       onChanged()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Save failed')
+      setError(err instanceof ApiError ? err.message : failure)
     } finally {
       setBusy(false)
     }
   }
 
-  async function handleRemove() {
-    setBusy(true)
-    setError(null)
-    try {
-      await deleteLlmProviderCredentials(provider)
-      onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Remove failed')
-    } finally {
-      setBusy(false)
-    }
-  }
+  const handleSave = () => run(async () => {
+    await writeLlmProviderCredentials(provider, isLocal ? undefined : apiKey || undefined, baseUrl || undefined)
+    setApiKey('')
+    // A newly configured provider joins the fallback chain; the switch
+    // above can take it back out.
+    if (!status.configured) await setProviderInOrder(provider, true)
+  }, 'Save failed')
 
-  async function handleToggleOrder() {
-    setBusy(true)
-    setError(null)
-    try {
-      const { parsed, order } = await readGatewayOrder()
-      const next = order.includes(provider) ? order.filter((p) => p !== provider) : [...order, provider]
-      await writeGatewayOrder(parsed, next)
-      onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to update fallback order')
-    } finally {
-      setBusy(false)
-    }
-  }
+  const handleRemove = () => run(async () => {
+    await deleteLlmProviderCredentials(provider)
+    await setProviderInOrder(provider, false)
+  }, 'Remove failed')
+
+  const handleToggleOrder = () => run(() => setProviderInOrder(provider, !status.in_fallback_order), 'Failed to update fallback order')
+
+  const handleSaveDefault = () => run(() => setLlmProviderDefaultModel(provider, selectedModel || null), 'Could not save the default model')
+
+  const handleClearDefault = () => run(() => setLlmProviderDefaultModel(provider, null), 'Could not clear the default model')
 
   async function handleDiscover() {
     setDiscovering(true)
@@ -385,7 +399,8 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
     try {
       const res = await listLlmProviderModels(provider)
       setModels(res.models)
-      if (res.models[0]) setSelectedModel(res.models[0].id)
+      const preferred = res.models.find((m) => m.id === defaultModel) ?? res.models[0]
+      if (preferred) setSelectedModel(preferred.id)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Model discovery failed')
     } finally {
@@ -398,7 +413,8 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
     setError(null)
     setTestResult(null)
     try {
-      const res = await testLlmProvider(provider, isLocal ? selectedModel : undefined)
+      // No model picked: the server tests exactly what "auto" would use.
+      const res = await testLlmProvider(provider, selectedModel || undefined)
       setTestResult({ ok: res.ok, detail: res.detail })
     } catch (err) {
       setTestResult({ ok: false, detail: err instanceof ApiError ? err.message : 'Test failed' })
@@ -425,9 +441,10 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
 
       {canEdit && (
         <>
-          {!isLocal && <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
+          {!isLocal && <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder={API_KEY_PLACEHOLDERS[provider] ?? 'API key'} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>}
           {isLocal && <div className="set-cred-field"><Zap className="size-3.5" /><input placeholder={provider === 'ollama' ? 'http://host.docker.internal:11434' : 'http://host.docker.internal:8080'} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></div>}
           {isLocal && <p className="set-redirect-hint">Running the backend in Docker? Use <code>http://host.docker.internal:{provider === 'ollama' ? '11434' : '8080'}</code>, not <code>localhost</code> — inside the container, &quot;localhost&quot; means the container itself, not this machine.</p>}
+          {provider === 'huggingface' && <p className="set-redirect-hint">Uses Hugging Face Inference Providers (<code>router.huggingface.co</code>). Create a fine-grained token with the &quot;Make calls to Inference Providers&quot; permission.</p>}
           <div className="set-cred-actions">
             <button className="set-btn set-btn-ghost" disabled={busy || (isLocal ? !baseUrl : !apiKey)} onClick={handleSave}>Save</button>
             {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleRemove}>Remove</button>}
@@ -435,48 +452,58 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
         </>
       )}
 
-      {isLocal && (
-        <div className="set-llm-models">
-          <button className="set-btn set-btn-ghost" disabled={discovering} onClick={handleDiscover}><Wand2 className="size-3.5" /> {discovering ? 'Discovering…' : 'Discover models'}</button>
-          {models.length > 0 && (
-            <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>
-              {models.map((m) => <option key={m.id} value={m.id}>{m.label ?? m.id}</option>)}
-            </select>
-          )}
+      <div className={`set-llm-default ${missingDefault ? 'warn' : ''}`}>
+        <div className="set-llm-default-head">
+          <span>Default model</span>
+          <code>{status.default_model ?? (status.builtin_default_model ? `${status.builtin_default_model} (built-in)` : 'none set')}</code>
         </div>
-      )}
+        {missingDefault && <p className="set-llm-default-warn"><AlertTriangle className="size-3 shrink-0" />Agents skip this provider until a default model is chosen.</p>}
+        {canEdit && status.configured && (
+          <div className="set-llm-models">
+            <button className="set-btn set-btn-ghost" disabled={discovering || busy} onClick={handleDiscover}><Wand2 className="size-3.5" /> {discovering ? 'Discovering…' : models.length ? 'Refresh' : 'Discover models'}</button>
+            {models.length > 0 && (
+              <>
+                <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>
+                  {models.map((m) => <option key={m.id} value={m.id}>{m.label ?? m.id}</option>)}
+                </select>
+                <button className="set-btn set-btn-ghost" disabled={busy || !selectedModel || selectedModel === status.default_model} onClick={handleSaveDefault}>Set default</button>
+              </>
+            )}
+            {status.default_model && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleClearDefault}>Clear</button>}
+          </div>
+        )}
+      </div>
 
       <div className="set-llm-test-row">
-        <button className="set-btn set-btn-secondary" disabled={busy || (isLocal && !selectedModel)} onClick={handleTest}>Test connection</button>
+        <button className="set-btn set-btn-secondary" disabled={busy || !status.configured || (!selectedModel && !defaultModel)} onClick={handleTest}>Test connection</button>
         {testResult && (
           <span className={`set-llm-test-result ${testResult.ok ? 'ok' : 'fail'}`}>{testResult.ok ? <CheckCircle2 className="size-3.5" /> : <XCircle className="size-3.5" />}{testResult.detail}</span>
         )}
       </div>
-
-      <p className="set-redirect-hint">Token usage per provider isn't exposed through this console yet — see the llm_token_usage_total Prometheus metric / Grafana dashboard for live counts.</p>
     </div>
   )
 }
 
-function FallbackPriorityList({ canEdit }: { canEdit: boolean }) {
-  const [order, setOrder] = useState<string[]>([])
+function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit: boolean; order: string[]; statuses: LlmProviderStatus[]; onChanged: () => void }) {
+  // The order is owned by LlmProvidersSection and reloaded after every
+  // change anywhere on this page. A private copy loaded once went stale
+  // after a card's toggle, and the next drag wrote that stale copy back,
+  // silently dropping the provider just added.
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-
-  async function reload() {
-    const { order } = await readGatewayOrder()
-    setOrder(order)
-  }
-  useEffect(() => { reload() }, [])
+  const [error, setError] = useState<string | null>(null)
 
   async function persist(next: string[]) {
-    setOrder(next)
     setBusy(true)
+    setError(null)
     try {
       const { parsed } = await readGatewayOrder()
       await writeGatewayOrder(parsed, next)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to reorder')
     } finally {
       setBusy(false)
+      onChanged()
     }
   }
 
@@ -489,25 +516,36 @@ function FallbackPriorityList({ canEdit }: { canEdit: boolean }) {
     persist(next)
   }
 
-  if (order.length === 0) return <p className="text-xs text-muted-foreground">No providers in the fallback chain yet — enable one above.</p>
+  if (order.length === 0) return <p className="text-xs text-muted-foreground">No providers in the fallback chain yet — save a provider above or switch one on.</p>
 
   return (
     <div className="set-llm-priority-list">
-      {order.map((provider, i) => (
-        <div
-          key={provider}
-          className={`set-llm-priority-row ${dragIndex === i ? 'dragging' : ''}`}
-          draggable={canEdit && !busy}
-          onDragStart={() => setDragIndex(i)}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={() => handleDrop(i)}
-          onDragEnd={() => setDragIndex(null)}
-        >
-          <GripVertical className="size-3.5 text-muted-foreground" />
-          <span className="set-llm-priority-rank">{i + 1}</span>
-          <span className="set-llm-priority-label">{LLM_PROVIDER_LABELS[provider as LlmProviderName] ?? provider}</span>
-        </div>
-      ))}
+      {error && <p className="text-xs text-rose-300">{error}</p>}
+      {order.map((provider, i) => {
+        const status = statuses.find((s) => s.provider === provider)
+        const issue = !status?.configured
+          ? 'not configured'
+          : !effectiveDefaultModel(status) && NEEDS_DEFAULT_MODEL.includes(provider as LlmProviderName)
+            ? 'no default model'
+            : null
+        return (
+          <div
+            key={provider}
+            className={`set-llm-priority-row ${dragIndex === i ? 'dragging' : ''}`}
+            draggable={canEdit && !busy}
+            onDragStart={() => setDragIndex(i)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => handleDrop(i)}
+            onDragEnd={() => setDragIndex(null)}
+          >
+            <GripVertical className="size-3.5 text-muted-foreground" />
+            <span className="set-llm-priority-rank">{i + 1}</span>
+            <span className="set-llm-priority-label">{LLM_PROVIDER_LABELS[provider as LlmProviderName] ?? provider}</span>
+            {status && effectiveDefaultModel(status) && <code className="set-llm-priority-model">{effectiveDefaultModel(status)}</code>}
+            {issue && <span className="set-llm-priority-issue"><AlertTriangle className="size-3" />{issue} — skipped</span>}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -516,28 +554,131 @@ function LlmProvidersSection() {
   const { role } = useAuth()
   const canEdit = role === 'SystemAdministrator'
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([])
+  const [order, setOrder] = useState<string[]>([])
 
-  async function reload() { setStatuses(await listLlmProviderStatus()) }
+  async function reload() {
+    const [nextStatuses, { order: nextOrder }] = await Promise.all([listLlmProviderStatus(), readGatewayOrder()])
+    setStatuses(nextStatuses)
+    setOrder(nextOrder)
+  }
   useEffect(() => { reload() }, [])
 
-  const byProvider = (name: string) => statuses.find((s) => s.provider === name) ?? { provider: name, configured: false, base_url: null, in_fallback_order: false }
+  const byProvider = (name: string): LlmProviderStatus => statuses.find((s) => s.provider === name) ?? { provider: name, configured: false, base_url: null, in_fallback_order: order.includes(name) }
 
   return (
     <div className="set-block">
-      <div className="set-block-head"><div><h2>LLM Providers</h2><p>API keys are write-only. Fallback priority here is the exact same infra.llmProviders.order the Agent Gateway routes on — this is a UI over that config, not a separate store.</p></div></div>
+      <div className="set-block-head"><div><h2>LLM Providers</h2><p>API keys are write-only. Fallback priority here is the exact same infra.llmProviders.order the Agent Gateway routes on — this is a UI over that config, not a separate store. Agents ask for model &quot;auto&quot;, which runs each provider&apos;s default model.</p></div></div>
       <div className="set-llm-grid">{LLM_PROVIDERS.map((p) => <LlmProviderCard key={p} status={byProvider(p)} canEdit={canEdit} onChanged={reload} />)}</div>
 
       <p className="set-group-label">Fallback priority</p>
-      <FallbackPriorityList canEdit={canEdit} />
+      <FallbackPriorityList canEdit={canEdit} order={order} statuses={statuses} onChanged={reload} />
     </div>
   )
 }
 
 /* ------------------------------- Broker Config ----------------------------- */
 
+const BROKER_CONSOLES: Record<string, { name: string; url: string }> = {
+  zerodha: { name: 'Kite Connect developer console', url: 'https://developers.kite.trade/apps' },
+  upstox: { name: 'Upstox developer apps page', url: 'https://account.upstox.com/developer/apps' },
+}
+
+function BrokerRedirectUri({ status, canEdit, pending, onPendingChange, onChanged }: {
+  status: BrokerCredentialStatus
+  canEdit: boolean
+  // Before any key exists there's nothing to PUT onto yet, so an edit is
+  // held here and sent with the first key save.
+  pending: string | null
+  onPendingChange: (value: string | null) => void
+  onChanged: () => void
+}) {
+  const defaultUri = status.default_redirect_uri ?? fallbackBrokerRedirectUri(status.broker)
+  const current = pending ?? status.redirect_uri ?? defaultUri
+  const isCustom = pending !== null || Boolean(status.redirect_uri_is_custom)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(current)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const brokerConsole = BROKER_CONSOLES[status.broker]
+
+  async function apply(value: string | null) {
+    setError(null)
+    if (!status.configured) {
+      onPendingChange(value === null || value === defaultUri ? null : value)
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      await writeBrokerRedirectUri(status.broker, value)
+      onPendingChange(null)
+      setEditing(false)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not save the redirect URL')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function copy() {
+    copyToClipboard(current)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <div className="set-redirect-block">
+      <div className="set-redirect-label">
+        <span>Redirect / callback URL</span>
+        <em className={isCustom ? 'custom' : ''}>{isCustom ? 'Custom' : 'Default'}</em>
+      </div>
+      {editing ? (
+        <>
+          <div className="set-cred-field">
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="Redirect URL" />
+          </div>
+          <div className="set-cred-actions">
+            <button className="set-btn set-btn-ghost" disabled={busy || !draft.trim()} onClick={() => apply(draft.trim())}>
+              {status.configured ? 'Save URL' : 'Use this URL'}
+            </button>
+            <button className="set-btn set-btn-secondary" disabled={busy} onClick={() => { setEditing(false); setError(null) }}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="set-redirect-field">
+          <code title={current}>{current}</code>
+          <button className="set-copy-btn" onClick={copy} aria-label="Copy redirect URL">
+            {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+          </button>
+          {canEdit && (
+            <button className="set-copy-btn" onClick={() => { setDraft(current); setEditing(true) }} aria-label="Edit redirect URL" title="Edit">
+              <Pencil className="size-3" />
+            </button>
+          )}
+          {canEdit && isCustom && (
+            <button className="set-copy-btn" disabled={busy} onClick={() => apply(null)} aria-label="Reset redirect URL to default" title="Reset to default">
+              <RotateCcw className="size-3" />
+            </button>
+          )}
+        </div>
+      )}
+      {error && <p className="text-xs text-rose-300">{error}</p>}
+      {pending !== null && !status.configured && <p className="set-redirect-hint">Saved together with your API key below.</p>}
+      <p className="set-redirect-hint">
+        Step 1: register this exact URL as the Redirect URL in the{' '}
+        <a href={brokerConsole?.url} target="_blank" rel="noreferrer">{brokerConsole?.name ?? 'broker developer console'}</a>
+        {' '}when you create the app. The broker then issues the API key and secret you enter below. Only the host can change; the path must stay the same.
+      </p>
+    </div>
+  )
+}
+
 function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCredentialStatus; canEdit: boolean; onChanged: () => void }) {
   const [apiKey, setApiKey] = useState('')
   const [apiSecret, setApiSecret] = useState('')
+  const [pendingRedirect, setPendingRedirect] = useState<string | null>(null)
   const [duration, setDuration] = useState<'standard' | 'extended'>('standard')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -546,8 +687,8 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
     setBusy(true)
     setError(null)
     try {
-      await writeBrokerCredentials(status.broker, apiKey, apiSecret || undefined)
-      setApiKey(''); setApiSecret('')
+      await writeBrokerCredentials(status.broker, apiKey, apiSecret || undefined, undefined, pendingRedirect ?? undefined)
+      setApiKey(''); setApiSecret(''); setPendingRedirect(null)
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Save failed')
@@ -598,6 +739,8 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
         <div className="set-reminder"><AlertTriangle className="size-3.5 shrink-0" /><span>Zerodha access tokens expire daily — there's no way around this with their API. Reconnect each trading morning before the first order.</span></div>
       )}
 
+      <BrokerRedirectUri status={status} canEdit={canEdit} pending={pendingRedirect} onPendingChange={setPendingRedirect} onChanged={onChanged} />
+
       {canEdit && <>
         <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>
         <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API secret" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} /></div>
@@ -605,14 +748,6 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
           <button className="set-btn set-btn-ghost" disabled={!apiKey || busy} onClick={handleSave}>Save (write-only)</button>
           {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleDelete}>Remove</button>}
         </div>
-
-        {status.redirect_uri && (
-          <div className="set-redirect-field">
-            <code>{status.redirect_uri}</code>
-            <button className="set-copy-btn" onClick={() => copyToClipboard(status.redirect_uri!)} aria-label="Copy redirect URL"><Copy className="size-3" /></button>
-          </div>
-        )}
-        <p className="set-redirect-hint">Redirect/callback URL — paste this exact URL into your {status.broker === 'zerodha' ? 'Zerodha Kite Connect' : 'Upstox'} developer console. It's generated the first time you click Connect below.</p>
 
         {status.broker === 'upstox' && (
           <label className="set-field"><span>Token duration</span>
@@ -648,7 +783,7 @@ function BrokerConfigSection({ oauthBanner }: { oauthBanner: { broker: string; o
           {oauthBanner.ok ? `${oauthBanner.broker} connected successfully.` : `${oauthBanner.broker} connection failed: ${oauthBanner.error ?? 'unknown error'}`}
         </div>
       )}
-      <div className="set-cred-grid">{statuses.length > 0 ? statuses.map((c) => <BrokerConfigCard key={c.broker} status={c} canEdit={canEdit} onChanged={reload} />) : KNOWN_BROKERS.map((b) => <BrokerConfigCard key={b} status={{ broker: b, configured: false, token_status: 'never-connected', token_expires_at: null, redirect_uri: null, token_duration: null }} canEdit={canEdit} onChanged={reload} />)}</div>
+      <div className="set-cred-grid">{statuses.length > 0 ? statuses.map((c) => <BrokerConfigCard key={c.broker} status={c} canEdit={canEdit} onChanged={reload} />) : KNOWN_BROKERS.map((b) => <BrokerConfigCard key={b} status={{ broker: b, configured: false, token_status: 'never-connected', token_expires_at: null, redirect_uri: fallbackBrokerRedirectUri(b), default_redirect_uri: fallbackBrokerRedirectUri(b), redirect_uri_is_custom: false, token_duration: null }} canEdit={canEdit} onChanged={reload} />)}</div>
     </div>
   )
 }
