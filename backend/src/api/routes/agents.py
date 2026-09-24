@@ -24,10 +24,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.graph import run_pipeline
-from src.agents.roster import capabilities_for
+from src.agents.roster import NO_DATA_SOURCE_AGENTS, capabilities_for
 from src.api.routes.gateway import ApplyResultResponse
 from src.api.schemas import (
+    AgentActivityResponse,
+    AgentHeartbeatEntryResponse,
     AgentSummaryResponse,
+    AgentTaskEntryResponse,
     CreatePromptVersionRequest,
     PromptVersionResponse,
     RunPipelineRequest,
@@ -40,12 +43,15 @@ from src.core.rbac import Role, register_policy, require_role
 from src.gateway.roster import ROSTER, ROSTER_BY_ID
 from src.gateway.service import ServiceError, set_identity
 from src.gateway.state import get_state
+from src.models.heartbeat_log import HeartbeatLog
 from src.models.prompt_version import PromptVersion
+from src.models.task import Task
 from src.models.user import User
 from src.orchestration.prompt_versions import (
     NoSuchPromptVersionError,
     activate_prompt_version,
     create_prompt_version,
+    get_active_prompts,
 )
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -59,6 +65,7 @@ register_policy(
     roles=[Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER],
 )
 register_policy("PUT", "/api/v1/agents/{agent_id}/identity", roles=_WRITE_ROLES)
+register_policy("GET", "/api/v1/agents/{agent_id}/activity", roles=list(Role))
 register_policy("GET", "/api/v1/agents/{agent_id}/prompt-versions", roles=list(Role))
 register_policy("POST", "/api/v1/agents/{agent_id}/prompt-versions", roles=_WRITE_ROLES)
 register_policy(
@@ -112,6 +119,7 @@ async def list_agents_endpoint(
                 avatar=effective.avatar if effective else None,
                 theme=effective.theme if effective else None,
                 voice=effective.voice if effective else None,
+                has_data_source=agent.agent_id not in NO_DATA_SOURCE_AGENTS,
             )
         )
     return result
@@ -140,6 +148,74 @@ async def set_agent_identity_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return ApplyResultResponse(
         status=result.status.value, version_id=result.version_id, errors=result.errors
+    )
+
+
+@router.get("/{agent_id}/activity")
+async def agent_activity_endpoint(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> AgentActivityResponse:
+    """Phase 19 (docs/phase19-audit.md Part 2.2/3.2): every real, per-agent
+    activity signal this codebase has -- heartbeat self-checks
+    (src.agents.heartbeat, empty when heartbeat is disabled for this
+    agent) and orchestration tasks claimed under one of this agent's
+    registered capabilities (Task has no agent_id column, so capability
+    is the real join key -- src.agents.roster.capabilities_for)."""
+    _require_roster_agent_or_404(agent_id)
+
+    heartbeat_rows = (
+        (
+            await db.execute(
+                select(HeartbeatLog)
+                .where(HeartbeatLog.agent_id == agent_id)
+                .order_by(HeartbeatLog.checked_at.desc())
+                .limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    capabilities = capabilities_for(agent_id)
+    task_rows: list[Task] = []
+    if capabilities:
+        task_rows = list(
+            (
+                await db.execute(
+                    select(Task)
+                    .where(Task.capability.in_(capabilities))
+                    .order_by(Task.created_at.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    return AgentActivityResponse(
+        agent_id=agent_id,
+        heartbeats=[
+            AgentHeartbeatEntryResponse(
+                status=row.status.value,
+                details=row.details,
+                checked_at=row.checked_at.isoformat(),
+            )
+            for row in heartbeat_rows
+        ],
+        tasks=[
+            AgentTaskEntryResponse(
+                id=row.id,
+                run_id=row.run_id,
+                name=row.name,
+                status=row.status.value,
+                last_error=row.last_error,
+                created_at=row.created_at.isoformat(),
+                completed_at=row.completed_at.isoformat() if row.completed_at else None,
+            )
+            for row in task_rows
+        ],
     )
 
 
@@ -177,11 +253,13 @@ async def activate_prompt_version_endpoint(
     agent_id: str,
     version_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role),
+    current_user: User = Depends(require_role),
 ) -> PromptVersionResponse:
     _require_roster_agent_or_404(agent_id)
     try:
-        version = await activate_prompt_version(db, agent_id=agent_id, version_id=version_id)
+        version = await activate_prompt_version(
+            db, agent_id=agent_id, version_id=version_id, actor=current_user.email
+        )
     except NoSuchPromptVersionError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return _prompt_version_response(version)
@@ -190,13 +268,26 @@ async def activate_prompt_version_endpoint(
 @router.post("/pipeline/run")
 async def run_pipeline_endpoint(
     body: RunPipelineRequest,
+    db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> RunPipelineResponse:
     effective_by_id = get_state().get_all_effective_agents()
     enabled_agents = (
         frozenset(agent_id for agent_id, eff in effective_by_id.items() if eff.enabled) or None
     )
-    state = await run_pipeline(body.objective, enabled_agents=enabled_agents)
+    # Phase 19 (docs/phase19-audit.md Part 2.2): resolves each LLM-backed
+    # node's real ACTIVE prompt version, if one has been activated --
+    # the only place in this codebase where run_pipeline's DB-independence
+    # is bridged to the real prompt_versions table, since run_pipeline
+    # itself deliberately stays DB-independent (used by e.g. the Screener
+    # Agent's own strategy-creation path, which has no reason to touch
+    # prompt_versions at all).
+    active_prompts = await get_active_prompts(
+        db, ["ceo-agent", "strategy-generator", "python-code-generator"]
+    )
+    state = await run_pipeline(
+        body.objective, enabled_agents=enabled_agents, active_prompts=active_prompts
+    )
     return RunPipelineResponse(
         objective=state.objective,
         node_log=state.node_log,

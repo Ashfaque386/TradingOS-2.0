@@ -5,13 +5,17 @@ activation, rollback.
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 from src.models.agent_identity import AgentIdentity
+from src.models.audit_log import AuditLog
 from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.orchestration.prompt_versions import (
     NoSuchPromptVersionError,
     activate_prompt_version,
     create_prompt_version,
+    get_active_prompt_content,
+    get_active_prompts,
     rollback_prompt_version,
 )
 
@@ -115,3 +119,59 @@ async def test_activate_version_belonging_to_a_different_agent_raises(db_session
     with pytest.raises(NoSuchPromptVersionError):
         async with db_session_factory() as db:
             await activate_prompt_version(db, agent_id="risk-manager", version_id=v1.id)
+
+
+async def test_create_and_activate_both_write_a_real_audit_entry(db_session_factory):
+    """Phase 19 (docs/phase19-audit.md Part 2.2): the audit found
+    prompt-version create/activate was the one Agent Fleet mutation not
+    captured in the hash-chained audit log."""
+    await _seed_identity(db_session_factory)
+
+    async with db_session_factory() as db:
+        v1 = await create_prompt_version(
+            db, agent_id="ceo-agent", content="v1", created_by="ops@example.com"
+        )
+        await activate_prompt_version(
+            db, agent_id="ceo-agent", version_id=v1.id, actor="ops@example.com"
+        )
+
+        rows = (await db.execute(select(AuditLog).order_by(AuditLog.sequence))).scalars().all()
+
+    actions = [row.action for row in rows]
+    assert "prompt_version.created" in actions
+    assert "prompt_version.activated" in actions
+    activated_row = next(r for r in rows if r.action == "prompt_version.activated")
+    assert activated_row.actor == "ops@example.com"
+    assert activated_row.entity_id == str(v1.id)
+
+
+async def test_get_active_prompt_content_is_none_until_activated(db_session_factory):
+    """Phase 19: the exact "no fabrication, no effect until activated"
+    contract every real LLM call site now relies on."""
+    await _seed_identity(db_session_factory)
+
+    async with db_session_factory() as db:
+        assert await get_active_prompt_content(db, "ceo-agent") is None
+
+        v1 = await create_prompt_version(
+            db, agent_id="ceo-agent", content="You are a cautious CEO."
+        )
+        assert await get_active_prompt_content(db, "ceo-agent") is None  # still draft, not active
+
+        await activate_prompt_version(db, agent_id="ceo-agent", version_id=v1.id)
+        assert await get_active_prompt_content(db, "ceo-agent") == "You are a cautious CEO."
+
+
+async def test_get_active_prompts_batch_only_returns_agents_with_an_active_version(
+    db_session_factory,
+):
+    await _seed_identity(db_session_factory, "ceo-agent")
+    await _seed_identity(db_session_factory, "risk-manager")
+
+    async with db_session_factory() as db:
+        v1 = await create_prompt_version(db, agent_id="ceo-agent", content="ceo prompt")
+        await activate_prompt_version(db, agent_id="ceo-agent", version_id=v1.id)
+
+        result = await get_active_prompts(db, ["ceo-agent", "risk-manager", "strategy-generator"])
+
+    assert result == {"ceo-agent": "ceo prompt"}

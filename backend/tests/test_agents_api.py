@@ -49,7 +49,7 @@ async def _seed_identity(db_session_factory, agent_id: str) -> None:
         await db.commit()
 
 
-async def test_list_agents_returns_all_24_with_capabilities(client, make_user):
+async def test_list_agents_returns_all_30_with_capabilities(client, make_user):
     await make_user("auditor@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
     token = await _login(client, "auditor@example.com", "supersecret1")
 
@@ -57,9 +57,16 @@ async def test_list_agents_returns_all_24_with_capabilities(client, make_user):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body) == 24
+    assert len(body) == 30
     by_id = {a["agent_id"]: a for a in body}
     assert by_id["audit-agent"]["can_disable"] is False
+    # Phase 19 (docs/phase19-audit.md §3.2): honest data-source gap flag --
+    # False only for the 3 agents with no real backing data anywhere.
+    assert by_id["fundamentals-agent"]["has_data_source"] is False
+    assert by_id["valuation-agent"]["has_data_source"] is False
+    assert by_id["macro-agent"]["has_data_source"] is False
+    assert by_id["screener-agent"]["has_data_source"] is True
+    assert by_id["ceo-agent"]["has_data_source"] is True
     assert len(by_id["ceo-agent"]["capabilities"]) > 0
 
 
@@ -143,6 +150,82 @@ async def test_set_identity_404s_for_unknown_agent(client, make_user):
     resp = await client.put(
         "/api/v1/agents/not-a-real-agent/identity",
         json={"name": "Nope"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_agent_activity_reports_real_heartbeats_and_capability_tasks(
+    client, make_user, db_session_factory
+):
+    """Phase 19 (docs/phase19-audit.md Part 3.2): Agent Fleet's real
+    per-agent activity panel -- heartbeat self-checks straight off
+    HeartbeatLog, and orchestration tasks joined by capability (Task has
+    no agent_id column) rather than any fabricated per-agent metric."""
+    from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
+    from src.models.organization_run import OrganizationRun, RunSource, RunStatus, RunType
+    from src.models.organizational_plan import OrganizationalPlan, PlanStatus
+    from src.models.task import Task, TaskStatus
+
+    await make_user("activity-viewer@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "activity-viewer@example.com", "supersecret1")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with db_session_factory() as db:
+        db.add(AgentIdentity(agent_id="ceo-agent", name="Seed"))
+        db.add(HeartbeatLog(agent_id="ceo-agent", status=HeartbeatStatus.OK, details={"ok": True}))
+        run = OrganizationRun(
+            objective="obj",
+            source=RunSource.UI,
+            run_type=RunType.STANDARD,
+            status=RunStatus.RUNNING,
+        )
+        db.add(run)
+        await db.flush()
+        plan = OrganizationalPlan(
+            run_id=run.id, attempt_number=1, status=PlanStatus.ACCEPTED, objective="obj"
+        )
+        db.add(plan)
+        await db.flush()
+        # ceo-agent's real registered capability (src.agents.roster.AGENT_CAPABILITIES).
+        db.add(
+            Task(
+                run_id=run.id,
+                plan_id=plan.id,
+                plan_key="k1",
+                capability="graph.ceo_kickoff",
+                name="CEO kickoff",
+                status=TaskStatus.SUCCEEDED,
+            )
+        )
+        # A capability this agent does NOT own -- must never show up below.
+        db.add(
+            Task(
+                run_id=run.id,
+                plan_id=plan.id,
+                plan_key="k2",
+                capability="graph.risk_assessment",
+                name="Risk assessment",
+                status=TaskStatus.SUCCEEDED,
+            )
+        )
+        await db.commit()
+
+    resp = await client.get("/api/v1/agents/ceo-agent/activity", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["agent_id"] == "ceo-agent"
+    assert len(body["heartbeats"]) == 1
+    assert body["heartbeats"][0]["status"] == "ok"
+    assert [t["name"] for t in body["tasks"]] == ["CEO kickoff"]
+
+
+async def test_agent_activity_404s_for_unknown_agent(client, make_user):
+    await make_user("activity-viewer2@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "activity-viewer2@example.com", "supersecret1")
+
+    resp = await client.get(
+        "/api/v1/agents/not-a-real-agent/activity",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 404

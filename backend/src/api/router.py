@@ -11,11 +11,13 @@ from src.api.routes import (
     broker_oauth,
     chat,
     gateway,
+    investor_reports,
     kill_switch,
     live_trading,
     llm_providers,
     market_data,
     notification_channels,
+    operator_guidance,
     orchestration,
     orders,
     paper_trading,
@@ -53,4 +55,6 @@ api_router.include_router(orders.router)
 api_router.include_router(gateway.router)
 api_router.include_router(llm_providers.router)
 api_router.include_router(system.router)
+api_router.include_router(investor_reports.router)
+api_router.include_router(operator_guidance.router)
 api_router.include_router(websockets.router)

@@ -2,24 +2,221 @@
 
 import { AnimatePresence, motion } from 'framer-motion'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, ArrowRight, Check, ChevronRight, Clock3, Code2, Inbox, Layers3, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, X } from 'lucide-react'
+import { Activity, AlertCircle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronRight, Clock3, Inbox, Layers3, MessageSquarePlus, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, Trash2, X } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
+  type ActivityEvent,
+  type ActivityFeedMessage,
   type ApprovalRequestDto,
+  type OperatorGuidanceDto,
   type OrganizationEventMessage,
   type OrganizationRun,
+  type ScheduledJob,
   type SignoffSnapshot,
   ApiError,
   continueRun,
+  createOperatorGuidance,
   createRun,
+  deactivateOperatorGuidance,
   decideApproval,
+  getScheduledJobs,
+  listOperatorGuidance,
   listRuns,
   pauseRun,
   retryRun,
   rerunRun,
 } from '@/lib/api'
 import { useWebSocketChannel } from '@/lib/ws'
+
+// Same severity/relative-time/initials conventions as the Overview page's
+// LIVE ACTIVITY FEED panel (app/page.tsx) -- both read the identical real
+// /ws/activity-feed channel backed by the hash-chained audit log
+// (src/observability/audit_middleware.py), never fabricated events. Kept
+// as a local copy rather than a shared import since each page's feed is
+// independently filtered and neither page depends on the other.
+const CRITICAL_ACTIONS = /reject|trip|breach|fail/i
+const WARNING_ACTIONS = /pause|reduce|degrade/i
+
+function severityFor(event: ActivityEvent): 'critical' | 'warning' | 'success' | 'info' {
+  if (CRITICAL_ACTIONS.test(event.action)) return 'critical'
+  if (WARNING_ACTIONS.test(event.action)) return 'warning'
+  if (/approve|fill|complete|pass/i.test(event.action)) return 'success'
+  return 'info'
+}
+
+function initialsFor(actor: string): string {
+  const cleaned = actor.replace(/[^a-zA-Z0-9 ]/g, ' ').trim()
+  if (!cleaned) return '??'
+  const parts = cleaned.split(/\s+/)
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[1][0]).toUpperCase()
+}
+
+function relativeTime(iso: string): string {
+  const deltaMs = Date.now() - new Date(iso).getTime()
+  const seconds = Math.max(0, Math.round(deltaMs / 1000))
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  return `${hours}h ago`
+}
+
+// Scheduler names as src/main.py's lifespan registers them ->
+// plain-language labels for the panel (docs/phase19-audit.md Part 1.1's
+// finding: 15 real jobs across 6 schedulers existed with zero UI surface).
+const SCHEDULER_LABELS: Record<string, string> = {
+  market_data: 'Market Data',
+  paper_trading: 'Paper Trading',
+  live_trading: 'Live Trading',
+  audit: 'Audit',
+  notification: 'Notifications',
+  screener: 'Screener',
+  post_trade_review: 'Post-Trade Review',
+  investor_reporting: 'Investor Reporting',
+}
+
+function schedulerLabel(name: string): string {
+  return SCHEDULER_LABELS[name] ?? name
+}
+
+function nextRunLabel(iso: string | null): string {
+  if (!iso) return 'not scheduled'
+  const deltaMs = new Date(iso).getTime() - Date.now()
+  if (deltaMs <= 0) return 'due now'
+  const minutes = Math.round(deltaMs / 60000)
+  if (minutes < 60) return `in ${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `in ${hours}h`
+  const days = Math.round(hours / 24)
+  return `in ${days}d`
+}
+
+function LiveActivityPanel({ activities }: { activities: ActivityEvent[] }) {
+  const recent = activities.slice(0, 6)
+  return (
+    <section className="pulse-panel flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-white/8 p-4">
+        <div>
+          <p className="eyebrow flex items-center gap-2"><Activity className="size-3 text-cyan-300" />LIVE ACTIVITY FEED</p>
+          <p className="mt-1 text-xs text-muted-foreground">Real-time agent &amp; operator events, newest first</p>
+        </div>
+      </div>
+      <div className="activity-list max-h-[280px] overflow-y-auto">
+        {recent.length === 0 && <div className="p-4 text-xs text-muted-foreground">No activity yet. Actions taken across the organization will appear here in real time.</div>}
+        {recent.map((event) => (
+          <div key={event.id} className={`activity-row severity-${severityFor(event)}`}>
+            <span className="activity-avatar">{initialsFor(event.actor)}</span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs text-foreground">{event.actor} · {event.action} {event.entity_type}</p>
+              <p className="mt-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{relativeTime(event.created_at)}</p>
+            </div>
+            <CheckCircle2 className="size-3 shrink-0 text-emerald-300/70" />
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function AutomationSchedulePanel({ jobs, heartbeatSeconds }: { jobs: ScheduledJob[]; heartbeatSeconds: number | null }) {
+  const sorted = [...jobs].sort((a, b) => {
+    if (!a.next_run_time) return 1
+    if (!b.next_run_time) return -1
+    return new Date(a.next_run_time).getTime() - new Date(b.next_run_time).getTime()
+  })
+  return (
+    <section className="pulse-panel flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-white/8 p-4">
+        <div>
+          <p className="eyebrow flex items-center gap-2"><CalendarClock className="size-3 text-cyan-300" />AUTOMATION SCHEDULE</p>
+          <p className="mt-1 text-xs text-muted-foreground">Every real scheduled job, read live off the running scheduler</p>
+        </div>
+      </div>
+      <div className="max-h-[280px] overflow-y-auto p-2">
+        {sorted.length === 0 && <p className="p-2 text-xs text-muted-foreground">No scheduled jobs reported yet.</p>}
+        {sorted.map((job) => (
+          <div key={`${job.scheduler}-${job.job_id}`} className="flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-xs hover:bg-white/[.03]">
+            <div className="min-w-0">
+              <p className="truncate text-foreground">{schedulerLabel(job.scheduler)} <span className="text-muted-foreground">· {job.job_id}</span></p>
+              <p className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">{job.trigger}</p>
+            </div>
+            <span className="shrink-0 font-mono text-[10px] text-cyan-200">{nextRunLabel(job.next_run_time)}</span>
+          </div>
+        ))}
+        {heartbeatSeconds !== null && (
+          <div className="flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-xs hover:bg-white/[.03]">
+            <div className="min-w-0">
+              <p className="truncate text-foreground">Heartbeat <span className="text-muted-foreground">· fixed interval, not an APScheduler job</span></p>
+            </div>
+            <span className="shrink-0 font-mono text-[10px] text-cyan-200">every {heartbeatSeconds}s</span>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function OperatorGuidancePanel({
+  guidance,
+  canSubmit,
+  message,
+  setMessage,
+  submitting,
+  error,
+  onSubmit,
+  onDeactivate,
+}: {
+  guidance: OperatorGuidanceDto[]
+  canSubmit: boolean
+  message: string
+  setMessage: (v: string) => void
+  submitting: boolean
+  error: string | null
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  onDeactivate: (id: string) => void
+}) {
+  const active = guidance.filter((g) => g.is_active)
+  return (
+    <section className="pulse-panel flex flex-col overflow-hidden">
+      <div className="border-b border-white/8 p-4">
+        <p className="eyebrow flex items-center gap-2"><MessageSquarePlus className="size-3 text-cyan-300" />OPERATOR GUIDANCE</p>
+        <p className="mt-1 text-xs text-muted-foreground">Notes the CEO Agent folds into its next planning cycle objective</p>
+      </div>
+      {canSubmit && (
+        <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-2 border-b border-white/8 p-3">
+          <input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="e.g. Favor low-volatility instruments this week..."
+            className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[.02] px-3 py-2 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+          />
+          <button type="submit" disabled={submitting || !message.trim()} className="button-primary">
+            {submitting ? <RefreshCw className="size-3 animate-spin" /> : <ArrowRight className="size-3" />}Add
+          </button>
+        </form>
+      )}
+      {error && <div className="border-b border-rose-400/30 bg-rose-400/10 p-2 text-xs text-rose-200">{error}</div>}
+      <div className="max-h-[220px] overflow-y-auto p-2">
+        {active.length === 0 && <p className="p-2 text-xs text-muted-foreground">No active guidance. The next planning cycle uses the operator's objective as-is.</p>}
+        {active.map((g) => (
+          <div key={g.id} className="flex items-start justify-between gap-2 rounded-lg px-2 py-2 text-xs hover:bg-white/[.03]">
+            <div className="min-w-0 flex-1">
+              <p className="text-foreground">{g.message}</p>
+              <p className="mt-1 font-mono text-[9px] text-muted-foreground">{g.created_by} · {relativeTime(g.created_at)}</p>
+            </div>
+            {canSubmit && (
+              <button onClick={() => onDeactivate(g.id)} aria-label="Deactivate guidance note" className="icon-button shrink-0">
+                <Trash2 className="size-3" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
 
 type Column = 'Inbox' | 'Planning' | 'In Progress' | 'Backtesting / Review' | 'Sign-off' | 'Live / Done'
 const columns: Column[] = ['Inbox', 'Planning', 'In Progress', 'Backtesting / Review', 'Sign-off', 'Live / Done']
@@ -120,6 +317,74 @@ export default function MissionControlPage() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [decisionError, setDecisionError] = useState<string | null>(null)
+  const canGuide = !readOnly
+
+  const [activities, setActivities] = useState<ActivityEvent[]>([])
+  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([])
+  const [heartbeatSeconds, setHeartbeatSeconds] = useState<number | null>(null)
+  const [guidance, setGuidance] = useState<OperatorGuidanceDto[]>([])
+  const [guidanceMessage, setGuidanceMessage] = useState('')
+  const [guidanceSubmitting, setGuidanceSubmitting] = useState(false)
+  const [guidanceError, setGuidanceError] = useState<string | null>(null)
+
+  const refreshSchedule = useCallback(async () => {
+    try {
+      const data = await getScheduledJobs()
+      setScheduledJobs(data.jobs)
+      setHeartbeatSeconds(data.heartbeat_interval_seconds)
+    } catch {
+      // best-effort poll -- panel just keeps its last known state
+    }
+  }, [])
+
+  const refreshGuidance = useCallback(async () => {
+    try {
+      setGuidance(await listOperatorGuidance())
+    } catch {
+      // best-effort poll
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshSchedule()
+    refreshGuidance()
+    const interval = setInterval(refreshSchedule, 30000)
+    return () => clearInterval(interval)
+  }, [refreshSchedule, refreshGuidance])
+
+  useWebSocketChannel<ActivityFeedMessage>('/ws/activity-feed', {}, (message) => {
+    if (message.type === 'backfill') {
+      setActivities(message.events.slice(0, 30))
+    } else if (message.type === 'event') {
+      setActivities((prev) => [message.event, ...prev].slice(0, 30))
+    }
+  })
+
+  async function handleGuidanceSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!guidanceMessage.trim()) return
+    setGuidanceSubmitting(true)
+    setGuidanceError(null)
+    try {
+      await createOperatorGuidance(guidanceMessage.trim())
+      setGuidanceMessage('')
+      await refreshGuidance()
+    } catch (err) {
+      setGuidanceError(err instanceof ApiError ? err.message : 'Failed to add guidance')
+    } finally {
+      setGuidanceSubmitting(false)
+    }
+  }
+
+  async function handleGuidanceDeactivate(id: string) {
+    setGuidanceError(null)
+    try {
+      await deactivateOperatorGuidance(id)
+      await refreshGuidance()
+    } catch (err) {
+      setGuidanceError(err instanceof ApiError ? err.message : 'Failed to deactivate guidance')
+    }
+  }
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -184,6 +449,20 @@ export default function MissionControlPage() {
 
   return <ShellLayout><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5"><header className="mission-hero"><div><p className="eyebrow flex items-center gap-2"><Sparkles className="size-3 text-cyan-300" />CONTROL PLANE // MISSION CONTROL</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">Operator command center</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Coordinate the agent organization and review strategy promotions -- live order intents now execute autonomously per strategy, see the Strategies page.</p></div><div className="flex items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[.06] px-3 py-2 text-xs text-amber-100"><AlertCircle className="size-4" />{pendingCount ? `${pendingCount} item${pendingCount === 1 ? '' : 's'} pending sign-off` : 'No approvals waiting'}</div></header>
     {canCreateRun && <form onSubmit={handleCreateRun} className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/[.02] p-3"><Inbox className="size-4 shrink-0 text-cyan-300" /><input value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="Give the organization a new objective..." className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground" /><button type="submit" disabled={creating || !objective.trim()} className="button-primary">{creating ? <RefreshCw className="size-3 animate-spin" /> : <ArrowRight className="size-3" />}Dispatch</button>{createError && <span className="text-xs text-rose-300">{createError}</span>}</form>}
+    <div className="grid gap-4 xl:grid-cols-3">
+      <LiveActivityPanel activities={activities} />
+      <AutomationSchedulePanel jobs={scheduledJobs} heartbeatSeconds={heartbeatSeconds} />
+      <OperatorGuidancePanel
+        guidance={guidance}
+        canSubmit={canGuide}
+        message={guidanceMessage}
+        setMessage={setGuidanceMessage}
+        submitting={guidanceSubmitting}
+        error={guidanceError}
+        onSubmit={handleGuidanceSubmit}
+        onDeactivate={handleGuidanceDeactivate}
+      />
+    </div>
     <div className="flex items-center justify-between border-b border-white/10"><div className="flex gap-1"><button className={`mission-tab ${view === 'kanban' ? 'mission-tab-active' : ''}`} onClick={() => setView('kanban')}><Layers3 className="size-4" />Kanban board</button><button className={`mission-tab ${view === 'queue' ? 'mission-tab-active' : ''}`} onClick={() => setView('queue')}><ShieldCheck className="size-4" />Sign-off queue <span className="badge-count">{pendingCount}</span></button></div><span className="hidden font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">human-in-the-loop / paper environment</span></div>
     {view === 'kanban' ? <div className="flex gap-3 overflow-x-auto pb-3">{columns.map((column) => { const columnRuns = runs.filter((run) => columnForRun(run) === column); return <section key={column} className="kanban-column"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-cyan-300 shadow-[0_0_12px_currentColor]" /><h2 className="text-xs font-semibold uppercase tracking-wider">{column}</h2></div><span className="font-mono text-[10px] text-muted-foreground">{columnRuns.length.toString().padStart(2, '0')}</span></div><div className="flex min-h-40 flex-col gap-3">{columnRuns.map((run) => <motion.article layoutId={run.id} onClick={() => setSelected(run)} key={run.id} className="task-card"><div className="flex items-start gap-2"><h3 className="flex-1 text-xs font-medium leading-relaxed">{run.objective}</h3><ChevronRight className="size-3 text-muted-foreground" /></div><div className="mt-4 flex items-center justify-between"><div className="avatar-stack">{agentInitials(run).map((agent, i) => <span key={`${run.id}-${agent}-${i}`}>{agent}</span>)}</div><span className="font-mono text-[10px] text-muted-foreground"><Clock3 className="mr-1 inline size-3" />{runElapsed(run)}</span></div><div className="mt-3 flex items-center gap-2"><span className="font-mono text-[9px] uppercase tracking-wide shrink-0" style={{ color: accentFor(run) }}>{runStatusLabel(run)}</span><div className="progress-track flex-1"><span style={{ width: `${runProgress(run)}%`, background: accentFor(run) }} /></div><span className="font-mono text-[9px]" style={{ color: accentFor(run) }}>{runProgress(run)}%</span></div></motion.article>)}</div></section> })}</div> : <SignoffQueue signoff={signoff} canDecide={canDecide} decisionError={decisionError} onDecideApproval={handleDecideApproval} />}
   </div>{selected && <TaskDrawer run={selected} onClose={() => setSelected(null)} onAction={(action) => handleRunAction(selected, action)} canAct={!readOnly} />}</ShellLayout>

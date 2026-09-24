@@ -17,6 +17,8 @@ from src.agents.llm_router import LlmRouter, LlmRouterExhaustedError, get_llm_ro
 from src.models.strategy import Strategy
 from src.models.strategy_suggestion import StrategySuggestion, SuggestionStatus
 from src.models.strategy_version import StrategyVersion
+from src.orchestration.post_trade_review import latest_finding_for_strategy
+from src.orchestration.prompt_versions import get_active_prompt_content
 from src.orchestration.strategies import create_version_with_validation, generate_strategy_code
 
 
@@ -65,16 +67,36 @@ async def review_suggestion(
         raise NoSuchSuggestionError(f"no such suggestion: {suggestion_id}")
 
     base_version = await db.get(StrategyVersion, suggestion.base_version_id)
+
+    # Phase 19 (docs/phase19-audit.md Part 2.4): the real "next cycle" the
+    # Post-Trade Review Agent's findings feed into -- if this strategy has
+    # a recent real trade-review finding, fold its commentary into the
+    # verdict prompt so a real, already-observed trading outcome informs
+    # the review, not just the raw code diff.
+    review_context = ""
+    finding = await latest_finding_for_strategy(db, suggestion.strategy_id)
+    if finding is not None:
+        review_context = (
+            f"\n\nMost recent post-trade review for this strategy "
+            f"({finding.review_date.isoformat()}, {finding.mode}): {finding.commentary}"
+        )
+
+    # Phase 19 (docs/phase19-audit.md Part 2.2): the real effect of
+    # activating a prompt version for "strategy-generator" -- prefixed
+    # ahead of the task-specific instruction below, same posture as
+    # src.agents.graph's _with_active_prompt.
+    active_prompt = await get_active_prompt_content(db, "strategy-generator")
+    task_prompt = (
+        f"Review this improvement suggestion for a trading strategy and give a "
+        f"verdict (accept/reject/needs_changes) with reasoning.\n"
+        f"Current code:\n{base_version.code}\n\n"
+        f"Suggestion: {suggestion.suggestion_text}{review_context}"
+    )
+    prompt = f"{active_prompt}\n\n{task_prompt}" if active_prompt else task_prompt
+
     router = router or get_llm_router()
     try:
-        result = await router.complete(
-            agent_id="strategy-generator",
-            prompt=(
-                f"Review this improvement suggestion for a trading strategy and give a "
-                f"verdict (accept/reject/needs_changes) with reasoning.\n"
-                f"Current code:\n{base_version.code}\n\nSuggestion: {suggestion.suggestion_text}"
-            ),
-        )
+        result = await router.complete(agent_id="strategy-generator", prompt=prompt)
         verdict = {"verdict": "needs_changes", "reasoning": result.text, "source": "llm"}
     except LlmRouterExhaustedError:
         verdict = _fallback_verdict(suggestion.suggestion_text)
@@ -114,6 +136,7 @@ async def regenerate_from_suggestion(
     new_code = await generate_strategy_code(
         f"{strategy.objective}\n\nIncorporate this suggested change: {suggestion.suggestion_text}",
         router=router,
+        db=db,
     )
     diff_text = "".join(
         difflib.unified_diff(

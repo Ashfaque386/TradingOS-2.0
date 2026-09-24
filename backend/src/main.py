@@ -27,12 +27,16 @@ from src.observability.audit_middleware import AuditLoggingMiddleware
 from src.observability.correlation import CorrelationIdMiddleware
 from src.observability.logging import configure_logging
 from src.observability.metrics import trading_holiday_gauge_updater
+from src.observability.scheduler_registry import register_scheduler, unregister_all
 from src.orchestration.audit_scheduler import start_audit_scheduler
+from src.orchestration.investor_reporting_scheduler import start_investor_reporting_scheduler
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
 from src.orchestration.market_data_scheduler import start_market_data_scheduler
 from src.orchestration.notification_scheduler import start_notification_scheduler
 from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
+from src.orchestration.post_trade_review_scheduler import start_post_trade_review_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
+from src.orchestration.screener_scheduler import start_screener_scheduler
 from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
 
 configure_logging()
@@ -148,6 +152,35 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # synchronously from the real code paths that produce them instead.
     notification_scheduler = start_notification_scheduler(AsyncSessionLocal)
 
+    # Phase 19 (docs/phase19-audit.md): Screener, Post-Trade Review, and
+    # Investor Reporting agents -- each a real scheduled job, not a
+    # pipeline node (see src.agents.roster.PIPELINE_NODE_AGENTS, still
+    # exactly 13). Screener runs before the daily signal jobs (07:30 IST)
+    # so a screener-created strategy exists in time for the same day;
+    # Post-Trade Review runs after NSE close (16:00 IST); Investor
+    # Reporting runs weekly (Monday 07:00 IST).
+    screener_scheduler = start_screener_scheduler(
+        AsyncSessionLocal, price_provider=data_lake_price_provider
+    )
+    post_trade_review_scheduler = start_post_trade_review_scheduler(AsyncSessionLocal)
+    investor_reporting_scheduler = start_investor_reporting_scheduler(AsyncSessionLocal)
+
+    # Phase 19 (docs/phase19-audit.md Part 1.2): registers every real
+    # APScheduler instance so GET /api/v1/system/scheduled-jobs can read
+    # their live next_run_time -- the audit's own finding was that no
+    # cadence for any of these was surfaced anywhere in the UI.
+    for name, scheduler in (
+        ("market_data", market_data_scheduler),
+        ("paper_trading", paper_trading_scheduler),
+        ("live_trading", live_trading_scheduler),
+        ("audit", audit_scheduler),
+        ("notification", notification_scheduler),
+        ("screener", screener_scheduler),
+        ("post_trade_review", post_trade_review_scheduler),
+        ("investor_reporting", investor_reporting_scheduler),
+    ):
+        register_scheduler(name, scheduler)
+
     yield
 
     stall_sweep_task.cancel()
@@ -160,6 +193,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     live_trading_scheduler.shutdown(wait=False)
     audit_scheduler.shutdown(wait=False)
     notification_scheduler.shutdown(wait=False)
+    screener_scheduler.shutdown(wait=False)
+    post_trade_review_scheduler.shutdown(wait=False)
+    investor_reporting_scheduler.shutdown(wait=False)
+    unregister_all()
     watcher.stop()
 
 

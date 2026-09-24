@@ -38,3 +38,12 @@ class TradingOSGraphState(BaseModel):
 
     rejection_count: int = 0
     node_log: list[str] = Field(default_factory=list)
+
+    # Phase 19 (docs/phase19-audit.md Part 2.2): agent_id -> that agent's
+    # real ACTIVE PromptVersion content, resolved once by the caller
+    # (src.api.routes.agents.run_pipeline_endpoint, which has DB access;
+    # run_pipeline itself deliberately stays DB-independent) before the
+    # graph runs. Empty for any agent with no activated version -- the
+    # real, common case -- in which the LLM-backed nodes keep using their
+    # existing hardcoded prompt exactly as before this field existed.
+    active_prompts: dict[str, str] = Field(default_factory=dict)
