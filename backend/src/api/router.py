@@ -9,6 +9,7 @@ from src.api.routes import (
     backtests,
     broker_credentials,
     broker_oauth,
+    canvas,
     chat,
     gateway,
     investor_reports,
@@ -51,6 +52,7 @@ api_router.include_router(audit.router)
 api_router.include_router(notification_channels.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(chat.router)
+api_router.include_router(canvas.router)
 api_router.include_router(orders.router)
 api_router.include_router(gateway.router)
 api_router.include_router(llm_providers.router)

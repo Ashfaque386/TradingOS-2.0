@@ -209,6 +209,36 @@ class AgentActivityResponse(BaseModel):
     tasks: list[AgentTaskEntryResponse]
 
 
+class AgentAnalyticsSummaryRow(BaseModel):
+    """Phase 22 (docs/phase20-old-vs-new-comparison.md item 21): one row
+    per roster agent, real counts over `Task` rows joined by capability
+    (the same join Phase 19's `/activity` endpoint already established --
+    `Task` has no `agent_id` column). `avg_duration_seconds` only counts
+    terminal (succeeded/failed) tasks that actually have both a
+    `created_at` and `completed_at` -- never averaged against a still-open
+    task, which would understate every agent's real duration."""
+
+    agent_id: str
+    display_name: str
+    tasks_total: int
+    tasks_succeeded: int
+    tasks_failed: int
+    # None when this agent has claimed zero tasks -- an honest "no data",
+    # never a fabricated 0% that would read as "always fails".
+    success_rate: float | None
+    avg_duration_seconds: float | None
+
+
+class AgentAnalyticsTrendPoint(BaseModel):
+    """One real day's real task outcomes, system-wide -- deliberately not
+    split per-agent (a 30-line chart is unreadable); per-agent detail is
+    what `/agents/{id}/activity` is for."""
+
+    date: str
+    tasks_succeeded: int
+    tasks_failed: int
+
+
 class CreateStrategyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     objective: str = Field(min_length=1, max_length=4000)

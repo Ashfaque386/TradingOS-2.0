@@ -10,6 +10,7 @@ import {
   FileText,
   Home,
   Menu,
+  MessageSquare,
   Network,
   Settings,
   Shield,
@@ -17,9 +18,15 @@ import {
   Zap,
 } from 'lucide-react'
 
+// Kept in sync by hand with components/shell/sidebar.tsx's own NAV_ITEMS
+// (same list, same order) -- Phase 19's own audit found the org-chart
+// department list had drifted from its backend source of truth exactly
+// this way; this is the frontend-nav equivalent of that same class of bug,
+// caught before it happened rather than after.
 const NAV_ITEMS = [
   { label: 'Overview', icon: Home, href: '/' },
   { label: 'Mission Control', icon: Zap, href: '/mission-control' },
+  { label: 'Chat', icon: MessageSquare, href: '/chat' },
   { label: 'Agent Fleet', icon: Network, href: '/agent-fleet' },
   { label: 'Strategies', icon: Beaker, href: '/strategies' },
   { label: 'Backtests', icon: BarChart3, href: '/backtests' },

@@ -483,6 +483,111 @@ export type ScheduledJobsResponse = {
 }
 export const getScheduledJobs = () => apiGet<ScheduledJobsResponse>('/api/v1/system/scheduled-jobs')
 
+// ---- Scheduled job run-now / edit-schedule / run-history (Phase 22,
+// docs/phase20-old-vs-new-comparison.md item 20) -- mutating the live
+// APScheduler job in place, plus a durable history of real past firings
+// (src.observability.scheduled_job_history) since APScheduler itself
+// forgets a firing once it completes. ----
+export type RunScheduledJobNowResponse = {
+  scheduler: string
+  job_id: string
+  next_run_time: string | null
+}
+export const runScheduledJobNow = (scheduler: string, jobId: string) =>
+  apiPost<RunScheduledJobNowResponse>(
+    `/api/v1/system/scheduled-jobs/${encodeURIComponent(scheduler)}/${encodeURIComponent(jobId)}/run-now`
+  )
+
+export type UpdateScheduledJobRequest = {
+  seconds?: number
+  hour?: number
+  minute?: number
+}
+export type UpdateScheduledJobResponse = {
+  scheduler: string
+  job_id: string
+  trigger: string
+  next_run_time: string | null
+}
+export const updateScheduledJobSchedule = (
+  scheduler: string,
+  jobId: string,
+  payload: UpdateScheduledJobRequest
+) =>
+  apiPut<UpdateScheduledJobResponse>(
+    `/api/v1/system/scheduled-jobs/${encodeURIComponent(scheduler)}/${encodeURIComponent(jobId)}/schedule`,
+    payload
+  )
+
+export type ScheduledJobRunHistoryEntry = {
+  scheduled_run_time: string
+  finished_at: string
+  status: 'succeeded' | 'failed'
+  error: string | null
+}
+export type ScheduledJobHistoryResponse = {
+  runs: ScheduledJobRunHistoryEntry[]
+}
+export const getScheduledJobHistory = (scheduler: string, jobId: string) =>
+  apiGet<ScheduledJobHistoryResponse>(
+    `/api/v1/system/scheduled-jobs/${encodeURIComponent(scheduler)}/${encodeURIComponent(jobId)}/history`
+  )
+
+// ---- Live Canvas (Phase 22, docs/phase20-old-vs-new-comparison.md item 19) ----
+// One composed read over real, already-persisted data -- the newest
+// strategy code, newest completed backtest, newest audit event. ----
+export type CanvasLatestStrategyCode = {
+  strategy_id: string
+  strategy_name: string
+  version_id: string
+  version_number: number
+  code: string
+  created_at: string
+}
+export type CanvasLatestBacktestResult = {
+  backtest_id: string
+  strategy_id: string
+  strategy_name: string
+  symbol: string
+  status: string
+  metrics: Record<string, number> | null
+  created_at: string
+}
+export type CanvasLatestAgentLog = {
+  sequence: number
+  actor: string
+  action: string
+  entity_type: string | null
+  entity_id: string | null
+  created_at: string
+}
+export type CanvasState = {
+  latest_strategy_code: CanvasLatestStrategyCode | null
+  latest_backtest_result: CanvasLatestBacktestResult | null
+  latest_agent_log: CanvasLatestAgentLog | null
+}
+export const getCanvasState = () => apiGet<CanvasState>('/api/v1/canvas/state')
+
+// ---- Agent run analytics (Phase 22, item 21) ----
+export type AgentAnalyticsSummaryRow = {
+  agent_id: string
+  display_name: string
+  tasks_total: number
+  tasks_succeeded: number
+  tasks_failed: number
+  success_rate: number | null
+  avg_duration_seconds: number | null
+}
+export type AgentAnalyticsTrendPoint = {
+  date: string
+  tasks_succeeded: number
+  tasks_failed: number
+}
+export const getAgentAnalyticsSummary = () =>
+  apiGet<AgentAnalyticsSummaryRow[]>('/api/v1/agents/analytics/summary')
+export const getAgentAnalyticsTrend = (days = 14) =>
+  apiGet<AgentAnalyticsTrendPoint[]>(`/api/v1/agents/analytics/trend?days=${days}`)
+
 // ---- Operator Guidance (Phase 19 Part 2.6/3.1) -- notes the CEO Agent's
 // next planning cycle actually reads, see run_control.py's
 // fold_guidance_into_objective(). ----
@@ -1078,5 +1183,110 @@ export const generateInvestorReport = (input: {
   period_end: string
   cadence?: string
 }) => apiPost<InvestorReport>('/api/v1/investor-reports/generate', input)
+
+// ---- Chat (Phase 22, docs/phase20-old-vs-new-comparison.md item 16) ----
+// The backend (src/api/routes/chat.py) has been real since well before this
+// page existed -- session CRUD, search, pin, per-session model switch,
+// streaming replies over SSE, abort, export. This is a pure frontend build
+// over an API that needed nothing added.
+export type ChatSession = {
+  id: string
+  title: string
+  model: string | null
+  pinned: boolean
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+export type ChatMessage = {
+  id: string
+  session_id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  provider: string | null
+  aborted: boolean
+  created_at: string
+}
+export const listChatSessions = (params?: { search?: string; pinnedOnly?: boolean }) => {
+  const qs = new URLSearchParams()
+  if (params?.search) qs.set('search', params.search)
+  if (params?.pinnedOnly) qs.set('pinned_only', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return apiGet<ChatSession[]>(`/api/v1/chat/sessions${suffix}`)
+}
+export const createChatSession = (input: { title?: string; model?: string }) =>
+  apiPost<ChatSession>('/api/v1/chat/sessions', input)
+export const updateChatSession = (
+  sessionId: string,
+  input: { title?: string; model?: string; clear_model?: boolean; pinned?: boolean }
+) => apiPatch<ChatSession>(`/api/v1/chat/sessions/${sessionId}`, input)
+export const deleteChatSession = (sessionId: string) =>
+  apiDelete<void>(`/api/v1/chat/sessions/${sessionId}`)
+export const listChatMessages = (sessionId: string) =>
+  apiGet<ChatMessage[]>(`/api/v1/chat/sessions/${sessionId}/messages`)
+export const abortChatMessage = (sessionId: string) =>
+  apiPost<void>(`/api/v1/chat/sessions/${sessionId}/abort`)
+export const chatExportUrl = (sessionId: string, format: 'markdown' | 'json' = 'markdown') =>
+  `${API_BASE_URL}/api/v1/chat/sessions/${sessionId}/export?format=${format}`
+
+export type ChatStreamChunk = { text: string; done: boolean; provider: string | null }
+
+/** Consumes `POST .../messages`'s `text/event-stream` body directly (no
+ * `EventSource`: it can't send a POST body or an Authorization header) --
+ * this codebase's first streaming consumer on the frontend, so this
+ * function owns the raw fetch + reader loop rather than going through
+ * `request()`, which only ever returns parsed JSON. One 401-refresh retry,
+ * mirroring `request()`'s own logic, since a long-lived chat session is
+ * exactly where an access token is likely to expire mid-use. */
+export async function streamChatMessage(
+  sessionId: string,
+  content: string,
+  onChunk: (chunk: ChatStreamChunk) => void,
+  _isRetry = false
+): Promise<void> {
+  const token = getAccessToken()
+  const res = await fetch(`${API_BASE_URL}/api/v1/chat/sessions/${sessionId}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ content }),
+  })
+
+  if (res.status === 401 && !_isRetry && token) {
+    const refreshed = await refreshTokens()
+    if (refreshed) return streamChatMessage(sessionId, content, onChunk, true)
+  }
+  if (!res.ok || !res.body) {
+    let detail: unknown = res.statusText
+    try {
+      const body = await res.json()
+      detail = body?.detail ?? detail
+    } catch {
+      // no JSON body
+    }
+    throw new ApiError(res.status, typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let sepIndex: number
+    // SSE frames are separated by a blank line ("\n\n"); each complete
+    // frame in the buffer is parsed and removed, and any trailing partial
+    // frame is left for the next chunk to complete.
+    while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, sepIndex)
+      buffer = buffer.slice(sepIndex + 2)
+      const line = frame.split('\n').find((l) => l.startsWith('data: '))
+      if (line) onChunk(JSON.parse(line.slice(6)) as ChatStreamChunk)
+    }
+  }
+}
 
 export { API_BASE_URL }

@@ -31,7 +31,16 @@ async def run_screener_job(
 ) -> None:
     async with session_factory() as db:
         created = await run_screener_and_generate_strategies(
-            db, price_provider, as_of=pd.Timestamp.now(tz=IST).normalize(), filters=filters
+            db,
+            price_provider,
+            # tz-naive, matching every other daily-signal scheduler
+            # (live_trading_scheduler.py, paper_trading_scheduler.py) --
+            # both the real data lake's own index (src/data/lake.py) and
+            # FakeDailyPriceProvider's fallback index are tz-naive, so a
+            # tz-aware `as_of` here made every `.loc[:as_of]` slice raise
+            # "Cannot compare tz-naive and tz-aware datetime-like objects."
+            as_of=pd.Timestamp.now(tz=IST).normalize().tz_localize(None),
+            filters=filters,
         )
     logger.info("screener.daily_run_complete", strategies_created=len(created))
 

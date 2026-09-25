@@ -52,6 +52,7 @@ from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.models.refresh_token import RefreshToken
 from src.models.result_artefact import ResultArtefact
 from src.models.risk_limit import RiskLimit, RiskLimitChangeRequest, RiskLimitChangeStatus
+from src.models.scheduled_job_run import ScheduledJobRun, ScheduledJobRunStatus
 from src.models.shadow_mode_run import ShadowModeConfidence, ShadowModeRun
 from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
 from src.models.strategy_suggestion import StrategySuggestion, SuggestionStatus
@@ -116,6 +117,8 @@ __all__ = [
     "RunSource",
     "RunStatus",
     "RunType",
+    "ScheduledJobRun",
+    "ScheduledJobRunStatus",
     "ShadowModeConfidence",
     "ShadowModeRun",
     "Strategy",

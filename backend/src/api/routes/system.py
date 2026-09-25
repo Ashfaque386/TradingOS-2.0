@@ -12,10 +12,14 @@ codebase (not `/metrics`'s unauthenticated Prometheus scrape convention).
 import secrets
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from apscheduler.job import Job
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.llm_router import active_llm_provider, llm_provider_health_vitals
@@ -30,6 +34,7 @@ from src.core.security import invalidate_signing_key_cache
 from src.gateway.schema import LlmProvider
 from src.models.jwt_signing_key import JwtSigningKey
 from src.models.refresh_token import RefreshToken
+from src.models.scheduled_job_run import ScheduledJobRun
 from src.models.user import User
 from src.observability.scheduler_registry import get_all_schedulers
 from src.observability.vitals import build_system_vitals
@@ -38,6 +43,19 @@ router = APIRouter(prefix="/system", tags=["system"])
 
 register_policy("GET", "/api/v1/system/vitals", roles=list(Role))
 register_policy("GET", "/api/v1/system/scheduled-jobs", roles=list(Role))
+register_policy(
+    "GET", "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/history", roles=list(Role)
+)
+register_policy(
+    "POST",
+    "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/run-now",
+    roles=[Role.SYSTEM_ADMINISTRATOR],
+)
+register_policy(
+    "PUT",
+    "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule",
+    roles=[Role.SYSTEM_ADMINISTRATOR],
+)
 register_policy("POST", "/api/v1/system/jwt-signing-key/rotate", roles=[Role.SYSTEM_ADMINISTRATOR])
 
 
@@ -79,6 +97,186 @@ async def scheduled_jobs_endpoint(
             )
     return ScheduledJobsResponse(
         jobs=jobs, heartbeat_interval_seconds=DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+    )
+
+
+class RunScheduledJobNowResponse(BaseModel):
+    scheduler: str
+    job_id: str
+    next_run_time: str | None
+
+
+class UpdateScheduledJobRequest(BaseModel):
+    # Interval jobs (this codebase currently has exactly one:
+    # market_data's intraday ingestion) take `seconds`. Cron jobs (every
+    # other job) take `hour`/`minute`; any other field of the job's cron
+    # expression (day_of_week, etc.) is preserved unchanged from its
+    # current trigger rather than exposed here, since no job in this app
+    # was registered with a UI to edit those and guessing a replacement
+    # would silently change when the job runs.
+    seconds: int | None = None
+    hour: int | None = None
+    minute: int | None = None
+
+
+class UpdateScheduledJobResponse(BaseModel):
+    scheduler: str
+    job_id: str
+    trigger: str
+    next_run_time: str | None
+
+
+class ScheduledJobRunHistoryEntry(BaseModel):
+    scheduled_run_time: str
+    finished_at: str
+    status: str
+    error: str | None
+
+
+class ScheduledJobHistoryResponse(BaseModel):
+    runs: list[ScheduledJobRunHistoryEntry]
+
+
+def _get_scheduler_and_job(scheduler_name: str, job_id: str) -> tuple[AsyncIOScheduler, Job]:
+    scheduler = get_all_schedulers().get(scheduler_name)
+    if scheduler is None:
+        raise HTTPException(status_code=404, detail=f"No such scheduler: {scheduler_name}")
+    job = scheduler.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No such job: {job_id}")
+    return scheduler, job
+
+
+@router.post("/scheduled-jobs/{scheduler_name}/{job_id}/run-now")
+async def run_scheduled_job_now_endpoint(
+    scheduler_name: str,
+    job_id: str,
+    current_user: User = Depends(require_role),
+    db: AsyncSession = Depends(get_db),
+) -> RunScheduledJobNowResponse:
+    """Fires `job_id` immediately by moving its next firing to now
+    (`Job.modify`), the idiomatic APScheduler way to force an out-of-band
+    run without disturbing its regular trigger: an interval trigger's
+    NEXT next_run_time is computed from this firing, and a cron trigger's
+    next match is computed fresh from the cron expression either way, so
+    the job's normal cadence is unaffected afterward."""
+    scheduler, job = _get_scheduler_and_job(scheduler_name, job_id)
+    tz = getattr(job.trigger, "timezone", None) or UTC
+    job.modify(next_run_time=datetime.now(tz))
+    await write_audit_entry(
+        db,
+        actor=current_user.email,
+        action="scheduled_job.run_now",
+        entity_type="scheduled_job",
+        entity_id=f"{scheduler_name}/{job_id}",
+    )
+    return RunScheduledJobNowResponse(
+        scheduler=scheduler_name,
+        job_id=job_id,
+        next_run_time=job.next_run_time.isoformat() if job.next_run_time else None,
+    )
+
+
+@router.put("/scheduled-jobs/{scheduler_name}/{job_id}/schedule")
+async def update_scheduled_job_schedule_endpoint(
+    scheduler_name: str,
+    job_id: str,
+    payload: UpdateScheduledJobRequest,
+    current_user: User = Depends(require_role),
+    db: AsyncSession = Depends(get_db),
+) -> UpdateScheduledJobResponse:
+    """Reschedules a live job in place (`Job.reschedule`). Only the fields
+    that make sense for the job's actual trigger type are accepted -- an
+    interval job's `seconds`, or a cron job's `hour`/`minute` -- and every
+    other field of a cron job's expression (day_of_week, day, month, ...)
+    is read off its CURRENT trigger and carried over unchanged, so e.g.
+    investor_reporting's `day_of_week="mon"` can't be silently dropped by
+    an edit that only meant to change the hour."""
+    _scheduler, job = _get_scheduler_and_job(scheduler_name, job_id)
+    old_trigger = str(job.trigger)
+
+    if isinstance(job.trigger, IntervalTrigger):
+        if payload.hour is not None or payload.minute is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="This job runs on a fixed interval; supply 'seconds', not hour/minute.",
+            )
+        if payload.seconds is None or payload.seconds < 1:
+            raise HTTPException(status_code=400, detail="seconds must be a positive integer")
+        new_trigger = IntervalTrigger(seconds=payload.seconds)
+    elif isinstance(job.trigger, CronTrigger):
+        if payload.seconds is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="This job runs on a cron schedule; supply hour/minute, not seconds.",
+            )
+        if payload.hour is None or payload.minute is None:
+            raise HTTPException(status_code=400, detail="Both hour and minute are required")
+        if not (0 <= payload.hour <= 23) or not (0 <= payload.minute <= 59):
+            raise HTTPException(status_code=400, detail="hour must be 0-23 and minute must be 0-59")
+        cron_kwargs = {field.name: str(field) for field in job.trigger.fields}
+        cron_kwargs["hour"] = payload.hour
+        cron_kwargs["minute"] = payload.minute
+        new_trigger = CronTrigger(**cron_kwargs, timezone=job.trigger.timezone)
+    else:
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported trigger type: {type(job.trigger).__name__}"
+        )
+
+    job.reschedule(trigger=new_trigger)
+    await write_audit_entry(
+        db,
+        actor=current_user.email,
+        action="scheduled_job.reschedule",
+        entity_type="scheduled_job",
+        entity_id=f"{scheduler_name}/{job_id}",
+        details={"old_trigger": old_trigger, "new_trigger": str(job.trigger)},
+    )
+    return UpdateScheduledJobResponse(
+        scheduler=scheduler_name,
+        job_id=job_id,
+        trigger=str(job.trigger),
+        next_run_time=job.next_run_time.isoformat() if job.next_run_time else None,
+    )
+
+
+@router.get("/scheduled-jobs/{scheduler_name}/{job_id}/history")
+async def scheduled_job_history_endpoint(
+    scheduler_name: str,
+    job_id: str,
+    _current_user: User = Depends(require_role),
+    db: AsyncSession = Depends(get_db),
+) -> ScheduledJobHistoryResponse:
+    """Real past firings of this job, most recent first -- written by
+    `src.observability.scheduled_job_history`'s listener as each firing
+    completes. Does not require the scheduler/job to currently exist (a
+    renamed or removed job's history should still be readable), unlike
+    run-now/schedule above which act on the live job."""
+    rows = (
+        (
+            await db.execute(
+                select(ScheduledJobRun)
+                .where(
+                    ScheduledJobRun.scheduler == scheduler_name,
+                    ScheduledJobRun.job_id == job_id,
+                )
+                .order_by(ScheduledJobRun.scheduled_run_time.desc())
+                .limit(50)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return ScheduledJobHistoryResponse(
+        runs=[
+            ScheduledJobRunHistoryEntry(
+                scheduled_run_time=row.scheduled_run_time.isoformat(),
+                finished_at=row.finished_at.isoformat(),
+                status=row.status.value,
+                error=row.error,
+            )
+            for row in rows
+        ]
     )
 
 

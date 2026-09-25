@@ -28,6 +28,7 @@ from src.observability.correlation import CorrelationIdMiddleware
 from src.observability.logging import configure_logging
 from src.observability.metrics import trading_holiday_gauge_updater
 from src.observability.rate_limit_middleware import RateLimitMiddleware
+from src.observability.scheduled_job_history import attach_run_history_listener
 from src.observability.scheduler_registry import register_scheduler, unregister_all
 from src.orchestration.audit_scheduler import start_audit_scheduler
 from src.orchestration.investor_reporting_scheduler import start_investor_reporting_scheduler
@@ -181,6 +182,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ("investor_reporting", investor_reporting_scheduler),
     ):
         register_scheduler(name, scheduler)
+        # Phase 22 (docs/phase20-old-vs-new-comparison.md item 20): a
+        # durable record of each job's real firings, since APScheduler
+        # itself keeps none once a firing completes.
+        attach_run_history_listener(scheduler, name, AsyncSessionLocal)
 
     yield
 

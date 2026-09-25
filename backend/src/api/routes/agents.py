@@ -17,10 +17,11 @@ mutation path.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.graph import run_pipeline
@@ -28,6 +29,8 @@ from src.agents.roster import NO_DATA_SOURCE_AGENTS, capabilities_for
 from src.api.routes.gateway import ApplyResultResponse
 from src.api.schemas import (
     AgentActivityResponse,
+    AgentAnalyticsSummaryRow,
+    AgentAnalyticsTrendPoint,
     AgentHeartbeatEntryResponse,
     AgentSummaryResponse,
     AgentTaskEntryResponse,
@@ -45,7 +48,7 @@ from src.gateway.service import ServiceError, set_identity
 from src.gateway.state import get_state
 from src.models.heartbeat_log import HeartbeatLog
 from src.models.prompt_version import PromptVersion
-from src.models.task import Task
+from src.models.task import Task, TaskStatus
 from src.models.user import User
 from src.orchestration.prompt_versions import (
     NoSuchPromptVersionError,
@@ -66,6 +69,8 @@ register_policy(
 )
 register_policy("PUT", "/api/v1/agents/{agent_id}/identity", roles=_WRITE_ROLES)
 register_policy("GET", "/api/v1/agents/{agent_id}/activity", roles=list(Role))
+register_policy("GET", "/api/v1/agents/analytics/summary", roles=list(Role))
+register_policy("GET", "/api/v1/agents/analytics/trend", roles=list(Role))
 register_policy("GET", "/api/v1/agents/{agent_id}/prompt-versions", roles=list(Role))
 register_policy("POST", "/api/v1/agents/{agent_id}/prompt-versions", roles=_WRITE_ROLES)
 register_policy(
@@ -217,6 +222,114 @@ async def agent_activity_endpoint(
             for row in task_rows
         ],
     )
+
+
+_TERMINAL_TASK_STATUSES = (TaskStatus.SUCCEEDED, TaskStatus.FAILED)
+
+
+@router.get("/analytics/summary")
+async def agent_analytics_summary_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[AgentAnalyticsSummaryRow]:
+    """Phase 22 (docs/phase20-old-vs-new-comparison.md item 21): real task
+    counts per roster agent, the same capability join `/{agent_id}/activity`
+    already uses -- one row per agent, in real roster order, an honest
+    all-zero/None row (never omitted) for an agent that has never claimed
+    a task rather than a shorter, silently-incomplete list."""
+    rows: list[AgentAnalyticsSummaryRow] = []
+    for agent in ROSTER:
+        capabilities = capabilities_for(agent.agent_id)
+        if not capabilities:
+            rows.append(
+                AgentAnalyticsSummaryRow(
+                    agent_id=agent.agent_id,
+                    display_name=agent.display_name,
+                    tasks_total=0,
+                    tasks_succeeded=0,
+                    tasks_failed=0,
+                    success_rate=None,
+                    avg_duration_seconds=None,
+                )
+            )
+            continue
+
+        counts_stmt = (
+            select(Task.status, func.count())
+            .where(Task.capability.in_(capabilities))
+            .group_by(Task.status)
+        )
+        counts = dict((await db.execute(counts_stmt)).all())
+        succeeded = counts.get(TaskStatus.SUCCEEDED, 0)
+        failed = counts.get(TaskStatus.FAILED, 0)
+        total = sum(counts.values())
+        terminal = succeeded + failed
+
+        duration_stmt = select(
+            func.avg(func.extract("epoch", Task.completed_at - Task.created_at))
+        ).where(
+            Task.capability.in_(capabilities),
+            Task.status.in_(_TERMINAL_TASK_STATUSES),
+            Task.completed_at.is_not(None),
+        )
+        avg_duration = (await db.execute(duration_stmt)).scalar_one_or_none()
+
+        rows.append(
+            AgentAnalyticsSummaryRow(
+                agent_id=agent.agent_id,
+                display_name=agent.display_name,
+                tasks_total=total,
+                tasks_succeeded=succeeded,
+                tasks_failed=failed,
+                success_rate=(succeeded / terminal) if terminal else None,
+                avg_duration_seconds=float(avg_duration) if avg_duration is not None else None,
+            )
+        )
+    return rows
+
+
+@router.get("/analytics/trend")
+async def agent_analytics_trend_endpoint(
+    days: int = 14,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[AgentAnalyticsTrendPoint]:
+    """Real, system-wide (not per-agent -- see AgentAnalyticsTrendPoint's
+    own docstring) daily task-outcome counts over the trailing `days`
+    days, bucketed on `completed_at` (a task only has an outcome once it's
+    terminal) -- a day with zero tasks is a real zero, not an omitted
+    point, so the chart's x-axis is never silently gappy."""
+    if days < 1 or days > 90:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "days must be between 1 and 90")
+
+    since = datetime.now(UTC) - timedelta(days=days)
+    bucket = func.date(Task.completed_at)
+    stmt = (
+        select(bucket, Task.status, func.count())
+        .where(
+            Task.completed_at.is_not(None),
+            Task.completed_at >= since,
+            Task.status.in_(_TERMINAL_TASK_STATUSES),
+        )
+        .group_by(bucket, Task.status)
+        .order_by(bucket)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    by_date: dict[str, dict[str, int]] = {}
+    for day, task_status, count in rows:
+        day_key = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        by_date.setdefault(day_key, {"succeeded": 0, "failed": 0})
+        by_date[day_key]["succeeded" if task_status == TaskStatus.SUCCEEDED else "failed"] = count
+
+    return [
+        AgentAnalyticsTrendPoint(
+            date=day_key,
+            tasks_succeeded=counts["succeeded"],
+            tasks_failed=counts["failed"],
+        )
+        for day_key, counts in sorted(by_date.items())
+    ]
 
 
 @router.get("/{agent_id}/prompt-versions")

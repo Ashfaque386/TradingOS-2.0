@@ -13,11 +13,15 @@ import {
   Shield,
   Settings,
   ChevronRight,
+  MessageSquare,
 } from 'lucide-react'
 
+// Kept in sync by hand with components/shell/mobile-nav.tsx's own
+// NAV_ITEMS (same list, same order) -- see that file's comment.
 const NAV_ITEMS = [
   { label: 'Overview', icon: Home, href: '/' },
   { label: 'Mission Control', icon: Zap, href: '/mission-control' },
+  { label: 'Chat', icon: MessageSquare, href: '/chat' },
   { label: 'Agent Fleet', icon: Network, href: '/agent-fleet' },
   { label: 'Strategies', icon: Beaker, href: '/strategies' },
   { label: 'Backtests', icon: BarChart3, href: '/backtests' },
