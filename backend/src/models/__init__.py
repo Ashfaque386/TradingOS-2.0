@@ -48,6 +48,10 @@ from src.models.organizational_plan import OrganizationalPlan, PlanStatus
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
+from src.models.portfolio_recommendation import (
+    PortfolioRecommendation,
+    PortfolioRecommendationStatus,
+)
 from src.models.prompt_version import PromptVersion, PromptVersionStatus
 from src.models.refresh_token import RefreshToken
 from src.models.result_artefact import ResultArtefact
@@ -107,6 +111,8 @@ __all__ = [
     "PaperPosition",
     "PaperTradingSubscription",
     "PlanStatus",
+    "PortfolioRecommendation",
+    "PortfolioRecommendationStatus",
     "PromptVersion",
     "PromptVersionStatus",
     "RefreshToken",

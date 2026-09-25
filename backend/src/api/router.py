@@ -22,6 +22,7 @@ from src.api.routes import (
     orchestration,
     orders,
     paper_trading,
+    portfolio,
     risk,
     risk_limits,
     shadow_mode,
@@ -43,6 +44,7 @@ api_router.include_router(kill_switch.router)
 api_router.include_router(risk_limits.router)
 api_router.include_router(risk.router)
 api_router.include_router(paper_trading.router)
+api_router.include_router(portfolio.router)
 api_router.include_router(broker_credentials.router)
 api_router.include_router(broker_oauth.router)
 api_router.include_router(shadow_mode.router)

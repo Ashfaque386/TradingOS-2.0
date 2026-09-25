@@ -2,20 +2,23 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Bar, CartesianGrid, ComposedChart, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts'
-import { Activity, AlertTriangle, Cable, Clock3, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles } from 'lucide-react'
+import { Activity, AlertTriangle, Cable, CheckCircle2, Clock3, Database, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles, XCircle } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { ChartContainer } from '@/components/ui/chart'
 import {
   ApiError,
   type BrokerCircuitBreakerStatus,
   type BrokerCredentialStatus,
+  type DatalakeStatus,
   type FreshnessRecord,
   type IndicatorSeries,
   type Instrument,
   type LiveOptionChain,
   type LlmProviderStatus,
+  type MarketDataProvenanceEntry,
   type MarketPulse,
   LLM_PROVIDER_LABELS,
+  getDatalakeStatus,
   getFreshness,
   getIndicators,
   getLiveOptionChain,
@@ -25,12 +28,14 @@ import {
   listBrokerCredentialStatus,
   listInstruments,
   listLlmProviderStatus,
+  listProvenance,
 } from '@/lib/api'
 
 const TABS = [
   { id: 'pulse', label: 'Pulse', icon: Activity },
   { id: 'technical', label: 'Technical Indicators', icon: LineChartIcon },
   { id: 'freshness', label: 'Data Freshness', icon: Clock3 },
+  { id: 'datalake', label: 'Datalake Status', icon: Database },
   { id: 'providers', label: 'Provider Status', icon: Cable },
   { id: 'chain', label: 'Live Option Chain', icon: ListTree },
 ] as const
@@ -223,6 +228,74 @@ function FreshnessTab() {
       </Panel>
       <Panel title={`${symbol ?? '—'} · dataset freshness`} eyebrow="DATA PIPELINE HEALTH">
         <div className="overflow-x-auto"><table className="analysis-table"><thead><tr><th>Data type</th><th>Data date</th><th>Row count</th><th>Ingested at</th></tr></thead><tbody>{records.map((r, i) => <tr key={i}><td>{r.data_type}</td><td className="mono">{r.data_date}</td><td className="mono">{r.row_count.toLocaleString('en-IN')}</td><td className="mono">{new Date(r.ingested_at).toLocaleString()}</td></tr>)}{records.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-xs text-muted-foreground">No freshness records for this symbol.</td></tr>}</tbody></table></div>
+      </Panel>
+    </div>
+  )
+}
+
+function _pipelineLabel(pipeline: string): string {
+  return pipeline.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
+}
+
+function _statusDot(status: string | null): string {
+  if (status === 'success') return 'green'
+  if (status === 'failed') return 'red'
+  if (status === 'partial') return 'amber'
+  return 'gray'
+}
+
+function DatalakeStatusTab() {
+  const [status, setStatus] = useState<DatalakeStatus | null>(null)
+  const [runs, setRuns] = useState<MarketDataProvenanceEntry[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const [s, r] = await Promise.all([getDatalakeStatus(), listProvenance()])
+      if (!cancelled) { setStatus(s); setRuns(r) }
+    }
+    load()
+    const interval = setInterval(load, 30000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
+
+  if (!status) return <p className="p-4 text-xs text-muted-foreground">Loading data lake status…</p>
+
+  return (
+    <div className="technical-layout">
+      <Panel title="Lake coverage" eyebrow="REAL SYMBOL COUNTS FROM THE DATASET FRESHNESS TABLE" className="symbol-panel">
+        <div className="flex flex-col gap-3 p-1 text-xs">
+          <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Symbols with daily data</span><strong className="mono">{status.symbols_with_daily_data.toLocaleString('en-IN')}</strong></div>
+          <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Most recent daily date</span><strong className="mono">{status.most_recent_daily_data_date ?? '—'}</strong></div>
+          <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Symbols with intraday data</span><strong className="mono">{status.symbols_with_intraday_data.toLocaleString('en-IN')}</strong></div>
+          <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Most recent intraday date</span><strong className="mono">{status.most_recent_intraday_data_date ?? '—'}</strong></div>
+          <div className="flex items-center justify-between gap-2 border-t border-white/8 pt-3"><span className="text-muted-foreground">As of</span><strong className="mono">{new Date(status.as_of).toLocaleTimeString()}</strong></div>
+        </div>
+      </Panel>
+      <Panel title="Pipeline health" eyebrow="EVERY REAL PIPELINE, INCLUDING ONE THAT HAS NEVER RUN">
+        <div className="provider-status-list">
+          {status.pipelines.map((p) => (
+            <div className="provider-status-row" key={p.pipeline}>
+              <span className={`provider-status-dot ${_statusDot(p.last_run_status)}`} />
+              <div className="min-w-0 flex-1">
+                <strong>{_pipelineLabel(p.pipeline)}</strong>
+                <small>
+                  {p.last_run_status
+                    ? `${p.last_run_status} · ${p.last_run_at ? new Date(p.last_run_at).toLocaleString() : '—'}`
+                    : 'never run'}
+                  {p.last_error && ` · ${p.last_error}`}
+                </small>
+                {p.last_run_status === 'failed' && p.last_success_at && (
+                  <small className="block text-emerald-300/80">last succeeded {new Date(p.last_success_at).toLocaleString()}</small>
+                )}
+              </div>
+              {p.last_run_status === 'success' ? <CheckCircle2 className="size-3.5 shrink-0 text-emerald-300" /> : p.last_run_status === 'failed' ? <XCircle className="size-3.5 shrink-0 text-rose-300" /> : null}
+            </div>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Recent runs" eyebrow="RAW PROVENANCE LOG, NEWEST FIRST" className="sector-panel">
+        <div className="overflow-x-auto"><table className="analysis-table"><thead><tr><th>Pipeline</th><th>Source</th><th>Status</th><th>Symbols</th><th>Rows</th><th>Completed at</th></tr></thead><tbody>{runs.slice(0, 15).map((r) => <tr key={r.id}><td>{_pipelineLabel(r.pipeline)}</td><td className="mono">{r.source}</td><td>{r.status}</td><td className="mono">{r.symbols_processed}</td><td className="mono">{r.rows_ingested.toLocaleString('en-IN')}</td><td className="mono">{new Date(r.completed_at).toLocaleString()}</td></tr>)}{runs.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-xs text-muted-foreground">No pipeline runs recorded yet.</td></tr>}</tbody></table></div>
       </Panel>
     </div>
   )
@@ -433,6 +506,7 @@ export default function MarketAnalysisPage() {
         {tab === 'pulse' && <PulseTab />}
         {tab === 'technical' && <TechnicalTab />}
         {tab === 'freshness' && <FreshnessTab />}
+        {tab === 'datalake' && <DatalakeStatusTab />}
         {tab === 'providers' && <ProvidersTab />}
         {tab === 'chain' && <OptionChainTab />}
       </main>

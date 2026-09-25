@@ -170,6 +170,7 @@ async def run_scheduled_job_now_endpoint(
         entity_type="scheduled_job",
         entity_id=f"{scheduler_name}/{job_id}",
     )
+    await db.commit()
     return RunScheduledJobNowResponse(
         scheduler=scheduler_name,
         job_id=job_id,
@@ -232,6 +233,7 @@ async def update_scheduled_job_schedule_endpoint(
         entity_id=f"{scheduler_name}/{job_id}",
         details={"old_trigger": old_trigger, "new_trigger": str(job.trigger)},
     )
+    await db.commit()
     return UpdateScheduledJobResponse(
         scheduler=scheduler_name,
         job_id=job_id,

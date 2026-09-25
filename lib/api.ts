@@ -813,6 +813,56 @@ export type PositionByStrategy = {
 
 export const listPositionsByStrategy = () => apiGet<PositionByStrategy[]>('/api/v1/orders/positions')
 
+// ---- Portfolio (Phase 24, docs/phase20-old-vs-new-comparison.md items 22
+// and 23): advisory-only rebalancing recommendations (each allocation
+// action is decided from real backtest metrics, never fabricated; a
+// human accepts/rejects -- nothing here ever places an order) plus a
+// single cross-broker-ready dashboard rollup. ----
+export type PortfolioAllocationEntry = {
+  strategy_id: string
+  strategy_name: string
+  strategy_status: string
+  action: 'increase' | 'decrease' | 'hold'
+  rationale: string
+  sharpe: number | null
+  max_drawdown: number | null
+}
+export type PortfolioRecommendation = {
+  id: string
+  summary: string
+  allocations: PortfolioAllocationEntry[]
+  based_on: Record<string, unknown>
+  llm_source: 'llm' | 'fallback'
+  status: 'pending' | 'accepted' | 'rejected'
+  reviewed_by: string | null
+  reviewed_at: string | null
+  reviewer_notes: string | null
+  created_at: string
+}
+export const generatePortfolioRecommendation = () =>
+  apiPost<PortfolioRecommendation>('/api/v1/portfolio/recommendations/generate')
+export const listPortfolioRecommendations = () =>
+  apiGet<PortfolioRecommendation[]>('/api/v1/portfolio/recommendations')
+export const getPortfolioRecommendation = (id: string) =>
+  apiGet<PortfolioRecommendation>(`/api/v1/portfolio/recommendations/${id}`)
+export const acceptPortfolioRecommendation = (id: string, notes?: string) =>
+  apiPost<PortfolioRecommendation>(`/api/v1/portfolio/recommendations/${id}/accept`, { notes })
+export const rejectPortfolioRecommendation = (id: string, notes?: string) =>
+  apiPost<PortfolioRecommendation>(`/api/v1/portfolio/recommendations/${id}/reject`, { notes })
+
+export type PortfolioSummary = {
+  as_of: string
+  active_strategy_count: number
+  paper_realized_pnl_today: number
+  paper_open_position_count: number
+  live_position_count: number
+  broker_configured: boolean
+  broker_name: string | null
+  available_margin: number | null
+  used_margin: number | null
+}
+export const getPortfolioSummary = () => apiGet<PortfolioSummary>('/api/v1/portfolio/summary')
+
 // ---- Manual order intent (routed through the real risk gate) ----
 export type OrderIntentInput = {
   mode: KillSwitchMode
@@ -1092,6 +1142,47 @@ export type IndicatorSeries = {
 }
 export const getIndicators = (symbol: string, lookbackDays = 250) =>
   apiGet<IndicatorSeries>(`/api/v1/market-data/indicators/${symbol}?lookback_days=${lookbackDays}`)
+
+// ---- Data lake provenance + status (Phase 23,
+// docs/phase20-old-vs-new-comparison.md item 35) -- `/provenance` is the
+// raw per-run log; `/datalake/status` composes it (latest run + latest
+// SUCCESSFUL run per real pipeline, never silently omitting one that has
+// never run) with lake-wide symbol coverage into the single "is the lake
+// healthy right now" view neither `/provenance` nor per-symbol
+// `/freshness/{symbol}` answers alone. ----
+export type MarketDataProvenanceEntry = {
+  id: string
+  pipeline: string
+  source: string
+  status: string
+  symbols_processed: number
+  rows_ingested: number
+  error_message: string | null
+  details: Record<string, unknown> | null
+  started_at: string
+  completed_at: string
+}
+export const listProvenance = () =>
+  apiGet<MarketDataProvenanceEntry[]>('/api/v1/market-data/provenance')
+
+export type PipelineStatusEntry = {
+  pipeline: string
+  last_run_status: string | null
+  last_run_at: string | null
+  last_run_source: string | null
+  last_error: string | null
+  last_success_at: string | null
+}
+export type DatalakeStatus = {
+  as_of: string
+  pipelines: PipelineStatusEntry[]
+  symbols_with_daily_data: number
+  symbols_with_intraday_data: number
+  most_recent_daily_data_date: string | null
+  most_recent_intraday_data_date: string | null
+}
+export const getDatalakeStatus = () =>
+  apiGet<DatalakeStatus>('/api/v1/market-data/datalake/status')
 
 export type Instrument = {
   symbol: string

@@ -306,6 +306,47 @@ class ApprovalRequestResponse(BaseModel):
     created_at: datetime_type
 
 
+class PortfolioAllocationEntry(BaseModel):
+    strategy_id: str
+    strategy_name: str
+    strategy_status: str
+    action: str
+    rationale: str
+    sharpe: float | None
+    max_drawdown: float | None
+
+
+class PortfolioRecommendationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    summary: str
+    allocations: list[PortfolioAllocationEntry]
+    based_on: dict
+    llm_source: str
+    status: str
+    reviewed_by: str | None
+    reviewed_at: datetime_type | None
+    reviewer_notes: str | None
+    created_at: datetime_type
+
+
+class DecidePortfolioRecommendationRequest(BaseModel):
+    notes: str | None = None
+
+
+class PortfolioSummaryResponse(BaseModel):
+    as_of: str
+    active_strategy_count: int
+    paper_realized_pnl_today: float
+    paper_open_position_count: int
+    live_position_count: int
+    broker_configured: bool
+    broker_name: str | None
+    available_margin: float | None
+    used_margin: float | None
+
+
 # --- Backtesting & Optimization (Build Spec §10) ---------------------------
 #
 # Strategy/signal logic accepted over HTTP is limited to a small fixed set
@@ -869,6 +910,24 @@ class MarketDataProvenanceResponse(BaseModel):
     details: dict | None
     started_at: str
     completed_at: str
+
+
+class PipelineStatusEntry(BaseModel):
+    pipeline: str
+    last_run_status: str | None
+    last_run_at: str | None
+    last_run_source: str | None
+    last_error: str | None
+    last_success_at: str | None
+
+
+class DatalakeStatusResponse(BaseModel):
+    as_of: str
+    pipelines: list[PipelineStatusEntry]
+    symbols_with_daily_data: int
+    symbols_with_intraday_data: int
+    most_recent_daily_data_date: date_type | None
+    most_recent_intraday_data_date: date_type | None
 
 
 class RunDailyIngestionRequest(BaseModel):

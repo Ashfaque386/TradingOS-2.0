@@ -19,6 +19,7 @@ from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.roles import Role
 from src.data import lake
 from src.main import app
+from src.models.market_data_provenance import MarketDataProvenance
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +121,112 @@ async def test_manual_daily_ingestion_trigger_then_freshness_and_instruments_ref
     pipelines = {row["pipeline"] for row in provenance_resp.json()}
     assert "incremental_daily" in pipelines
     assert "instrument_master" in pipelines
+
+    status_resp = await client.get("/api/v1/market-data/datalake/status", headers=_auth(token))
+    assert status_resp.status_code == 200
+    status_body = status_resp.json()
+    by_pipeline = {row["pipeline"]: row for row in status_body["pipelines"]}
+    assert by_pipeline["incremental_daily"]["last_run_status"] == "success"
+    assert by_pipeline["incremental_daily"]["last_success_at"] is not None
+    assert by_pipeline["instrument_master"]["last_run_status"] == "success"
+    # A pipeline that never ran in this test must still be listed, not
+    # silently omitted.
+    assert by_pipeline["data_lake_backup"]["last_run_status"] is None
+    assert by_pipeline["data_lake_backup"]["last_success_at"] is None
+    assert status_body["symbols_with_daily_data"] == 1
+    assert status_body["most_recent_daily_data_date"] == "2026-09-16"
+
+
+async def test_datalake_status_lists_every_known_pipeline_before_any_run_ever_happens(
+    client: AsyncClient, make_user
+):
+    await make_user("md-status-empty@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "md-status-empty@example.com", "supersecret1")
+
+    resp = await client.get("/api/v1/market-data/datalake/status", headers=_auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {row["pipeline"] for row in body["pipelines"]} == {
+        "incremental_daily",
+        "corporate_actions",
+        "instrument_master",
+        "intraday_minute",
+        "bhavcopy_fallback",
+        "catalog_refresh",
+        "data_lake_backup",
+    }
+    assert all(row["last_run_status"] is None for row in body["pipelines"])
+    assert body["symbols_with_daily_data"] == 0
+    assert body["symbols_with_intraday_data"] == 0
+    assert body["most_recent_daily_data_date"] is None
+
+
+async def test_datalake_status_accessible_to_every_role(client: AsyncClient, make_user):
+    for i, role in enumerate(
+        [
+            Role.SYSTEM_ADMINISTRATOR,
+            Role.PORTFOLIO_MANAGER,
+            Role.RISK_MANAGER,
+            Role.READ_ONLY_AUDITOR,
+        ]
+    ):
+        email = f"md-status-role-{i}@example.com"
+        await make_user(email, "supersecret1", role)
+        token = await _login(client, email, "supersecret1")
+        resp = await client.get("/api/v1/market-data/datalake/status", headers=_auth(token))
+        assert resp.status_code == 200, f"role {role} was denied read access to datalake status"
+
+
+async def test_datalake_status_reports_last_success_separately_from_a_more_recent_failure(
+    client: AsyncClient, make_user, db_session_factory
+):
+    """The whole point of tracking both fields: a pipeline whose most
+    recent run failed must still report WHEN it last actually succeeded,
+    not silently lose that fact under the newer failure."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    async with db_session_factory() as db:
+        db.add(
+            MarketDataProvenance(
+                pipeline="catalog_refresh",
+                source="catalog",
+                status="success",
+                symbols_processed=5,
+                rows_ingested=5,
+                started_at=now - timedelta(days=1),
+                completed_at=now - timedelta(days=1),
+            )
+        )
+        db.add(
+            MarketDataProvenance(
+                pipeline="catalog_refresh",
+                source="catalog",
+                status="failed",
+                symbols_processed=0,
+                rows_ingested=0,
+                error_message="deliberate test failure",
+                started_at=now,
+                completed_at=now,
+            )
+        )
+        await db.commit()
+
+    await make_user("md-status-mixed@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "md-status-mixed@example.com", "supersecret1")
+
+    resp = await client.get("/api/v1/market-data/datalake/status", headers=_auth(token))
+    assert resp.status_code == 200
+    row = next(r for r in resp.json()["pipelines"] if r["pipeline"] == "catalog_refresh")
+    assert row["last_run_status"] == "failed"
+    assert row["last_error"] == "deliberate test failure"
+    assert row["last_success_at"] is not None
+    assert row["last_success_at"] < row["last_run_at"]
+
+
+async def test_datalake_status_requires_authentication(client: AsyncClient):
+    resp = await client.get("/api/v1/market-data/datalake/status")
+    assert resp.status_code in (401, 403)
 
 
 async def test_daily_ingestion_trigger_skips_holiday(client: AsyncClient, make_user):

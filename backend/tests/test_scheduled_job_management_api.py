@@ -13,8 +13,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from src.core.roles import Role
+from src.models.audit_log import AuditLog
 from src.models.scheduled_job_run import ScheduledJobRun, ScheduledJobRunStatus
 from src.observability.scheduled_job_history import attach_run_history_listener
 from src.observability.scheduler_registry import register_scheduler, unregister_all
@@ -66,7 +68,7 @@ async def test_run_now_requires_system_administrator(client: AsyncClient, make_u
 
 
 async def test_run_now_moves_next_run_time_to_now_without_disturbing_the_cadence(
-    client: AsyncClient, make_user
+    client: AsyncClient, make_user, db_session_factory
 ):
     # A job function that records when it actually ran, rather than
     # asserting `next_run_time` lands near "now": APScheduler's own
@@ -108,6 +110,20 @@ async def test_run_now_moves_next_run_time_to_now_without_disturbing_the_cadence
         job = scheduler.get_job("fake_cron_job")
         assert isinstance(job.trigger, CronTrigger)
         assert "day_of_week='mon'" in str(job.trigger)
+
+        # A regression check for a real bug: the explicit write_audit_entry
+        # call in the route handler was never followed by db.commit(), so
+        # this row was silently discarded when the request-scoped session
+        # closed -- only the generic AuditLoggingMiddleware entry ever
+        # actually persisted. Reading it back here (rather than trusting
+        # that the call was made) is what would have caught it.
+        async with db_session_factory() as db:
+            result = await db.execute(
+                select(AuditLog).where(AuditLog.action == "scheduled_job.run_now")
+            )
+            row = result.scalars().first()
+        assert row is not None, "scheduled_job.run_now audit entry was never committed"
+        assert row.entity_id == "fake_scheduler/fake_cron_job"
     finally:
         scheduler.shutdown(wait=False)
         unregister_all()
@@ -166,7 +182,7 @@ async def test_reschedule_interval_job_rejects_hour_minute(client: AsyncClient, 
 
 
 async def test_reschedule_cron_job_changes_hour_minute_but_preserves_day_of_week(
-    client: AsyncClient, make_user
+    client: AsyncClient, make_user, db_session_factory
 ):
     scheduler = await _make_scheduler_with_cron_job()
     register_scheduler("fake_scheduler", scheduler)
@@ -185,6 +201,18 @@ async def test_reschedule_cron_job_changes_hour_minute_but_preserves_day_of_week
         assert "minute='30'" in body["trigger"]
         # The field this edit never mentioned must survive unchanged.
         assert "day_of_week='mon'" in body["trigger"]
+
+        # Same regression check as run-now's own test above: this write
+        # must actually be committed, not just constructed and discarded.
+        async with db_session_factory() as db:
+            result = await db.execute(
+                select(AuditLog).where(AuditLog.action == "scheduled_job.reschedule")
+            )
+            row = result.scalars().first()
+        assert row is not None, "scheduled_job.reschedule audit entry was never committed"
+        assert row.details is not None
+        assert "day_of_week='mon'" in row.details["old_trigger"]
+        assert "hour='9'" in row.details["new_trigger"]
     finally:
         scheduler.shutdown(wait=False)
         unregister_all()

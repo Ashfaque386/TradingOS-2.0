@@ -15,10 +15,11 @@ from pathlib import Path
 import pandas as pd
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
+    DatalakeStatusResponse,
     FreshnessRecordResponse,
     IndicatorSeriesResponse,
     InstrumentResponse,
@@ -27,6 +28,7 @@ from src.api.schemas import (
     MarketDataProvenanceResponse,
     MarketHoursResponse,
     MarketPulseResponse,
+    PipelineStatusEntry,
     RunBhavcopyFallbackRequest,
     RunCorporateActionsIngestionRequest,
     RunDailyIngestionRequest,
@@ -61,6 +63,20 @@ router = APIRouter(prefix="/market-data", tags=["market-data"])
 
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
+# Must match MarketDataProvenance's own `ck_market_data_provenance_pipeline`
+# CheckConstraint exactly -- the fixed, known set of pipelines this app
+# runs, so the status view always reports all of them (a pipeline that has
+# never run once shows as never-run, not silently missing from the list).
+_KNOWN_PIPELINES = (
+    "incremental_daily",
+    "corporate_actions",
+    "instrument_master",
+    "intraday_minute",
+    "bhavcopy_fallback",
+    "catalog_refresh",
+    "data_lake_backup",
+)
+
 register_policy("GET", "/api/v1/market-data/market-hours", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/pulse", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/freshness/{symbol}", roles=list(Role))
@@ -69,6 +85,7 @@ register_policy("GET", "/api/v1/market-data/instruments", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/option-chain/{underlying}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/option-expiries/{underlying}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/provenance", roles=list(Role))
+register_policy("GET", "/api/v1/market-data/datalake/status", roles=list(Role))
 register_policy("POST", "/api/v1/market-data/ingest/daily", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/market-data/ingest/intraday", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/market-data/ingest/corporate-actions", roles=_OPERATOR_ROLES)
@@ -387,6 +404,88 @@ async def provenance_endpoint(
         select(MarketDataProvenance).order_by(MarketDataProvenance.completed_at.desc()).limit(50)
     )
     return [_provenance_response(row) for row in result.scalars().all()]
+
+
+@router.get("/datalake/status")
+async def datalake_status_endpoint(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> DatalakeStatusResponse:
+    """A composed read (Build Spec §14, docs/phase20-old-vs-new-comparison.md
+    item 35): per real pipeline, its most recent run and its most recent
+    *successful* run, plus lake-wide symbol coverage -- computes nothing
+    new, the same "purpose-built shape over data that already exists"
+    posture as Phase 22's Live Canvas. `/provenance` already exposes the
+    raw run log and `/freshness/{symbol}` the per-symbol detail; this is
+    the one "is the lake healthy right now" view neither answers alone --
+    every pipeline in `_KNOWN_PIPELINES` is always listed, even one that
+    has never run, rather than silently omitted."""
+    latest_by_pipeline = {
+        row.pipeline: row
+        for row in (
+            await db.execute(
+                select(MarketDataProvenance)
+                .distinct(MarketDataProvenance.pipeline)
+                .order_by(MarketDataProvenance.pipeline, MarketDataProvenance.completed_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    }
+    latest_success_by_pipeline = {
+        row.pipeline: row
+        for row in (
+            await db.execute(
+                select(MarketDataProvenance)
+                .where(MarketDataProvenance.status == "success")
+                .distinct(MarketDataProvenance.pipeline)
+                .order_by(MarketDataProvenance.pipeline, MarketDataProvenance.completed_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    }
+
+    pipelines: list[PipelineStatusEntry] = []
+    for name in _KNOWN_PIPELINES:
+        last = latest_by_pipeline.get(name)
+        success = latest_success_by_pipeline.get(name)
+        pipelines.append(
+            PipelineStatusEntry(
+                pipeline=name,
+                last_run_status=last.status if last else None,
+                last_run_at=last.completed_at.isoformat() if last else None,
+                last_run_source=last.source if last else None,
+                last_error=last.error_message if last else None,
+                last_success_at=success.completed_at.isoformat() if success else None,
+            )
+        )
+
+    daily_symbols, daily_max_date = (
+        await db.execute(
+            select(
+                func.count(func.distinct(DatasetFreshnessRecord.symbol)),
+                func.max(DatasetFreshnessRecord.data_date),
+            ).where(DatasetFreshnessRecord.data_type == "daily_ohlcv")
+        )
+    ).one()
+    intraday_symbols, intraday_max_date = (
+        await db.execute(
+            select(
+                func.count(func.distinct(DatasetFreshnessRecord.symbol)),
+                func.max(DatasetFreshnessRecord.data_date),
+            ).where(DatasetFreshnessRecord.data_type == "intraday_ohlcv")
+        )
+    ).one()
+
+    return DatalakeStatusResponse(
+        as_of=datetime.now(UTC).isoformat(),
+        pipelines=pipelines,
+        symbols_with_daily_data=daily_symbols or 0,
+        symbols_with_intraday_data=intraday_symbols or 0,
+        most_recent_daily_data_date=daily_max_date,
+        most_recent_intraday_data_date=intraday_max_date,
+    )
 
 
 @router.post("/ingest/daily")
