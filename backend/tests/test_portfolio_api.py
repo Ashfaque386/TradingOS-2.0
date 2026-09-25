@@ -321,3 +321,82 @@ async def test_portfolio_summary_readable_by_every_role(client: AsyncClient, mak
         token = await _login(client, email, "supersecret1")
         resp = await client.get("/api/v1/portfolio/summary", headers=_auth(token))
         assert resp.status_code == 200, f"role {role} was denied summary access"
+
+
+async def test_risk_metrics_computes_real_exposure_and_concentration(
+    client: AsyncClient, make_user, db_session_factory
+):
+    strategy_id, version_id = await _make_allocatable_strategy(
+        db_session_factory,
+        name="RiskStock",
+        status=StrategyStatus.LIVE.value,
+        metrics=None,
+    )
+
+    async with db_session_factory() as db:
+        subscription = await enroll_in_paper_trading(
+            db, strategy_version_id=version_id, symbol="RISKPAPER"
+        )
+        # Paper exposure: |20 * 50| = 1000.
+        db.add(
+            PaperPosition(
+                subscription_id=subscription.id, symbol="RISKPAPER", quantity=20, avg_cost=50.0
+            )
+        )
+        # Live exposure: |10 * 300| = 3000 -- the larger of the two, so it
+        # must sort first and drive the concentration ratio.
+        db.add(
+            LivePosition(strategy_id=strategy_id, symbol="RISKLIVE", quantity=10, avg_cost=300.0)
+        )
+        await db.commit()
+
+    await make_user("pf-risk1@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "pf-risk1@example.com", "supersecret1")
+
+    resp = await client.get("/api/v1/portfolio/risk-metrics", headers=_auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["open_position_count"] == 2
+    assert body["total_exposure"] == 4000.0
+    assert body["exposure_by_position"][0]["mode"] == "live"
+    assert body["exposure_by_position"][0]["exposure"] == 3000.0
+    assert body["exposure_by_position"][1]["exposure"] == 1000.0
+    assert body["largest_position_concentration_pct"] == 75.0
+    assert body["broker_configured"] is False
+    assert body["margin_utilization_pct"] is None
+
+
+async def test_risk_metrics_reports_null_concentration_with_no_open_positions(
+    client: AsyncClient, make_user
+):
+    await make_user("pf-risk2@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "pf-risk2@example.com", "supersecret1")
+
+    resp = await client.get("/api/v1/portfolio/risk-metrics", headers=_auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["open_position_count"] == 0
+    assert body["total_exposure"] == 0.0
+    assert body["exposure_by_position"] == []
+    assert body["largest_position_concentration_pct"] is None
+
+
+async def test_risk_metrics_readable_by_every_role(client: AsyncClient, make_user):
+    for i, role in enumerate(
+        [
+            Role.SYSTEM_ADMINISTRATOR,
+            Role.PORTFOLIO_MANAGER,
+            Role.RISK_MANAGER,
+            Role.READ_ONLY_AUDITOR,
+        ]
+    ):
+        email = f"pf-risk-role-{i}@example.com"
+        await make_user(email, "supersecret1", role)
+        token = await _login(client, email, "supersecret1")
+        resp = await client.get("/api/v1/portfolio/risk-metrics", headers=_auth(token))
+        assert resp.status_code == 200, f"role {role} was denied risk-metrics access"
+
+
+async def test_risk_metrics_requires_authentication(client: AsyncClient):
+    resp = await client.get("/api/v1/portfolio/risk-metrics")
+    assert resp.status_code in (401, 403)

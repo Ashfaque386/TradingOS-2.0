@@ -863,6 +863,25 @@ export type PortfolioSummary = {
 }
 export const getPortfolioSummary = () => apiGet<PortfolioSummary>('/api/v1/portfolio/summary')
 
+export type PortfolioExposureEntry = {
+  mode: 'paper' | 'live'
+  strategy_id: string
+  strategy_name: string
+  symbol: string
+  exposure: number
+}
+export type PortfolioRiskMetrics = {
+  as_of: string
+  open_position_count: number
+  total_exposure: number
+  exposure_by_position: PortfolioExposureEntry[]
+  largest_position_concentration_pct: number | null
+  broker_configured: boolean
+  margin_utilization_pct: number | null
+}
+export const getPortfolioRiskMetrics = () =>
+  apiGet<PortfolioRiskMetrics>('/api/v1/portfolio/risk-metrics')
+
 // ---- Manual order intent (routed through the real risk gate) ----
 export type OrderIntentInput = {
   mode: KillSwitchMode

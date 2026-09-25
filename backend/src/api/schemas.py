@@ -347,6 +347,24 @@ class PortfolioSummaryResponse(BaseModel):
     used_margin: float | None
 
 
+class PortfolioExposureEntry(BaseModel):
+    mode: str
+    strategy_id: str
+    strategy_name: str
+    symbol: str
+    exposure: float
+
+
+class PortfolioRiskMetricsResponse(BaseModel):
+    as_of: str
+    open_position_count: int
+    total_exposure: float
+    exposure_by_position: list[PortfolioExposureEntry]
+    largest_position_concentration_pct: float | None
+    broker_configured: bool
+    margin_utilization_pct: float | None
+
+
 # --- Backtesting & Optimization (Build Spec §10) ---------------------------
 #
 # Strategy/signal logic accepted over HTTP is limited to a small fixed set

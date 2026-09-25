@@ -6,10 +6,12 @@ import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
   type PortfolioRecommendation,
+  type PortfolioRiskMetrics,
   type PortfolioSummary,
   ApiError,
   acceptPortfolioRecommendation,
   generatePortfolioRecommendation,
+  getPortfolioRiskMetrics,
   getPortfolioSummary,
   listPortfolioRecommendations,
   rejectPortfolioRecommendation,
@@ -127,13 +129,19 @@ export default function PortfolioPage() {
   const canManage = role === 'SystemAdministrator' || role === 'PortfolioManager'
 
   const [summary, setSummary] = useState<PortfolioSummary | null>(null)
+  const [riskMetrics, setRiskMetrics] = useState<PortfolioRiskMetrics | null>(null)
   const [recommendations, setRecommendations] = useState<PortfolioRecommendation[]>([])
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
   const reload = async () => {
-    const [s, r] = await Promise.all([getPortfolioSummary(), listPortfolioRecommendations()])
+    const [s, rm, r] = await Promise.all([
+      getPortfolioSummary(),
+      getPortfolioRiskMetrics(),
+      listPortfolioRecommendations(),
+    ])
     setSummary(s)
+    setRiskMetrics(rm)
     setRecommendations(r)
   }
 
@@ -194,6 +202,40 @@ export default function PortfolioPage() {
               )}
             </div>
           </div>
+        )}
+
+        {riskMetrics && (
+          <Panel title="Risk metrics" eyebrow="REAL EXPOSURE AND CONCENTRATION -- NO FABRICATED VaR MODEL">
+            <div className="grid gap-3 p-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-white/8 bg-black/20 p-3">
+                <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Total exposure</p>
+                <p className="mt-1 font-mono text-lg text-foreground">{riskMetrics.total_exposure.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">{riskMetrics.open_position_count} open position(s)</p>
+              </div>
+              <div className="rounded-lg border border-white/8 bg-black/20 p-3">
+                <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Largest position concentration</p>
+                <p className="mt-1 font-mono text-lg text-foreground">{riskMetrics.largest_position_concentration_pct === null ? '—' : `${riskMetrics.largest_position_concentration_pct.toFixed(1)}%`}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">{riskMetrics.exposure_by_position[0]?.strategy_name ?? 'no open positions'}</p>
+              </div>
+              <div className="rounded-lg border border-white/8 bg-black/20 p-3">
+                <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Margin utilization</p>
+                <p className="mt-1 font-mono text-lg text-foreground">{riskMetrics.margin_utilization_pct === null ? '—' : `${riskMetrics.margin_utilization_pct.toFixed(1)}%`}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">{riskMetrics.broker_configured ? 'used / (used + available)' : 'no broker configured'}</p>
+              </div>
+            </div>
+            {riskMetrics.exposure_by_position.length > 0 && (
+              <div className="overflow-x-auto px-3 pb-3">
+                <table className="orders-table">
+                  <thead><tr><th>Strategy</th><th>Mode</th><th>Symbol</th><th>Exposure</th></tr></thead>
+                  <tbody>
+                    {riskMetrics.exposure_by_position.map((e, i) => (
+                      <tr key={i}><td>{e.strategy_name}</td><td className="mono">{e.mode}</td><td className="mono">{e.symbol}</td><td className="mono">{e.exposure.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
         )}
 
         <Panel title="Recommendations" eyebrow="ADVISORY ONLY -- ACCEPT/REJECT IS RECORDED, NEVER AUTO-EXECUTED">

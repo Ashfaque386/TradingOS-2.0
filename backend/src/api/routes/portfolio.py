@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
     DecidePortfolioRecommendationRequest,
+    PortfolioExposureEntry,
     PortfolioRecommendationResponse,
+    PortfolioRiskMetricsResponse,
     PortfolioSummaryResponse,
 )
 from src.brokers.base import BrokerAdapter
@@ -26,11 +28,13 @@ from src.core.rbac import Role, register_policy, require_role
 from src.models.live_position import LivePosition
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
+from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.portfolio_recommendation import (
     PortfolioRecommendation,
     PortfolioRecommendationStatus,
 )
 from src.models.strategy import Strategy
+from src.models.strategy_version import StrategyVersion
 from src.models.user import User
 from src.orchestration.portfolio_advisor import (
     ALLOCATABLE_STRATEGY_STATUSES,
@@ -46,6 +50,7 @@ router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 _MANAGE_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("GET", "/api/v1/portfolio/summary", roles=list(Role))
+register_policy("GET", "/api/v1/portfolio/risk-metrics", roles=list(Role))
 register_policy("GET", "/api/v1/portfolio/recommendations", roles=list(Role))
 register_policy("GET", "/api/v1/portfolio/recommendations/{recommendation_id}", roles=list(Role))
 register_policy("POST", "/api/v1/portfolio/recommendations/generate", roles=_MANAGE_ROLES)
@@ -193,4 +198,92 @@ async def portfolio_summary_endpoint(
         broker_name=adapter.broker_name if adapter is not None else None,
         available_margin=available_margin,
         used_margin=used_margin,
+    )
+
+
+@router.get("/risk-metrics")
+async def portfolio_risk_metrics_endpoint(
+    db: AsyncSession = Depends(get_db),
+    adapter: BrokerAdapter | None = Depends(get_portfolio_broker_adapter),
+    _current_user: User = Depends(require_role),
+) -> PortfolioRiskMetricsResponse:
+    """The one item-23 piece `/portfolio/summary` deliberately left out
+    (docs/phase20-old-vs-new-comparison.md item 23's `/portfolio/risk-metrics`).
+    Real exposure per open position (`abs(quantity * avg_cost)`, the same
+    average-cost-basis convention `PaperPosition`/`LivePosition` already
+    use) and a real concentration ratio -- never a fabricated VaR model or
+    a comparison against a configured limit that doesn't exist in this
+    codebase (the only two named `RiskLimit`s today are `max_drawdown_pct`
+    and `ws_latency_ms`, neither a concentration/leverage threshold) --
+    the operator reads the real number and judges it themselves. Margin
+    utilization is `null`, not `0.0`, when no broker is configured or it
+    has zero total margin to divide by."""
+    live_rows = (
+        await db.execute(
+            select(LivePosition, Strategy.name)
+            .join(Strategy, LivePosition.strategy_id == Strategy.id)
+            .where(LivePosition.quantity != 0)
+        )
+    ).all()
+    paper_rows = (
+        await db.execute(
+            select(PaperPosition, Strategy.id, Strategy.name)
+            .join(
+                PaperTradingSubscription,
+                PaperPosition.subscription_id == PaperTradingSubscription.id,
+            )
+            .join(
+                StrategyVersion, PaperTradingSubscription.strategy_version_id == StrategyVersion.id
+            )
+            .join(Strategy, StrategyVersion.strategy_id == Strategy.id)
+            .where(PaperPosition.quantity != 0)
+        )
+    ).all()
+
+    exposure_by_position = [
+        PortfolioExposureEntry(
+            mode="live",
+            strategy_id=str(position.strategy_id),
+            strategy_name=strategy_name,
+            symbol=position.symbol,
+            exposure=abs(position.quantity * position.avg_cost),
+        )
+        for position, strategy_name in live_rows
+    ] + [
+        PortfolioExposureEntry(
+            mode="paper",
+            strategy_id=str(strategy_id),
+            strategy_name=strategy_name,
+            symbol=position.symbol,
+            exposure=abs(position.quantity * position.avg_cost),
+        )
+        for position, strategy_id, strategy_name in paper_rows
+    ]
+    exposure_by_position.sort(key=lambda e: e.exposure, reverse=True)
+
+    total_exposure = sum(e.exposure for e in exposure_by_position)
+    largest_position_concentration_pct = (
+        (exposure_by_position[0].exposure / total_exposure * 100.0)
+        if exposure_by_position and total_exposure > 0
+        else None
+    )
+
+    margin_utilization_pct: float | None = None
+    if adapter is not None:
+        try:
+            margin = await adapter.get_margin()
+            total_margin = margin.available_margin + margin.used_margin
+            if total_margin > 0:
+                margin_utilization_pct = margin.used_margin / total_margin * 100.0
+        except Exception:  # noqa: BLE001 - a broker hiccup must never break the dashboard
+            pass
+
+    return PortfolioRiskMetricsResponse(
+        as_of=datetime.now(UTC).isoformat(),
+        open_position_count=len(exposure_by_position),
+        total_exposure=total_exposure,
+        exposure_by_position=exposure_by_position,
+        largest_position_concentration_pct=largest_position_concentration_pct,
+        broker_configured=adapter is not None,
+        margin_utilization_pct=margin_utilization_pct,
     )
