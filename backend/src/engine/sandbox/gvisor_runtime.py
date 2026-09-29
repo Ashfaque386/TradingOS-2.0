@@ -26,6 +26,7 @@ HTTP clients (Phase 3), which also have no credentials/egress to run
 against in this sandbox.
 """
 
+from typing import Any
 import json
 import subprocess
 import time
@@ -44,7 +45,10 @@ _WORKER_ENTRYPOINT = (
 
 def is_gvisor_available() -> bool:
     try:
-        info = subprocess.run(
+        # A fixed, hardcoded argv -- checking whether the host's Docker
+        # daemon has the gVisor (`runsc`) runtime registered, no untrusted
+        # input reaches this call.
+        info = subprocess.run(  # nosec B603 B607
             ["docker", "info", "--format", "{{json .Runtimes}}"],
             capture_output=True,
             text=True,
@@ -79,7 +83,7 @@ class GvisorSandboxRuntime:
         self,
         code: str,
         *,
-        params: dict,
+        params: dict[str, Any],
         scratch_dir: Path,
         data_dir: Path,
         limits: SandboxLimits | None = None,
@@ -115,7 +119,7 @@ class GvisorSandboxRuntime:
             "none",
             "--read-only",
             "--tmpfs",
-            "/tmp",
+            "/tmp",  # nosec B108: a docker-run CLI argument (in-container mount point), not this process's own filesystem path
             "--cpus",
             "1",
             "--memory",
@@ -131,7 +135,11 @@ class GvisorSandboxRuntime:
         ]
         start = time.monotonic()
         try:
-            proc = subprocess.run(
+            # `cmd` is built entirely above from this function's own fixed
+            # docker-run flags plus internal paths -- the strategy `code`
+            # itself never reaches argv, only the gVisor container's stdin
+            # via the worker entrypoint script.
+            proc = subprocess.run(  # nosec B603
                 cmd, capture_output=True, text=True, timeout=limits.timeout_seconds + 10
             )
         except subprocess.TimeoutExpired:

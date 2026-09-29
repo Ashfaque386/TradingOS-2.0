@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -24,9 +25,9 @@ class OptimizationRun(Base):
     )
     objective_metric: Mapped[str] = mapped_column(String(32), nullable=False)
     n_trials: Mapped[int] = mapped_column(Integer, nullable=False)
-    best_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    best_params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     best_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    param_importance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    param_importance: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

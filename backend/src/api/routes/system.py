@@ -11,6 +11,7 @@ codebase (not `/metrics`'s unauthenticated Prometheus scrape convention).
 
 import secrets
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from apscheduler.job import Job
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,7 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.llm_router import active_llm_provider, llm_provider_health_vitals
@@ -215,7 +216,7 @@ async def update_scheduled_job_schedule_endpoint(
             raise HTTPException(status_code=400, detail="Both hour and minute are required")
         if not (0 <= payload.hour <= 23) or not (0 <= payload.minute <= 59):
             raise HTTPException(status_code=400, detail="hour must be 0-23 and minute must be 0-59")
-        cron_kwargs = {field.name: str(field) for field in job.trigger.fields}
+        cron_kwargs: dict[str, str | int] = {field.name: str(field) for field in job.trigger.fields}
         cron_kwargs["hour"] = payload.hour
         cron_kwargs["minute"] = payload.minute
         new_trigger = CronTrigger(**cron_kwargs, timezone=job.trigger.timezone)
@@ -323,9 +324,13 @@ async def rotate_jwt_signing_key_endpoint(
 
     db.add(JwtSigningKey(key=new_key, created_at=now, created_by=current_user.email))
 
-    revoked = await db.execute(
+    revoked_result = await db.execute(
         update(RefreshToken).where(RefreshToken.revoked_at.is_(None)).values(revoked_at=now)
     )
+    # An UPDATE statement's execute() always returns a real CursorResult at
+    # runtime (.rowcount is populated) -- Result[Any] is only the generic
+    # base type db.execute()'s signature can express statically.
+    revoked = cast(CursorResult[Any], revoked_result)
 
     await write_audit_entry(
         db,

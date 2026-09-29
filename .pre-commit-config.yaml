@@ -1,0 +1,22 @@
+# Local pre-commit hooks (Phase 26, docs/phase20-old-vs-new-comparison.md
+# item 32): the same real checks CI runs (gitleaks, ruff), catching a
+# problem before a commit is even made rather than only at push time.
+# Install once with `pip install pre-commit && pre-commit install`, then
+# every hook here runs automatically on `git commit`.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        # Reads .gitleaks.toml (this repo's own allowlist) automatically.
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        name: ruff check (backend)
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        name: ruff format (backend)
+        files: ^backend/

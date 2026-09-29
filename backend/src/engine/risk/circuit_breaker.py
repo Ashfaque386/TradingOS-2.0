@@ -16,7 +16,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_COOLDOWN_SECONDS = 60.0
@@ -53,7 +53,7 @@ class CircuitOpenedEvent:
 
 
 class BrokerAdapter(Protocol):
-    async def send_order(self, **kwargs) -> dict: ...
+    async def send_order(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -65,7 +65,7 @@ class FakeBrokerAdapter:
     remaining_failures: int = 0
     calls: int = 0
 
-    async def send_order(self, **kwargs) -> dict:
+    async def send_order(self, **kwargs: Any) -> dict[str, Any]:
         self.calls += 1
         if self.remaining_failures > 0:
             self.remaining_failures -= 1
@@ -122,8 +122,12 @@ class BrokerCircuitBreaker:
         elapsed = self._clock() - self._opened_at
         return max(0.0, self._cooldown_seconds - elapsed)
 
-    async def call(self, fn: Callable[[], Awaitable]):
+    async def call(self, fn: Callable[[], Awaitable[Any]]) -> Any:
         if self._state == CircuitState.OPEN:
+            # Invariant: the only place `_state` becomes OPEN (below) always
+            # sets `_opened_at` in the same step -- true by construction, not
+            # visible to mypy across the two branches.
+            assert self._opened_at is not None
             elapsed = self._clock() - self._opened_at
             if elapsed < self._cooldown_seconds:
                 raise CircuitOpenError(self._opened_at, self._cooldown_seconds)

@@ -3,8 +3,10 @@ acceptance: a strategy can be backtested with realistic Indian costs,
 walk-forward and Monte Carlo validated, and compared against another run.
 """
 
+from typing import Any
 import uuid
 
+import optuna
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -145,7 +147,7 @@ async def walk_forward_endpoint(
 ) -> BacktestRunResponse:
     prices = _bars_to_df(body.bars)
 
-    def strategy_fn(_train: pd.DataFrame, test: pd.DataFrame) -> pd.Series:
+    def strategy_fn(_train: pd.DataFrame, test: pd.DataFrame) -> pd.Series[Any]:
         return generate_builtin_signals(test, body.strategy, body.sma_window)
 
     try:
@@ -202,10 +204,10 @@ async def optimize_endpoint(
 ) -> OptimizationRunResponse:
     prices = _bars_to_df(body.bars)
 
-    def param_space_fn(trial):
+    def param_space_fn(trial: optuna.Trial) -> dict[str, Any]:
         return {"window": trial.suggest_int("window", body.sma_window_min, body.sma_window_max)}
 
-    def signal_from_params_fn(prices: pd.DataFrame, params: dict) -> pd.Series:
+    def signal_from_params_fn(prices: pd.DataFrame, params: dict[str, Any]) -> pd.Series[Any]:
         sma = prices["close"].rolling(params["window"], min_periods=1).mean()
         return (prices["close"] > sma).astype(int)
 

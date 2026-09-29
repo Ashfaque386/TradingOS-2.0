@@ -31,7 +31,7 @@ HTTP request.
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar
 
 import structlog
 from starlette.datastructures import Headers, MutableHeaders
@@ -91,7 +91,7 @@ class CorrelationIdMiddleware:
         scope.setdefault("state", {})
         scope["state"]["correlation_id"] = correlation_id
 
-        async def send_wrapper(message: dict) -> None:
+        async def send_wrapper(message: dict[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 response_headers = MutableHeaders(scope=message)
                 response_headers.append(CORRELATION_ID_HEADER, correlation_id)

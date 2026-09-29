@@ -10,6 +10,7 @@ which existed as a single endpoint before this phase.
 import uuid
 from datetime import UTC, datetime
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,8 @@ from src.orchestration.portfolio_advisor import (
     decide_recommendation,
     generate_recommendation,
 )
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -185,8 +188,8 @@ async def portfolio_summary_endpoint(
             margin = await adapter.get_margin()
             available_margin = margin.available_margin
             used_margin = margin.used_margin
-        except Exception:  # noqa: BLE001 - a broker hiccup must never break the dashboard
-            pass
+        except Exception as exc:  # noqa: BLE001 - a broker hiccup must never break the dashboard
+            logger.warning("portfolio.summary_margin_unavailable", error=str(exc))
 
     return PortfolioSummaryResponse(
         as_of=datetime.now(UTC).isoformat(),
@@ -275,8 +278,8 @@ async def portfolio_risk_metrics_endpoint(
             total_margin = margin.available_margin + margin.used_margin
             if total_margin > 0:
                 margin_utilization_pct = margin.used_margin / total_margin * 100.0
-        except Exception:  # noqa: BLE001 - a broker hiccup must never break the dashboard
-            pass
+        except Exception as exc:  # noqa: BLE001 - a broker hiccup must never break the dashboard
+            logger.warning("portfolio.risk_metrics_margin_unavailable", error=str(exc))
 
     return PortfolioRiskMetricsResponse(
         as_of=datetime.now(UTC).isoformat(),

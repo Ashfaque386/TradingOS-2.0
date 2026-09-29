@@ -17,7 +17,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
@@ -65,7 +65,13 @@ def _entry_response(row: AuditLog) -> AuditLogEntryResponse:
     )
 
 
-def _apply_filters(stmt, *, entity_type: str | None, entity_id: str | None, actor: str | None):
+def _apply_filters(
+    stmt: Select[tuple[AuditLog]],
+    *,
+    entity_type: str | None,
+    entity_id: str | None,
+    actor: str | None,
+) -> Select[tuple[AuditLog]]:
     if entity_type is not None:
         stmt = stmt.where(AuditLog.entity_type == entity_type)
     if entity_id is not None:
@@ -145,7 +151,7 @@ async def get_actor_audit_summary(
         action_count=sum(count for _, count in action_rows),
         first_seen=first_seen.isoformat() if first_seen else None,
         last_seen=last_seen.isoformat() if last_seen else None,
-        actions=dict(action_rows),
+        actions={action: count for action, count in action_rows},
     )
 
 

@@ -22,7 +22,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 import structlog
@@ -460,14 +460,17 @@ class LlmRouter:
         src.observability.vitals's docstring for why)."""
         total = 0
         if prompt_tokens is not None:
-            llm_token_usage_total.labels(provider=provider.value, token_type="prompt").inc(
-                prompt_tokens
-            )
+            # A Prometheus metric label value ("prompt"), not a credential --
+            # bandit's B106 heuristic matches on the string alone.
+            llm_token_usage_total.labels(  # nosec B106
+                provider=provider.value, token_type="prompt"
+            ).inc(prompt_tokens)
             total += prompt_tokens
         if completion_tokens is not None:
-            llm_token_usage_total.labels(provider=provider.value, token_type="completion").inc(
-                completion_tokens
-            )
+            # Same false positive, the label value "completion".
+            llm_token_usage_total.labels(  # nosec B106
+                provider=provider.value, token_type="completion"
+            ).inc(completion_tokens)
             total += completion_tokens
         if total > 0:
             await record_token_usage_today(get_redis(), provider.value, total)
@@ -720,7 +723,7 @@ def _iso_or_none(epoch_seconds: float | None) -> str | None:
     return datetime.fromtimestamp(epoch_seconds, UTC).isoformat()
 
 
-def llm_provider_health_vitals() -> list[dict]:
+def llm_provider_health_vitals() -> list[dict[str, Any]]:
     """Real per-provider failure/success tracking (requirement 1's "per-
     provider failure tracking", `ProviderHealth` above) -- for GET
     /api/v1/system/vitals's `llm.provider_health` field, replacing the

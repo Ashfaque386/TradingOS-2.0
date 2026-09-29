@@ -19,7 +19,9 @@ Two independent guards:
   banned outright.
 """
 
+from typing import Any
 import builtins
+from collections.abc import Callable
 from pathlib import Path
 
 from src.engine.validation import ALLOWED_IMPORTS
@@ -34,7 +36,9 @@ class SandboxPermissionError(PermissionError):
     """
 
 
-def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+def _guarded_import(
+    name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0
+) -> Any:
     root = name.split(".")[0]
     if root not in ALLOWED_IMPORTS:
         raise SandboxPermissionError(f"sandbox: import of {name!r} is not allowed")
@@ -69,10 +73,10 @@ def _resolve_confined(
     )
 
 
-def _make_restricted_open(*, scratch_dir: Path, data_dir: Path):
+def _make_restricted_open(*, scratch_dir: Path, data_dir: Path) -> Callable[..., Any]:
     real_open = builtins.open
 
-    def restricted_open(file, mode="r", *args, **kwargs):
+    def restricted_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
         if not isinstance(file, str | Path):
             raise SandboxPermissionError(
                 "sandbox: open() only accepts a path, not a file descriptor"
@@ -90,7 +94,7 @@ def _make_restricted_open(*, scratch_dir: Path, data_dir: Path):
 _REMOVED_BUILTINS = frozenset({"eval", "exec", "compile", "input", "exit", "quit", "breakpoint"})
 
 
-def build_restricted_globals(*, scratch_dir: Path, data_dir: Path) -> dict:
+def build_restricted_globals(*, scratch_dir: Path, data_dir: Path) -> dict[str, Any]:
     safe_builtins = {
         name: getattr(builtins, name) for name in dir(builtins) if name not in _REMOVED_BUILTINS
     }

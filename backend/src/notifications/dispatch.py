@@ -15,6 +15,7 @@ same "best-effort side channel" posture Phase 2's event bus already
 established for its own Redis publish.
 """
 
+from typing import Any
 import structlog
 
 from src.notifications.channel_store import get_notification_channel_store
@@ -25,7 +26,7 @@ logger = structlog.get_logger(__name__)
 
 
 async def notify(
-    level: AlertLevel, *, title: str, body: str, details: dict | None = None
+    level: AlertLevel, *, title: str, body: str, details: dict[str, Any] | None = None
 ) -> list[SendResult]:
     text = f"[{level.value.upper()}] {title}\n{body}"
     if details:

@@ -11,6 +11,7 @@ secret domain (see src.notifications.channel_store for the same pattern
 applied to notification channels).
 """
 
+from typing import Any
 import json
 import os
 import stat
@@ -59,7 +60,7 @@ class LlmProviderStore:
         except (ValueError, TypeError) as exc:
             raise LlmProviderStoreError("invalid secrets encryption key") from exc
 
-    def _read_all(self) -> dict:
+    def _read_all(self) -> dict[str, Any]:
         if not self._path.exists():
             return {}
         ciphertext = self._path.read_bytes()
@@ -74,7 +75,7 @@ class LlmProviderStore:
             ) from exc
         return json.loads(plaintext)
 
-    def _write_all(self, data: dict) -> None:
+    def _write_all(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         plaintext = json.dumps(data).encode("utf-8")
         ciphertext = self._fernet.encrypt(plaintext)

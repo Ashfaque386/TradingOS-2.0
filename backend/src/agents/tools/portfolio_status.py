@@ -3,7 +3,8 @@ portfolio-tracking store is wired yet.
 """
 
 
-def portfolio_status_read(params: dict) -> dict:
+from typing import Any
+def portfolio_status_read(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "positions": [],
         "cash": None,

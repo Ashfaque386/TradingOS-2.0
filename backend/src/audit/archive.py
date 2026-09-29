@@ -94,7 +94,11 @@ def _json_line_to_entry(line: str) -> AuditChainEntry:
 
 def _try_make_append_only(path: Path) -> bool:
     try:
-        result = subprocess.run(
+        # A fixed, hardcoded argv (no shell, no untrusted input in the
+        # command itself -- `path` is this process's own archive file path,
+        # not attacker-controlled) making the archive file append-only at
+        # the filesystem level.
+        result = subprocess.run(  # nosec B603 B607
             ["chattr", "+a", str(path)], capture_output=True, timeout=5, check=False
         )
         return result.returncode == 0

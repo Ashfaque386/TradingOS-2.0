@@ -4,6 +4,8 @@ would call; this file's only job is argument parsing and human-readable
 output.
 """
 
+from typing import Any, TypeVar
+from collections.abc import Coroutine
 import asyncio
 import json
 from pathlib import Path
@@ -13,6 +15,7 @@ import click
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal, engine
 from src.gateway import service
+from src.gateway.apply import ApplyResult
 from src.gateway.loader import ConfigLoadError, EffectiveAgentConfig
 from src.gateway.roster import ROSTER_IDS
 from src.models.agent_config_version import ConfigVersionStatus
@@ -22,13 +25,16 @@ def _default_config_path() -> Path:
     return Path(get_settings().agent_gateway_config_path)
 
 
-def _run(coro):
+_T = TypeVar("_T")
+
+
+def _run(coro: Coroutine[Any, Any, _T]) -> _T:
     # tradingos-cli is a short-lived, single-invocation process: dispose
     # the DB engine's connection pool before this event loop closes so a
     # process-internal caller invoking the CLI's Click group more than
     # once (as the test suite does) never reuses a pooled connection
     # across a closed event loop — asyncpg connections are loop-bound.
-    async def _wrapped():
+    async def _wrapped() -> _T:
         try:
             return await coro
         finally:
@@ -41,7 +47,7 @@ def _fail(message: str) -> None:
     raise click.ClickException(message)
 
 
-def _report_apply_result(result: service.ApplyResult) -> None:
+def _report_apply_result(result: ApplyResult) -> None:
     if result.status == ConfigVersionStatus.ACTIVE:
         click.echo(f"Applied as config version {result.version_id}.")
     else:
@@ -51,7 +57,7 @@ def _report_apply_result(result: service.ApplyResult) -> None:
         )
 
 
-def _agent_to_row(agent: EffectiveAgentConfig) -> dict:
+def _agent_to_row(agent: EffectiveAgentConfig) -> dict[str, Any]:
     return {
         "agentId": agent.agent_id,
         "department": agent.department,
@@ -127,7 +133,7 @@ def agents_set_identity(
     theme: str | None,
     voice: str | None,
 ) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.set_identity(
                 session,
@@ -152,7 +158,7 @@ def agents_set_identity(
 @click.option("--account", "account_id", default=None)
 @click.pass_context
 def agents_bind(ctx: click.Context, agent_id: str, channel: str, account_id: str | None) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.bind_agent(
                 session, ctx.obj["config_path"], agent_id, channel, account_id
@@ -170,7 +176,7 @@ def agents_bind(ctx: click.Context, agent_id: str, channel: str, account_id: str
 @click.option("--account", "account_id", default=None)
 @click.pass_context
 def agents_unbind(ctx: click.Context, agent_id: str, channel: str, account_id: str | None) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.unbind_agent(
                 session, ctx.obj["config_path"], agent_id, channel, account_id
@@ -192,7 +198,7 @@ def skills() -> None:
 @click.option("--skill", required=True)
 @click.pass_context
 def skills_grant(ctx: click.Context, agent_id: str, skill: str) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.grant_skill(session, ctx.obj["config_path"], agent_id, skill)
 
@@ -207,7 +213,7 @@ def skills_grant(ctx: click.Context, agent_id: str, skill: str) -> None:
 @click.option("--skill", required=True)
 @click.pass_context
 def skills_revoke(ctx: click.Context, agent_id: str, skill: str) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.revoke_skill(session, ctx.obj["config_path"], agent_id, skill)
 
@@ -227,7 +233,7 @@ def heartbeat() -> None:
 @click.option("--interval", "interval_minutes", required=True, type=click.IntRange(min=1))
 @click.pass_context
 def heartbeat_enable(ctx: click.Context, agent_id: str, interval_minutes: int) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.set_heartbeat(
                 session,
@@ -247,7 +253,7 @@ def heartbeat_enable(ctx: click.Context, agent_id: str, interval_minutes: int) -
 @click.option("--agent", "agent_id", required=True, type=click.Choice(sorted(ROSTER_IDS)))
 @click.pass_context
 def heartbeat_disable(ctx: click.Context, agent_id: str) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.set_heartbeat(
                 session, ctx.obj["config_path"], agent_id, enabled=False
@@ -286,7 +292,7 @@ def config_validate(ctx: click.Context, file_path: Path | None) -> None:
 @click.option("--to-version", "to_version", required=True, type=int)
 @click.pass_context
 def config_rollback(ctx: click.Context, to_version: int) -> None:
-    async def go() -> service.ApplyResult:
+    async def go() -> ApplyResult:
         async with AsyncSessionLocal() as session:
             return await service.rollback_config(session, ctx.obj["config_path"], to_version)
 

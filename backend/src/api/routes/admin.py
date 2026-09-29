@@ -17,10 +17,11 @@ self-service check (an admin acting on a *different* admin account could
 just as easily lock the whole system out).
 """
 
+from typing import Any, cast
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
@@ -49,7 +50,7 @@ register_policy("POST", "/api/v1/admin/users/{user_id}/revoke-sessions", roles=_
 
 
 @router.get("/ping")
-async def ping(current_user: User = Depends(require_role)) -> dict:
+async def ping(current_user: User = Depends(require_role)) -> dict[str, Any]:
     return {"status": "ok", "role": current_user.role.value}
 
 
@@ -179,4 +180,9 @@ async def revoke_user_sessions_endpoint(
         .values(revoked_at=func.now())
     )
     await db.commit()
-    return AdminRevokeSessionsResponse(user_id=user_id, revoked_count=result.rowcount)
+    # An UPDATE statement's execute() always returns a real CursorResult at
+    # runtime (.rowcount is populated) -- Result[Any] is only the generic
+    # base type db.execute()'s signature can express statically.
+    return AdminRevokeSessionsResponse(
+        user_id=user_id, revoked_count=cast(CursorResult[Any], result).rowcount
+    )

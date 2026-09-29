@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -45,7 +46,7 @@ class StrategySuggestion(Base):
     suggestion_text: Mapped[str] = mapped_column(Text, nullable=False)
     requested_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    ai_verdict: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ai_verdict: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     regenerated_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("strategy_versions.id"), nullable=True
     )

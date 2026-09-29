@@ -22,6 +22,7 @@ which is precisely why building that adapter correctly is the caller's
 responsibility, not something this function silently fixes up.
 """
 
+from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
@@ -33,7 +34,7 @@ async def run_shadow_order_check(
     db: AsyncSession, *, adapter: BrokerAdapter, order: OrderRequest
 ) -> ShadowModeRun:
     payload = adapter.build_order_payload(order)
-    broker_response: dict | None = None
+    broker_response: dict[str, Any] | None = None
 
     if adapter.has_sandbox:
         result = await adapter.place_order(order)

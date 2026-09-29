@@ -36,6 +36,7 @@ data, not a new parallel event-logging system invented for this phase:
   poll interval late.
 """
 
+from typing import Any
 import asyncio
 import json
 from datetime import UTC, datetime
@@ -63,7 +64,7 @@ _AUDIT_INITIAL_BACKFILL_ROWS = 30
 _SIGNOFF_POLL_INTERVAL_SECONDS = 2.0
 
 
-def _audit_row_to_dict(row: AuditLog) -> dict:
+def _audit_row_to_dict(row: AuditLog) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "sequence": row.sequence,
@@ -76,7 +77,7 @@ def _audit_row_to_dict(row: AuditLog) -> dict:
     }
 
 
-async def _stream_audit_log(websocket: WebSocket, session_factory: async_sessionmaker) -> None:
+async def _stream_audit_log(websocket: WebSocket, session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with session_factory() as db:
         backfill = (
             (
@@ -117,7 +118,7 @@ async def _stream_audit_log(websocket: WebSocket, session_factory: async_session
 async def activity_feed_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db),
-    session_factory: async_sessionmaker = Depends(get_session_factory),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> None:
     user = await authenticate_websocket(websocket, db)
     if user is None:
@@ -133,7 +134,7 @@ async def activity_feed_ws(
 async def agent_logs_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db),
-    session_factory: async_sessionmaker = Depends(get_session_factory),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> None:
     """Same real source as `/activity-feed` -- see module docstring."""
     user = await authenticate_websocket(websocket, db)
@@ -178,7 +179,7 @@ async def organization_events_ws(
         await pubsub.aclose()
 
 
-async def _signoff_snapshot(db: AsyncSession) -> dict:
+async def _signoff_snapshot(db: AsyncSession) -> dict[str, Any]:
     approvals = (
         (
             await db.execute(
@@ -208,7 +209,7 @@ async def _signoff_snapshot(db: AsyncSession) -> dict:
 async def sign_off_queue_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db),
-    session_factory: async_sessionmaker = Depends(get_session_factory),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> None:
     user = await authenticate_websocket(websocket, db)
     if user is None:

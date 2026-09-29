@@ -259,7 +259,9 @@ async def agent_analytics_summary_endpoint(
             .where(Task.capability.in_(capabilities))
             .group_by(Task.status)
         )
-        counts = dict((await db.execute(counts_stmt)).all())
+        counts: dict[TaskStatus, int] = {
+            status: count for status, count in (await db.execute(counts_stmt)).all()
+        }
         succeeded = counts.get(TaskStatus.SUCCEEDED, 0)
         failed = counts.get(TaskStatus.FAILED, 0)
         total = sum(counts.values())

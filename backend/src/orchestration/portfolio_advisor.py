@@ -13,6 +13,7 @@ those same real, already-decided numbers, the same
 already uses.
 """
 
+from typing import Any
 import uuid
 from datetime import UTC, datetime
 
@@ -50,7 +51,7 @@ _DECREASE_MAX_DRAWDOWN_FLOOR = 0.25
 
 async def _latest_completed_backtest_metrics(
     db: AsyncSession, strategy_id: uuid.UUID
-) -> dict | None:
+) -> dict[str, Any] | None:
     result = await db.execute(
         select(BacktestRun.metrics)
         .join(StrategyVersion, StrategyVersion.id == BacktestRun.strategy_version_id)
@@ -64,7 +65,7 @@ async def _latest_completed_backtest_metrics(
     return result.scalars().first()
 
 
-def _allocation_action(metrics: dict | None) -> tuple[str, str]:
+def _allocation_action(metrics: dict[str, Any] | None) -> tuple[str, str]:
     if not metrics:
         return "hold", "no completed backtest yet -- insufficient data to recommend a change"
 
@@ -90,7 +91,7 @@ def _allocation_action(metrics: dict | None) -> tuple[str, str]:
     return "hold", "metrics within normal range -- no allocation change recommended"
 
 
-async def _margin_snapshot(adapter: BrokerAdapter | None) -> dict | None:
+async def _margin_snapshot(adapter: BrokerAdapter | None) -> dict[str, Any] | None:
     if adapter is None:
         return None
     try:
@@ -100,7 +101,7 @@ async def _margin_snapshot(adapter: BrokerAdapter | None) -> dict | None:
     return {"available_margin": margin.available_margin, "used_margin": margin.used_margin}
 
 
-def _fallback_summary(allocations: list[dict], margin: dict | None) -> str:
+def _fallback_summary(allocations: list[dict[str, Any]], margin: dict[str, Any] | None) -> str:
     increases = [a["strategy_name"] for a in allocations if a["action"] == "increase"]
     decreases = [a["strategy_name"] for a in allocations if a["action"] == "decrease"]
     parts = [
@@ -118,7 +119,7 @@ def _fallback_summary(allocations: list[dict], margin: dict | None) -> str:
     return " ".join(parts)
 
 
-def _build_prompt(allocations: list[dict], margin: dict | None) -> str:
+def _build_prompt(allocations: list[dict[str, Any]], margin: dict[str, Any] | None) -> str:
     lines = [
         "You are a portfolio manager summarizing a rebalancing review for a "
         "human operator. This is advisory only -- nothing you say will be "
@@ -155,7 +156,7 @@ async def generate_recommendation(
     )
     strategies = result.scalars().all()
 
-    allocations: list[dict] = []
+    allocations: list[dict[str, Any]] = []
     for strategy in strategies:
         metrics = await _latest_completed_backtest_metrics(db, strategy.id)
         action, rationale = _allocation_action(metrics)

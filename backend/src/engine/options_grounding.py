@@ -19,10 +19,11 @@ gate in addition to this pre-deployment check (Build Spec §8 requires
 both; this module is only the pre-deployment half).
 """
 
+from typing import Any
 from dataclasses import dataclass, field
 
 
-def mock_option_chain(underlying: str, expiry: str) -> dict:
+def mock_option_chain(underlying: str, expiry: str) -> dict[str, Any]:
     atm = 20000 if underlying.upper() == "NIFTY" else 45000
     strikes = [atm + i * 100 for i in range(-10, 11)]
     return {
@@ -51,7 +52,7 @@ class GroundedLeg:
 
 
 def ground_option_legs(
-    legs: list[dict], *, underlying: str, expiry: str, chain: dict | None = None
+    legs: list[dict[str, Any]], *, underlying: str, expiry: str, chain: dict[str, Any] | None = None
 ) -> list[GroundedLeg]:
     chain = chain or mock_option_chain(underlying, expiry)
     grounded: list[GroundedLeg] = []

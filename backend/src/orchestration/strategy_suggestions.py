@@ -7,6 +7,7 @@ StrategyVersion and links it back to the suggestion; there's no path that
 regenerates without that diff having been produced.
 """
 
+from typing import Any
 import difflib
 import uuid
 from datetime import UTC, datetime
@@ -47,7 +48,7 @@ async def submit_suggestion(
     return suggestion
 
 
-def _fallback_verdict(suggestion_text: str) -> dict:
+def _fallback_verdict(suggestion_text: str) -> dict[str, Any]:
     return {
         "verdict": "needs_changes",
         "reasoning": (
@@ -67,6 +68,10 @@ async def review_suggestion(
         raise NoSuchSuggestionError(f"no such suggestion: {suggestion_id}")
 
     base_version = await db.get(StrategyVersion, suggestion.base_version_id)
+    # base_version_id is a non-nullable FK (strategy_versions.id); nothing in
+    # this codebase hard-deletes a StrategyVersion, so the referenced row
+    # always exists.
+    assert base_version is not None
 
     # Phase 19 (docs/phase19-audit.md Part 2.4): the real "next cycle" the
     # Post-Trade Review Agent's findings feed into -- if this strategy has
@@ -132,6 +137,10 @@ async def regenerate_from_suggestion(
 
     strategy = await db.get(Strategy, suggestion.strategy_id)
     base_version = await db.get(StrategyVersion, suggestion.base_version_id)
+    # Both are non-nullable FKs (strategies.id / strategy_versions.id);
+    # nothing in this codebase hard-deletes either, so both rows always exist.
+    assert strategy is not None
+    assert base_version is not None
 
     new_code = await generate_strategy_code(
         f"{strategy.objective}\n\nIncorporate this suggested change: {suggestion.suggestion_text}",

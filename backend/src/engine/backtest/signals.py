@@ -11,7 +11,7 @@ drift apart -- the same "one function, multiple call sites" posture Phase
 for the HTTP layer rather than defining its own copy.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -20,7 +20,7 @@ BuiltinStrategy = Literal["always_long", "sma_crossover"]
 
 def generate_builtin_signals(
     prices: pd.DataFrame, strategy: BuiltinStrategy, sma_window: int
-) -> pd.Series:
+) -> pd.Series[Any]:
     if strategy == "always_long":
         return pd.Series(1, index=prices.index)
     sma = prices["close"].rolling(sma_window, min_periods=1).mean()

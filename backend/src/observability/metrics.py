@@ -95,6 +95,6 @@ async def _trading_holiday_gauge_loop() -> None:
         await asyncio.sleep(TRADING_HOLIDAY_GAUGE_UPDATE_INTERVAL_SECONDS)
 
 
-def trading_holiday_gauge_updater() -> asyncio.Task:
+def trading_holiday_gauge_updater() -> asyncio.Task[None]:
     _update_trading_holiday_gauge()  # set an immediate value at startup, don't wait a full interval
     return asyncio.create_task(_trading_holiday_gauge_loop())

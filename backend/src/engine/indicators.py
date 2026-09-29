@@ -13,20 +13,21 @@ elsewhere (Phase 5's null correlations, Phase 7's honest partial fills,
 Phase 9's honest `pending_confirmation`).
 """
 
+from typing import Any
 from __future__ import annotations
 
 import pandas as pd
 
 
-def simple_moving_average(close: pd.Series, window: int) -> pd.Series:
+def simple_moving_average(close: pd.Series[Any], window: int) -> pd.Series[Any]:
     return close.rolling(window, min_periods=window).mean()
 
 
-def exponential_moving_average(close: pd.Series, span: int) -> pd.Series:
+def exponential_moving_average(close: pd.Series[Any], span: int) -> pd.Series[Any]:
     return close.ewm(span=span, min_periods=span, adjust=False).mean()
 
 
-def relative_strength_index(close: pd.Series, period: int = 14) -> pd.Series:
+def relative_strength_index(close: pd.Series[Any], period: int = 14) -> pd.Series[Any]:
     """Wilder's RSI -- Wilder's smoothing (an EMA with alpha=1/period),
     not the naive simple-moving-average variant some implementations use."""
     delta = close.diff()
@@ -43,8 +44,8 @@ def relative_strength_index(close: pd.Series, period: int = 14) -> pd.Series:
 
 
 def macd(
-    close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
-) -> tuple[pd.Series, pd.Series, pd.Series]:
+    close: pd.Series[Any], fast: int = 12, slow: int = 26, signal: int = 9
+) -> tuple[pd.Series[Any], pd.Series[Any], pd.Series[Any]]:
     """Returns (macd_line, signal_line, histogram)."""
     ema_fast = exponential_moving_average(close, fast)
     ema_slow = exponential_moving_average(close, slow)
@@ -55,8 +56,8 @@ def macd(
 
 
 def bollinger_bands(
-    close: pd.Series, window: int = 20, num_std: float = 2.0
-) -> tuple[pd.Series, pd.Series, pd.Series]:
+    close: pd.Series[Any], window: int = 20, num_std: float = 2.0
+) -> tuple[pd.Series[Any], pd.Series[Any], pd.Series[Any]]:
     """Returns (upper, middle, lower). `middle` is the same SMA
     `simple_moving_average` would return for this window -- population
     standard deviation (ddof=0), the conventional choice for this

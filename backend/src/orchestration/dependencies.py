@@ -5,7 +5,9 @@ upstream failure.
 
 import uuid
 
-from sqlalchemy import select, update
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.result_artefact import ResultArtefact
@@ -91,7 +93,11 @@ async def propagate_unsatisfiable(db: AsyncSession, failed_task_id: uuid.UUID) -
                 )
                 .values(status=TaskStatus.UNSATISFIABLE)
             )
-            if result.rowcount == 1:
+            # An UPDATE statement's execute() always returns a real
+            # CursorResult at runtime (.rowcount is populated) -- Result[Any]
+            # is only the generic base type db.execute()'s signature can
+            # express statically.
+            if cast(CursorResult[Any], result).rowcount == 1:
                 frontier.append(dependent_id)
 
     await db.commit()

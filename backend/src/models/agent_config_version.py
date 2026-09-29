@@ -1,3 +1,4 @@
+from typing import Any
 from datetime import datetime
 from enum import StrEnum
 
@@ -33,8 +34,8 @@ class AgentConfigVersion(Base):
     )
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     raw_content: Mapped[str] = mapped_column(Text, nullable=False)
-    parsed_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    validation_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    parsed_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    validation_errors: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

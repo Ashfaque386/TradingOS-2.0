@@ -8,6 +8,7 @@ the sweep, over the real completed trials -- it explains how much of the
 objective's variance each parameter accounts for, not a guessed ranking.
 """
 
+from typing import Any
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -22,16 +23,16 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Suggests and returns this trial's sampled parameters (calls
 # trial.suggest_*, does not run anything itself).
-ParamSpaceFn = Callable[[optuna.Trial], dict]
+ParamSpaceFn = Callable[[optuna.Trial], dict[str, Any]]
 # Builds a position-signal series from price data + one set of sampled
 # parameters -- the thing being optimized.
-SignalFromParamsFn = Callable[[pd.DataFrame, dict], pd.Series]
+SignalFromParamsFn = Callable[[pd.DataFrame, dict[str, Any]], pd.Series[Any]]
 
 
 @dataclass(frozen=True, slots=True)
 class SweepResult:
     n_trials: int
-    best_params: dict
+    best_params: dict[str, Any]
     best_value: float | None
     param_importance: dict[str, float]
 
@@ -85,7 +86,7 @@ def run_hyperparameter_sweep(
         # than this function inventing an importance ranking.
         importance = {}
 
-    best_value = study.best_value
+    best_value: float | None = study.best_value
     if best_value == float("-inf"):
         best_value = None
 

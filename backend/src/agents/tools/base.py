@@ -1,5 +1,6 @@
 """Shared types for the Skill Registry (Build Spec §16)."""
 
+from typing import Any
 from collections.abc import Awaitable, Callable
 
 # Phase 12 (Build Spec §18): notification-send genuinely needs real
@@ -7,7 +8,7 @@ from collections.abc import Awaitable, Callable
 # deterministic/stub, no I/O) or async (notification-send alone) --
 # src.agents.tools.registry.execute_skill awaits the result only when
 # it's awaitable, so every existing sync skill is unaffected.
-SkillFn = Callable[[dict], "dict | Awaitable[dict]"]
+SkillFn = Callable[[dict[str, Any]], "dict[str, Any] | Awaitable[dict[str, Any]]"]
 
 
 class SkillError(Exception):

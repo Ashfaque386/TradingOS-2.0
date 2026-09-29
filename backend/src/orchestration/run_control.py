@@ -67,12 +67,21 @@ async def create_run(
     except CannotPlanError:
         async with session_factory() as db:
             await events.emit(db, redis, run_id=run_id, event_type="run.cannot_plan", payload={})
-            return await db.get(OrganizationRun, run_id)
+            # Nothing in this codebase ever deletes an OrganizationRun row,
+            # and this one was created and committed by this same function
+            # a few lines above -- db.get() returning None here isn't a real
+            # possibility, only a case db.get()'s own generic signature has
+            # to allow for.
+            fetched_run = await db.get(OrganizationRun, run_id)
+            assert fetched_run is not None
+            return fetched_run
 
     await drive_run_to_quiescence(session_factory, redis, run_id)
 
     async with session_factory() as db:
-        return await db.get(OrganizationRun, run_id)
+        fetched_run = await db.get(OrganizationRun, run_id)
+        assert fetched_run is not None
+        return fetched_run
 
 
 async def pause_run(db: AsyncSession, redis: Redis | None, run_id: uuid.UUID) -> bool:

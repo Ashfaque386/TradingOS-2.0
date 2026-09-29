@@ -23,6 +23,7 @@ from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
+from src.models.organization_run import RunStatus
 from src.observability.audit_middleware import AuditLoggingMiddleware
 from src.observability.correlation import CorrelationIdMiddleware
 from src.observability.logging import configure_logging
@@ -72,7 +73,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     async with AsyncSessionLocal() as session:
         reaped = await reap_incomplete_runs(session, redis)
 
-    recovery_tasks: list[asyncio.Task] = []
+    recovery_tasks: list[asyncio.Task[RunStatus]] = []
     if reaped:
         logger.info("orchestration.runs_reaped", run_ids=[str(r) for r in reaped])
         # Reaping only makes stuck tasks reclaimable; it doesn't itself

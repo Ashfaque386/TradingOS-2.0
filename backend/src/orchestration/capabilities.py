@@ -15,11 +15,12 @@ blocking; the task engine dispatches them through a thread pool either way
 matches what real capabilities will look like.
 """
 
+from typing import Any
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-CapabilityFn = Callable[[dict], dict]
+CapabilityFn = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 class TransientCapabilityError(Exception):
@@ -45,46 +46,46 @@ class FailedCapability:
 
 
 def _research_scaffold(kind: str) -> CapabilityFn:
-    def run(params: dict) -> dict:
+    def run(params: dict[str, Any]) -> dict[str, Any]:
         return {"kind": kind, "objective": params.get("objective"), "ok": True}
 
     return run
 
 
-def _code_validation(params: dict) -> dict:
+def _code_validation(params: dict[str, Any]) -> dict[str, Any]:
     return {"valid": True, "banned_imports_found": []}
 
 
-def _compliance_check(params: dict) -> dict:
+def _compliance_check(params: dict[str, Any]) -> dict[str, Any]:
     return {"blocked": False, "reason": None}
 
 
-def _backtesting(params: dict) -> dict:
+def _backtesting(params: dict[str, Any]) -> dict[str, Any]:
     return {"metrics": {"sharpe": 1.0, "max_drawdown": 0.1}}
 
 
-def _strategy_evaluation(params: dict) -> dict:
+def _strategy_evaluation(params: dict[str, Any]) -> dict[str, Any]:
     return {"verdict": "pass"}
 
 
-def _risk_assessment(params: dict) -> dict:
+def _risk_assessment(params: dict[str, Any]) -> dict[str, Any]:
     return {"within_limits": True}
 
 
-def _stub_noop_concurrent(params: dict) -> dict:
+def _stub_noop_concurrent(params: dict[str, Any]) -> dict[str, Any]:
     """Deliberately trivial and side-effect-free so many can run in the
     thread pool at once — see CONCURRENCY_SAFE_CAPABILITIES."""
     return {"ok": True}
 
 
-def _stub_noop_serial(params: dict) -> dict:
+def _stub_noop_serial(params: dict[str, Any]) -> dict[str, Any]:
     """Not concurrency-safe: stands in for a capability with shared,
     non-thread-safe state (a real example later: anything touching a
     single sandbox worker slot)."""
     return {"ok": True}
 
 
-def _stub_slow_concurrent(params: dict) -> dict:
+def _stub_slow_concurrent(params: dict[str, Any]) -> dict[str, Any]:
     """Sleeps like a real blocking call would — exists so the task
     engine's thread-pool dispatch can be proven genuinely parallel by wall
     clock time, which the instant stubs above can't demonstrate."""
@@ -92,7 +93,7 @@ def _stub_slow_concurrent(params: dict) -> dict:
     return {"ok": True}
 
 
-def _stub_slow_serial(params: dict) -> dict:
+def _stub_slow_serial(params: dict[str, Any]) -> dict[str, Any]:
     """Same shape as _stub_slow_concurrent but NOT concurrency-safe — lets
     a test prove the engine dispatches non-allowlisted capabilities one at
     a time rather than in parallel."""
@@ -100,11 +101,11 @@ def _stub_slow_serial(params: dict) -> dict:
     return {"ok": True}
 
 
-def _stub_always_transient_failure(params: dict) -> dict:
+def _stub_always_transient_failure(params: dict[str, Any]) -> dict[str, Any]:
     raise TransientCapabilityError("stub: simulated transient failure")
 
 
-def _stub_always_permanent_failure(params: dict) -> dict:
+def _stub_always_permanent_failure(params: dict[str, Any]) -> dict[str, Any]:
     raise PermanentCapabilityError("stub: simulated permanent failure")
 
 

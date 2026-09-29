@@ -47,6 +47,7 @@ in CI, same honest-stub posture as src.agents.llm_router's provider
 clients.
 """
 
+from typing import Any
 import csv
 import io
 import time
@@ -82,7 +83,7 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 # whichever credentials happen to be configured for this single-operator
 # deployment.
 _NFO_INSTRUMENTS_CACHE_TTL_SECONDS = 900
-_nfo_instruments_cache: list[dict] | None = None
+_nfo_instruments_cache: list[dict[str, Any]] | None = None
 _nfo_instruments_cache_at: float = 0.0
 
 
@@ -106,13 +107,13 @@ class ZerodhaKiteAdapter:
         self._transport = transport
         self._timeout = timeout
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, Any]:
         return {
             "X-Kite-Version": "3",
             "Authorization": f"token {self._credentials.api_key}:{self._credentials.access_token}",
         }
 
-    async def _request(self, method: str, path: str, **kwargs) -> dict:
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=self._base_url, transport=self._transport, timeout=self._timeout
         ) as client:
@@ -125,8 +126,8 @@ class ZerodhaKiteAdapter:
             )
         return resp.json()
 
-    def build_order_payload(self, order: OrderRequest) -> dict:
-        payload: dict = {
+    def build_order_payload(self, order: OrderRequest) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "tradingsymbol": order.symbol,
             "exchange": "NSE",
             "transaction_type": "BUY" if order.side == OrderSide.BUY else "SELL",
@@ -149,7 +150,7 @@ class ZerodhaKiteAdapter:
     async def modify_order(
         self, broker_order_id: str, *, price: float | None = None, quantity: int | None = None
     ) -> BrokerOrderResult:
-        payload: dict = {}
+        payload: dict[str, Any] = {}
         if price is not None:
             payload["price"] = price
         if quantity is not None:
@@ -214,7 +215,7 @@ class ZerodhaKiteAdapter:
             timestamp=datetime.now(UTC),
         )
 
-    async def _get_nfo_instruments(self) -> list[dict]:
+    async def _get_nfo_instruments(self) -> list[dict[str, Any]]:
         global _nfo_instruments_cache, _nfo_instruments_cache_at
         now = time.monotonic()
         if (
@@ -241,7 +242,7 @@ class ZerodhaKiteAdapter:
         _nfo_instruments_cache_at = now
         return rows
 
-    async def _batch_quote(self, tradingsymbols: list[str]) -> dict[str, dict]:
+    async def _batch_quote(self, tradingsymbols: list[str]) -> dict[str, dict[str, Any]]:
         """Kite Connect's real `/quote` endpoint accepts multiple `i=`
         params in one call (documented cap: 500 instruments) -- an option
         chain's CE+PE legs across every strike for one expiry is well
@@ -264,7 +265,7 @@ class ZerodhaKiteAdapter:
         whenever a spot price and forward-looking expiry are available --
         this adapter itself stays broker-honest and never invents one."""
         instruments = await self._get_nfo_instruments()
-        strikes: dict[float, dict[str, dict]] = {}
+        strikes: dict[float, dict[str, dict[str, Any]]] = {}
         for row in instruments:
             if row.get("name") != underlying or row.get("expiry") != expiry:
                 continue

@@ -14,6 +14,7 @@ file, its watcher will independently notice the same write and apply it
 again — a harmless extra version row, not a correctness issue.)
 """
 
+from typing import Any
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,7 +23,12 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.gateway.apply import ApplyResult, apply_config_text
-from src.gateway.loader import ConfigLoadError, compute_effective_agents, load_and_validate
+from src.gateway.loader import (
+    ConfigLoadError,
+    EffectiveAgentConfig,
+    compute_effective_agents,
+    load_and_validate,
+)
 from src.gateway.roster import ROSTER_BY_ID
 from src.models.agent_config_version import AgentConfigVersion, ConfigVersionStatus
 
@@ -46,7 +52,7 @@ def _require_roster_agent(agent_id: str) -> None:
 
 
 async def _mutate_and_apply(
-    db: AsyncSession, config_path: Path, mutate_fn: Callable[[dict], None], *, source: str
+    db: AsyncSession, config_path: Path, mutate_fn: Callable[[dict[str, Any]], None], *, source: str
 ) -> ApplyResult:
     config = load_and_validate(config_path)  # raises ConfigLoadError if already broken
     data = config.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -56,7 +62,7 @@ async def _mutate_and_apply(
     return await apply_config_text(db, new_text, source=source)
 
 
-def list_agents(config_path: Path):
+def list_agents(config_path: Path) -> list[EffectiveAgentConfig]:
     """Every one of the 24 fixed agents' effective config, sorted by
     department then agent id. Reads and validates the file fresh — no DB
     involved, works whether or not any app process is currently running.
@@ -79,7 +85,7 @@ async def set_identity(
 ) -> ApplyResult:
     _require_roster_agent(agent_id)
 
-    def mutate(data: dict) -> None:
+    def mutate(data: dict[str, Any]) -> None:
         entries = data.setdefault("agents", {}).setdefault("entries", {})
         entry = entries.setdefault(agent_id, {})
         identity = entry.get("identity") or {"name": ROSTER_BY_ID[agent_id].display_name}
@@ -103,9 +109,9 @@ async def bind_agent(
 ) -> ApplyResult:
     _require_roster_agent(agent_id)
 
-    def mutate(data: dict) -> None:
+    def mutate(data: dict[str, Any]) -> None:
         bindings = data.setdefault("bindings", [])
-        match: dict = {"channel": channel}
+        match: dict[str, Any] = {"channel": channel}
         if account_id is not None:
             match["accountId"] = account_id
         bindings.append({"agentId": agent_id, "match": match})
@@ -116,7 +122,7 @@ async def bind_agent(
 async def unbind_agent(
     db: AsyncSession, config_path: Path, agent_id: str, channel: str, account_id: str | None = None
 ) -> ApplyResult:
-    def mutate(data: dict) -> None:
+    def mutate(data: dict[str, Any]) -> None:
         bindings = data.get("bindings", [])
         data["bindings"] = [
             b
@@ -131,7 +137,7 @@ async def unbind_agent(
     return await _mutate_and_apply(db, config_path, mutate, source="cli")
 
 
-def _current_skills(data: dict, agent_id: str) -> list[str]:
+def _current_skills(data: dict[str, Any], agent_id: str) -> list[str]:
     entry = data.get("agents", {}).get("entries", {}).get(agent_id, {})
     skills = entry.get("skills")
     if skills is not None:
@@ -144,7 +150,7 @@ async def grant_skill(
 ) -> ApplyResult:
     _require_roster_agent(agent_id)
 
-    def mutate(data: dict) -> None:
+    def mutate(data: dict[str, Any]) -> None:
         entries = data.setdefault("agents", {}).setdefault("entries", {})
         entry = entries.setdefault(agent_id, {})
         skills = _current_skills(data, agent_id)
@@ -160,7 +166,7 @@ async def revoke_skill(
 ) -> ApplyResult:
     _require_roster_agent(agent_id)
 
-    def mutate(data: dict) -> None:
+    def mutate(data: dict[str, Any]) -> None:
         entries = data.setdefault("agents", {}).setdefault("entries", {})
         entry = entries.setdefault(agent_id, {})
         entry["skills"] = [s for s in _current_skills(data, agent_id) if s != skill]
@@ -178,7 +184,7 @@ async def set_heartbeat(
 ) -> ApplyResult:
     _require_roster_agent(agent_id)
 
-    def mutate(data: dict) -> None:
+    def mutate(data: dict[str, Any]) -> None:
         entries = data.setdefault("agents", {}).setdefault("entries", {})
         entry = entries.setdefault(agent_id, {})
         entry["heartbeatEnabled"] = enabled
@@ -247,7 +253,7 @@ async def doctor(db: AsyncSession, config_path: Path, *, fix: bool) -> DoctorRep
     data = config.model_dump(mode="json", by_alias=True, exclude_none=True)
     issues: list[DoctorIssue] = []
 
-    seen_bindings: set[tuple] = set()
+    seen_bindings: set[tuple[Any, ...]] = set()
     deduped_bindings = []
     for binding in data.get("bindings", []):
         key = (binding["agentId"], binding["match"]["channel"], binding["match"].get("accountId"))
@@ -257,7 +263,7 @@ async def doctor(db: AsyncSession, config_path: Path, *, fix: bool) -> DoctorRep
         seen_bindings.add(key)
         deduped_bindings.append(binding)
 
-    seen_rules: set[tuple] = set()
+    seen_rules: set[tuple[Any, ...]] = set()
     deduped_allow = []
     for rule in data.get("agentToAgentPolicy", {}).get("allow", []):
         key = (rule["from"], rule["to"], rule["scope"])

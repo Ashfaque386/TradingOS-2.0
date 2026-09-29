@@ -8,6 +8,7 @@ state, not per-user-private data).
 
 import json
 import uuid
+from collections.abc import AsyncIterator
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -132,7 +133,7 @@ async def send_message_endpoint(
     if await chat_orchestration.get_session(db, session_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "chat session not found")
 
-    async def _event_stream():
+    async def _event_stream() -> AsyncIterator[str]:
         async for chunk in chat_orchestration.stream_assistant_reply(
             db, redis, session_id, body.content
         ):

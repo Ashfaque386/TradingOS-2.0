@@ -27,12 +27,14 @@ between bytecode ticks) as well as anything RLIMIT_CPU wouldn't catch
 (e.g. a hung blocking call that burns wall clock without CPU).
 """
 
+from typing import Any
 import io
 import json
 import resource
 import signal
 import sys
 import time
+from types import FrameType
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -47,7 +49,7 @@ class _SandboxTimeout(Exception):
     pass
 
 
-def _alarm_handler(signum, frame):
+def _alarm_handler(signum: int, frame: FrameType | None) -> None:
     raise _SandboxTimeout("sandbox: execution exceeded the wall-clock timeout")
 
 
@@ -65,7 +67,7 @@ def _apply_rlimits(*, cpu_seconds: int, memory_bytes: int) -> None:
         _memory_limit_applied = True
 
 
-def run_one(request: dict) -> dict:
+def run_one(request: dict[str, Any]) -> dict[str, Any]:
     code = request["code"]
     params = request.get("params") or {}
     scratch_dir = Path(request["scratch_dir"])
@@ -100,7 +102,13 @@ def run_one(request: dict) -> dict:
 
         restricted_globals = build_restricted_globals(scratch_dir=scratch_dir, data_dir=data_dir)
         with redirect_stdout(captured):
-            exec(compile(code, "<strategy>", "exec"), restricted_globals)
+            # This IS the sandbox: `code` has already passed the AST
+            # ban-list re-check above and runs inside `restricted_globals`
+            # (no dunder/import/filesystem access outside scratch_dir),
+            # itself inside this process's own network-namespace isolation
+            # (process_runtime.py's `unshare --net`) -- executing untrusted
+            # strategy code under containment is this module's entire job.
+            exec(compile(code, "<strategy>", "exec"), restricted_globals)  # nosec B102
             run_backtest = restricted_globals.get("run_backtest")
             if run_backtest is None:
                 raise RuntimeError("generated module does not define run_backtest(data, config)")

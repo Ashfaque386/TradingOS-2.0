@@ -24,7 +24,7 @@ mistaken for one.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -42,8 +42,8 @@ class CorrelationCheckResult:
 
 
 def evaluate_correlation_constraint(
-    returns: pd.Series,
-    benchmark_returns: pd.Series,
+    returns: pd.Series[Any],
+    benchmark_returns: pd.Series[Any],
     *,
     threshold: float = DEFAULT_CORRELATION_THRESHOLD,
 ) -> CorrelationCheckResult:
@@ -66,7 +66,7 @@ def evaluate_correlation_constraint(
 
 
 class NiftyBenchmarkProvider(Protocol):
-    def daily_returns(self) -> pd.Series: ...
+    def daily_returns(self) -> pd.Series[Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +77,9 @@ class FakeNiftyBenchmarkProvider:
     call `.daily_returns()` on whatever `NiftyBenchmarkProvider` they're
     given."""
 
-    returns: pd.Series
+    returns: pd.Series[Any]
 
-    def daily_returns(self) -> pd.Series:
+    def daily_returns(self) -> pd.Series[Any]:
         return self.returns
 
 

@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -37,7 +38,7 @@ class MarketDataProvenance(Base):
     symbols_processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rows_ingested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime] = mapped_column(

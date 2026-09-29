@@ -18,6 +18,7 @@ inbound_router). An empty allowlist is not "allow everyone"; it is "no one
 is verified yet."
 """
 
+from typing import Any
 import json
 import os
 import stat
@@ -75,7 +76,7 @@ class NotificationChannelStore:
                 "invalid notification channel store encryption key"
             ) from exc
 
-    def _read_all(self) -> dict:
+    def _read_all(self) -> dict[str, Any]:
         if not self._path.exists():
             return {}
         ciphertext = self._path.read_bytes()
@@ -90,7 +91,7 @@ class NotificationChannelStore:
             ) from exc
         return json.loads(plaintext)
 
-    def _write_all(self, data: dict) -> None:
+    def _write_all(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         plaintext = json.dumps(data).encode("utf-8")
         ciphertext = self._fernet.encrypt(plaintext)

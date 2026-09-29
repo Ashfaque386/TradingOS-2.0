@@ -33,6 +33,7 @@ an Indian-markets operator, and the same `IST` zone
 `src.engine.paper_trading.market_hours` already defines.
 """
 
+from typing import Any
 from datetime import UTC, datetime
 
 import httpx
@@ -90,7 +91,7 @@ async def get_token_usage_today(redis: Redis, providers: list[str]) -> dict[str,
     }
 
 
-def get_host_vitals() -> dict:
+def get_host_vitals() -> dict[str, Any]:
     memory = psutil.virtual_memory()
     return {
         "cpu_percent": psutil.cpu_percent(interval=None),
@@ -100,7 +101,7 @@ def get_host_vitals() -> dict:
     }
 
 
-def _parse_prometheus_scalar(payload: dict) -> float | None:
+def _parse_prometheus_scalar(payload: dict[str, Any]) -> float | None:
     series = payload.get("data", {}).get("result", [])
     if not series:
         return None
@@ -161,8 +162,8 @@ async def build_system_vitals(
     prometheus_base_url: str,
     latency_budget_ms: float,
     active_provider: str | None,
-    provider_health: list[dict],
-) -> dict:
+    provider_health: list[dict[str, Any]],
+) -> dict[str, Any]:
     now = datetime.now(UTC)
     token_usage_today = await get_token_usage_today(redis, token_usage_providers)
     latency = await get_order_dispatch_latency_percentiles(base_url=prometheus_base_url)

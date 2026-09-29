@@ -45,6 +45,8 @@ every individual intent still needs its own per-intent approval on top of
 this one-time strategy-level sign-off (Build Spec §12.2).
 """
 
+from typing import Any
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -188,7 +190,7 @@ async def _next_version_number(db: AsyncSession, strategy_id: uuid.UUID) -> int:
     return result.scalar_one()
 
 
-def _default_option_legs(objective: str) -> list[dict]:
+def _default_option_legs(objective: str) -> list[dict[str, Any]]:
     """Deterministic fallback legs (no real Options Strategy Agent LLM
     output parser yet) -- a simple bull call spread, grounded and scanned
     just like a real proposal would be. Real leg proposals arrive the same
@@ -240,8 +242,8 @@ async def run_version_in_sandbox(
     strategy: Strategy,
     version: StrategyVersion,
     *,
-    data: list | dict | None = None,
-    config: dict | None = None,
+    data: list[Any] | dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
     sandbox_runtime: SandboxRuntime | None = None,
     scratch_dir: Path | None = None,
 ) -> StrategyVersion:
@@ -253,7 +255,7 @@ async def run_version_in_sandbox(
 
     settings = get_settings()
     runtime = sandbox_runtime or get_default_sandbox_runtime()
-    scratch = scratch_dir or Path(f"/tmp/tradingos-sandbox/{version.id}")
+    scratch = scratch_dir or Path(tempfile.gettempdir()) / "tradingos-sandbox" / str(version.id)
     data_dir = Path(settings.data_lake_path)
 
     result = runtime.execute(
@@ -305,7 +307,7 @@ async def run_version_in_sandbox(
     return version
 
 
-def _leg_to_dict(leg: GroundedLeg) -> dict:
+def _leg_to_dict(leg: GroundedLeg) -> dict[str, Any]:
     return {
         "option_type": leg.option_type,
         "strike": leg.strike,
@@ -351,7 +353,7 @@ async def run_strategy_pipeline(
 
 async def _latest_completed_backtest_returns(
     db: AsyncSession, strategy_id: uuid.UUID
-) -> pd.Series | None:
+) -> pd.Series[Any] | None:
     version_result = await db.execute(
         select(StrategyVersion.id)
         .where(StrategyVersion.strategy_id == strategy_id)

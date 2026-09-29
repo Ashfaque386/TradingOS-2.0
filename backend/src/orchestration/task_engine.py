@@ -20,6 +20,7 @@ per-test `db_session_factory` fixture, so this is fully exercisable in
 isolation without touching the app's real global engine.
 """
 
+from typing import Any, cast
 import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 from redis.asyncio import Redis
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.models.organization_run import FailureClass, OrganizationRun, RunStatus
@@ -37,6 +38,7 @@ from src.observability.correlation import bind_job_correlation_id
 from src.orchestration import dependencies, events
 from src.orchestration.capabilities import (
     REGISTRY,
+    CapabilityFn,
     PermanentCapabilityError,
     TransientCapabilityError,
 )
@@ -72,10 +74,13 @@ async def claim_task(db: AsyncSession, task_id: uuid.UUID, worker_id: str) -> bo
     )
     result = await db.execute(stmt)
     await db.commit()
-    return result.rowcount == 1
+    # An UPDATE statement's execute() always returns a real CursorResult at
+    # runtime (.rowcount is populated) -- Result[Any] is only the generic
+    # base type db.execute()'s signature can express statically.
+    return cast(CursorResult[Any], result).rowcount == 1
 
 
-async def _run_capability(fn, params: dict) -> dict:
+async def _run_capability(fn: CapabilityFn, params: dict[str, Any]) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, fn, params)
 
@@ -354,7 +359,7 @@ async def run_stall_sweep_once(db: AsyncSession, redis: Redis | None) -> list[uu
 
 def start_stall_sweep_loop(
     session_factory: async_sessionmaker[AsyncSession], redis: Redis | None
-) -> asyncio.Task:
+) -> asyncio.Task[None]:
     async def _loop() -> None:
         while True:
             await asyncio.sleep(STALL_SWEEP_INTERVAL_SECONDS)

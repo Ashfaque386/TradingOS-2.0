@@ -3,6 +3,7 @@ against the schema, and computes the effective (defaults + per-agent
 overrides) config for every agent in the fixed roster.
 """
 
+from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import json5
 from pydantic import ValidationError
 
 from src.gateway.roster import ROSTER
-from src.gateway.schema import AgentEntryConfig, TradingOSConfig
+from src.gateway.schema import AgentDefaultsConfig, AgentEntryConfig, TradingOSConfig
 
 
 class ConfigLoadError(Exception):
@@ -35,7 +36,7 @@ def read_config_text(path: Path) -> str:
         ) from exc
 
 
-def parse_config_text(text: str) -> dict:
+def parse_config_text(text: str) -> dict[str, Any]:
     try:
         data = json5.loads(text)
     except ValueError as exc:
@@ -59,7 +60,7 @@ def parse_config_text(text: str) -> dict:
         ) from exc
 
 
-def _join_surrogate_pairs(value):
+def _join_surrogate_pairs(value: Any) -> Any:
     """json5 decodes an escaped astral character (e.g. "\\ud83e\\udde0", which
     is how Python's json.dumps writes the agent emoji) into two lone
     surrogates instead of one character, unlike the stdlib json module.
@@ -76,7 +77,7 @@ def _join_surrogate_pairs(value):
     return value
 
 
-def validate_config_dict(data: dict, *, raw_text: str | None = None) -> TradingOSConfig:
+def validate_config_dict(data: dict[str, Any], *, raw_text: str | None = None) -> TradingOSConfig:
     try:
         return TradingOSConfig.model_validate(data)
     except ValidationError as exc:
@@ -114,7 +115,11 @@ class EffectiveAgentConfig:
 
 
 def _merge_one(
-    agent_id: str, department: str, display_name: str, override: AgentEntryConfig | None, defaults
+    agent_id: str,
+    department: str,
+    display_name: str,
+    override: AgentEntryConfig | None,
+    defaults: AgentDefaultsConfig,
 ) -> EffectiveAgentConfig:
     identity = override.identity if override else None
     return EffectiveAgentConfig(

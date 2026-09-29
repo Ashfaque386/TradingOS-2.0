@@ -6,6 +6,7 @@ filesystem events for a single logical save (many editors write-then-
 rename, or fire multiple modify events) don't cause redundant DB writes.
 """
 
+from typing import Any
 import asyncio
 import hashlib
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from pathlib import Path
 import structlog
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.api import BaseObserver
 
 from src.core.db import AsyncSessionLocal
 from src.gateway.apply import ApplyResult, apply_config_from_file
@@ -50,7 +52,7 @@ class ConfigWatcher:
     def __init__(self, config_path: Path, *, source: str = "hot-reload") -> None:
         self._config_path = config_path
         self._source = source
-        self._observer: Observer | None = None
+        self._observer: BaseObserver | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._last_content_hash: str | None = None
         self._on_applied: Callable[[ApplyResult], None] | None = None
@@ -81,7 +83,7 @@ class ConfigWatcher:
         future.add_done_callback(self._log_task_exception)
 
     @staticmethod
-    def _log_task_exception(future: "asyncio.Future") -> None:
+    def _log_task_exception(future: "asyncio.Future[Any]") -> None:
         exc = future.exception()
         if exc is not None:
             logger.error("agent_gateway.hot_reload_apply_crashed", error=str(exc))

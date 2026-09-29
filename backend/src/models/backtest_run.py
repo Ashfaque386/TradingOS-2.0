@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import date, datetime
 
@@ -48,17 +49,17 @@ class BacktestRun(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=BacktestStatus.PENDING)
     refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    friction_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    friction_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # [[iso_date, float], ...] -- the daily-returns series backing Sharpe/
     # MaxDD and src.engine.backtest.comparison's pairwise correlations.
-    daily_returns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    daily_returns: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     # Per-trade net P&L, in trade order -- the resampling population for
     # src.engine.optimization.monte_carlo.run_monte_carlo.
-    trade_pnls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    trade_pnls: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
 
-    walk_forward_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    monte_carlo_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    walk_forward_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    monte_carlo_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

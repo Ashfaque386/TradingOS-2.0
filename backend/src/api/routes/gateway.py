@@ -19,6 +19,7 @@ special effect beyond being part of the applied config text; the actual
 enforced threshold always comes from `src.orchestration.risk_limits`.
 """
 
+from typing import Any
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -53,7 +54,7 @@ def _config_path() -> Path:
 
 class GatewayConfigResponse(BaseModel):
     raw_text: str
-    parsed: dict
+    parsed: dict[str, Any]
     version_id: int | None
 
 
@@ -81,7 +82,7 @@ class ConfigVersionSummaryResponse(BaseModel):
     status: str
     source: str
     created_at: str
-    validation_errors: list | None
+    validation_errors: list[Any] | None
 
 
 @router.get("/config")

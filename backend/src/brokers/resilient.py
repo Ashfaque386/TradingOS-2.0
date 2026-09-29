@@ -15,6 +15,7 @@ open/cooldown/half-open state machine, only adapts the richer Phase 8
 `send_order`) onto that one breaker's generic `call(fn)`.
 """
 
+from typing import Any
 import time
 
 from src.brokers.base import (
@@ -52,7 +53,7 @@ class ResilientBrokerAdapter:
     def breaker(self) -> BrokerCircuitBreaker:
         return self._breaker
 
-    def build_order_payload(self, order: OrderRequest) -> dict:
+    def build_order_payload(self, order: OrderRequest) -> dict[str, Any]:
         return self._adapter.build_order_payload(order)
 
     async def place_order(self, order: OrderRequest) -> BrokerOrderResult:

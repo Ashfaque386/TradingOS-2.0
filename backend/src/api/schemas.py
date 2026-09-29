@@ -1,7 +1,7 @@
 import uuid
 from datetime import date as date_type
 from datetime import datetime as datetime_type
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -140,8 +140,8 @@ class RunPipelineRequest(BaseModel):
 class RunPipelineResponse(BaseModel):
     objective: str
     node_log: list[str]
-    deployment_result: dict | None
-    evaluation_verdict: dict | None
+    deployment_result: dict[str, Any] | None
+    evaluation_verdict: dict[str, Any] | None
     rejection_count: int
 
 
@@ -176,7 +176,7 @@ class CreatePromptVersionRequest(BaseModel):
 
 class AgentHeartbeatEntryResponse(BaseModel):
     status: str
-    details: dict | None
+    details: dict[str, Any] | None
     checked_at: str
 
 
@@ -254,8 +254,8 @@ class StrategyVersionResponse(BaseModel):
     static_validation_passed: bool
     static_validation_errors: list[str] | None
     sandbox_passed: bool | None
-    sandbox_result: dict | None
-    options_legs: dict | None
+    sandbox_result: dict[str, Any] | None
+    options_legs: dict[str, Any] | None
     created_at: datetime_type
 
 
@@ -281,7 +281,7 @@ class SuggestionResponse(BaseModel):
     base_version_id: uuid.UUID
     suggestion_text: str
     status: str
-    ai_verdict: dict | None
+    ai_verdict: dict[str, Any] | None
     regenerated_version_id: uuid.UUID | None
     regeneration_diff: str | None
 
@@ -322,7 +322,7 @@ class PortfolioRecommendationResponse(BaseModel):
     id: uuid.UUID
     summary: str
     allocations: list[PortfolioAllocationEntry]
-    based_on: dict
+    based_on: dict[str, Any]
     llm_source: str
     status: str
     reviewed_by: str | None
@@ -405,11 +405,11 @@ class BacktestRunResponse(BaseModel):
     end_date: date_type
     status: str
     refusal_reason: str | None
-    metrics: dict | None
-    daily_returns: list | None
+    metrics: dict[str, Any] | None
+    daily_returns: list[Any] | None
     trade_pnls: list[float] | None
-    walk_forward_result: dict | None
-    monte_carlo_result: dict | None
+    walk_forward_result: dict[str, Any] | None
+    monte_carlo_result: dict[str, Any] | None
     created_at: datetime_type
 
 
@@ -451,9 +451,9 @@ class OptimizeRequest(BaseModel):
 class OptimizationRunResponse(BaseModel):
     id: uuid.UUID
     n_trials: int
-    best_params: dict | None
+    best_params: dict[str, Any] | None
     best_value: float | None
-    param_importance: dict | None
+    param_importance: dict[str, Any] | None
 
 
 KillSwitchMode = Literal["live", "paper"]
@@ -710,8 +710,8 @@ class ShadowModeRunResponse(BaseModel):
     symbol: str
     side: str
     quantity: int
-    order_payload: dict
-    broker_response: dict | None
+    order_payload: dict[str, Any]
+    broker_response: dict[str, Any] | None
     created_at: str
 
 
@@ -925,7 +925,7 @@ class MarketDataProvenanceResponse(BaseModel):
     symbols_processed: int
     rows_ingested: int
     error_message: str | None
-    details: dict | None
+    details: dict[str, Any] | None
     started_at: str
     completed_at: str
 
@@ -985,7 +985,7 @@ class AuditLogEntryResponse(BaseModel):
     action: str
     entity_type: str | None
     entity_id: str | None
-    details: dict | None
+    details: dict[str, Any] | None
     correlation_id: str | None
     created_at: str
 

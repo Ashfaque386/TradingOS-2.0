@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -25,7 +26,7 @@ class ResultArtefact(Base):
         UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False, index=True
     )
     artefact_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

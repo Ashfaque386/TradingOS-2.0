@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user
@@ -122,7 +122,7 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -
         # still-live token in the family so a stolen token can't keep
         # rotating alongside the legitimate client.
         await db.execute(
-            RefreshToken.__table__.update()
+            update(RefreshToken)
             .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
             .values(revoked_at=now)
         )

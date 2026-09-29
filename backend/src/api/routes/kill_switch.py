@@ -12,6 +12,7 @@ from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.engine.risk.kill_switch import KillSwitchMode
 from src.models.user import User
+from src.models.kill_switch_state import KillSwitchState
 from src.orchestration.kill_switch import check_drawdown, get_kill_switch_state, reset_kill_switch
 
 router = APIRouter(prefix="/kill-switch", tags=["kill-switch"])
@@ -23,7 +24,7 @@ register_policy("POST", "/api/v1/kill-switch/{mode}/check", roles=_OPERATOR_ROLE
 register_policy("POST", "/api/v1/kill-switch/{mode}/reset", roles=_OPERATOR_ROLES)
 
 
-def _to_response(state) -> KillSwitchStateResponse:
+def _to_response(state: KillSwitchState) -> KillSwitchStateResponse:
     return KillSwitchStateResponse(
         mode=state.mode,
         tripped=state.tripped,

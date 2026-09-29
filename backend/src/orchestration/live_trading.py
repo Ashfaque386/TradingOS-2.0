@@ -90,10 +90,11 @@ execution price.
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import pandas as pd
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
@@ -701,7 +702,10 @@ async def expire_stale_intents(db: AsyncSession) -> int:
     )
     result = await db.execute(stmt)
     await db.commit()
-    return result.rowcount
+    # An UPDATE statement's execute() always returns a real CursorResult at
+    # runtime (.rowcount is populated) -- Result[Any] is only the generic
+    # base type db.execute()'s signature can express statically.
+    return cast(CursorResult[Any], result).rowcount
 
 
 def _normalize_broker_order_status(raw_status: str) -> str | None:

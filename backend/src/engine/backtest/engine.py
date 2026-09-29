@@ -27,6 +27,7 @@ acted on at the *next* bar's open (never the same bar it was computed on)
 to avoid lookahead bias.
 """
 
+from typing import Any
 import math
 from dataclasses import dataclass, field
 
@@ -54,7 +55,7 @@ def _finite_or_none(value: float | None) -> float | None:
     return None if (math.isnan(v) or math.isinf(v)) else v
 
 
-def _compute_atr(prices: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
+def _compute_atr(prices: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series[Any]:
     high, low, close = prices["high"], prices["low"], prices["close"]
     prev_close = close.shift(1)
     true_range = pd.concat(
@@ -89,21 +90,21 @@ class BacktestMetrics:
 @dataclass(frozen=True, slots=True)
 class BacktestResult:
     trades: list[Trade]
-    equity_curve: pd.Series
-    daily_returns: pd.Series
+    equity_curve: pd.Series[Any]
+    daily_returns: pd.Series[Any]
     metrics: BacktestMetrics
     friction_model: FrictionModel = field(repr=False, default_factory=FrictionModel)
 
 
 def _build_trades(
     prices: pd.DataFrame,
-    position: pd.Series,
+    position: pd.Series[Any],
     *,
     initial_capital: float,
     is_delivery: bool,
     friction_model: FrictionModel,
-    atr: pd.Series,
-    avg_volume: pd.Series,
+    atr: pd.Series[Any],
+    avg_volume: pd.Series[Any],
 ) -> tuple[list[Trade], float]:
     opens = prices["open"].to_numpy()
     closes = prices["close"].to_numpy()
@@ -185,7 +186,7 @@ def _build_trades(
 
 def _build_equity_curve(
     prices: pd.DataFrame, trades: list[Trade], *, initial_capital: float
-) -> pd.Series:
+) -> pd.Series[Any]:
     index = prices.index
     closes = prices["close"]
     shares_held = pd.Series(0, index=index, dtype=float)
@@ -206,7 +207,7 @@ def _build_equity_curve(
 
 def run_vectorized_backtest(
     prices: pd.DataFrame,
-    signals: pd.Series,
+    signals: pd.Series[Any],
     *,
     initial_capital: float = 100_000.0,
     is_delivery: bool = True,
@@ -254,8 +255,8 @@ def run_vectorized_backtest(
 
 def _compute_metrics(
     *,
-    equity_curve: pd.Series,
-    daily_returns: pd.Series,
+    equity_curve: pd.Series[Any],
+    daily_returns: pd.Series[Any],
     trades: list[Trade],
     initial_capital: float,
 ) -> BacktestMetrics:

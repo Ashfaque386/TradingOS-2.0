@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -37,8 +38,8 @@ class OrganizationalPlan(Base):
         nullable=False,
     )
     objective: Mapped[str] = mapped_column(Text, nullable=False)
-    planner_output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    validation_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    planner_output: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    validation_errors: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -12,6 +12,7 @@ update over the running state) and lets `node_log` accumulate correctly
 across the run.
 """
 
+from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -22,19 +23,19 @@ class TradingOSGraphState(BaseModel):
     objective: str
     run_id: str | None = None
 
-    ceo_brief: dict | None = None
-    market_analysis: dict | None = None
-    strategy: dict | None = None
-    options_legs: dict | None = None
+    ceo_brief: dict[str, Any] | None = None
+    market_analysis: dict[str, Any] | None = None
+    strategy: dict[str, Any] | None = None
+    options_legs: dict[str, Any] | None = None
     generated_code: str | None = None
-    compliance_verdict: dict | None = None
-    validation_result: dict | None = None
+    compliance_verdict: dict[str, Any] | None = None
+    validation_result: dict[str, Any] | None = None
     validation_attempts: int = 0
-    backtest_metrics: dict | None = None
-    evaluation_verdict: dict | None = None
-    optimization_result: dict | None = None
-    risk_assessment: dict | None = None
-    deployment_result: dict | None = None
+    backtest_metrics: dict[str, Any] | None = None
+    evaluation_verdict: dict[str, Any] | None = None
+    optimization_result: dict[str, Any] | None = None
+    risk_assessment: dict[str, Any] | None = None
+    deployment_result: dict[str, Any] | None = None
 
     rejection_count: int = 0
     node_log: list[str] = Field(default_factory=list)

@@ -7,7 +7,7 @@ RestrictedProcessSandboxRuntime directly instead of going through this.
 """
 
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from src.engine.sandbox.gvisor_runtime import GvisorSandboxRuntime, is_gvisor_available
 from src.engine.sandbox.process_runtime import RestrictedProcessSandboxRuntime
@@ -19,7 +19,7 @@ class SandboxRuntime(Protocol):
         self,
         code: str,
         *,
-        params: dict,
+        params: dict[str, Any],
         scratch_dir: Path,
         data_dir: Path,
         limits: SandboxLimits | None = None,

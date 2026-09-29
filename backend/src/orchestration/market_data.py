@@ -16,10 +16,12 @@ failed), or `failed` (every symbol failed), never a bare exception
 bubbling out of a scheduled job.
 """
 
+from typing import Any
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import httpx
 import pandas as pd
 import structlog
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -50,7 +52,7 @@ async def _record_provenance(
     rows_ingested: int,
     started_at: datetime,
     error_message: str | None = None,
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
 ) -> MarketDataProvenance:
     row = MarketDataProvenance(
         id=uuid.uuid4(),
@@ -309,7 +311,7 @@ async def run_bhavcopy_fallback(
     day: date,
     segment: str = "equity",
     fallback_provider: MarketDataProvider | None = None,
-    transport=None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> MarketDataProvenance:
     """Build Spec §14's on-demand fallback path. Tries a real NSE Bhavcopy
     fetch first (`src.data.bhavcopy.fetch_bhavcopy`, genuinely real

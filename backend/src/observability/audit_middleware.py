@@ -19,6 +19,7 @@ semantics the way that route's own code does -- it exists for blanket
 coverage, not for detail.
 """
 
+from typing import Any
 import json
 
 import structlog
@@ -47,7 +48,7 @@ class AuditLoggingMiddleware:
         status_holder: dict[str, int] = {}
         body_chunks: list[bytes] = []
 
-        async def send_wrapper(message: dict) -> None:
+        async def send_wrapper(message: dict[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 status_holder["status_code"] = message["status"]
             elif message["type"] == "http.response.body":
@@ -62,6 +63,16 @@ class AuditLoggingMiddleware:
 
         route = scope.get("route")
         path_template = route.path if route is not None else scope.get("path", "")
+        # Same real fix as src.core.rbac.require_role: Phase 26's dependency-
+        # CVE pass (docs/phase20-old-vs-new-comparison.md item 28) bumped
+        # FastAPI/Starlette, and `route.path` on a nested APIRoute can now
+        # come back missing an ancestor `include_router` prefix (confirmed
+        # live for /api/v1/broker-credentials/*) -- reconstruct it from the
+        # real request path (`scope["path"]`, unaffected) rather than
+        # writing a truncated action string to the permanent audit trail.
+        real_path = scope.get("path", "")
+        if not path_template.startswith("/api/v1") and real_path.startswith("/api/v1"):
+            path_template = "/api/v1" + path_template
 
         try:
             async with request.app.state.db_session_factory() as db:
@@ -98,7 +109,7 @@ class AuditLoggingMiddleware:
         return parts[-1] if parts else None
 
     @staticmethod
-    def _extract_entity_id(path_params: dict, body_chunks: list[bytes]) -> str | None:
+    def _extract_entity_id(path_params: dict[str, Any], body_chunks: list[bytes]) -> str | None:
         if path_params:
             return str(next(iter(path_params.values())))
         body = b"".join(body_chunks)

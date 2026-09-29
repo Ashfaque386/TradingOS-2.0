@@ -13,7 +13,7 @@ the engine's.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -27,7 +27,7 @@ class DailySignalDecision:
     position_yesterday: int
 
 
-def detect_todays_signal(signals: pd.Series) -> DailySignalDecision:
+def detect_todays_signal(signals: pd.Series[Any]) -> DailySignalDecision:
     """`signals` is the raw 0/1 series that would be fed into
     `run_vectorized_backtest` -- long-only, per that engine's own
     convention. Fewer than 2 observations means no transition can be

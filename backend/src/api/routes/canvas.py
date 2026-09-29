@@ -14,6 +14,7 @@ Orchestration & Memory section) -- this codebase already has real
 endpoints for that (`/risk/*`, `/kill-switch/*`).
 """
 
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -50,7 +51,7 @@ class LatestBacktestResult(BaseModel):
     strategy_name: str
     symbol: str
     status: str
-    metrics: dict | None
+    metrics: dict[str, Any] | None
     created_at: datetime
 
 

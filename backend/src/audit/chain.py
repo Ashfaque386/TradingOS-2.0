@@ -13,6 +13,7 @@ divergence-check is nothing more than running the same verification twice
 against two different sources and comparing.
 """
 
+from typing import Any
 import hashlib
 import json
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ class AuditChainEntry:
     action: str
     entity_type: str | None
     entity_id: str | None
-    details: dict | None
+    details: dict[str, Any] | None
     created_at: datetime
     hash: str
 
@@ -47,7 +48,7 @@ def compute_entry_hash(
     action: str,
     entity_type: str | None,
     entity_id: str | None,
-    details: dict | None,
+    details: dict[str, Any] | None,
     created_at: datetime,
 ) -> str:
     canonical_details = (

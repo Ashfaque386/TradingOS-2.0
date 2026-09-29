@@ -314,7 +314,9 @@ async def upstox_callback_endpoint(
     # real lifetime, if Upstox actually granted one, is not something this
     # endpoint can know without Upstox returning it explicitly.
     token_expires_at = (
-        None if creds.token_duration == "extended" else _next_6am_ist(datetime.now(UTC))
+        None
+        if creds.token_duration == "extended"  # nosec B105: a duration label, not a credential
+        else _next_6am_ist(datetime.now(UTC))
     )
 
     store.set_credentials(

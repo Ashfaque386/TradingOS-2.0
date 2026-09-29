@@ -8,6 +8,7 @@ phase's demo-trigger endpoints (Phase 7's `/daily-signal-run`, Phase 9's
 `/generate-intent`).
 """
 
+from typing import Any
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
 from pathlib import Path
@@ -175,7 +176,7 @@ async def freshness_endpoint(
     ]
 
 
-def _series_to_list(series: pd.Series) -> list[float | None]:
+def _series_to_list(series: pd.Series[Any]) -> list[float | None]:
     return [None if pd.isna(value) else float(value) for value in series]
 
 

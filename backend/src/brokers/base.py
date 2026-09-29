@@ -21,7 +21,7 @@ without ever sending it, for a broker with no sandbox to send it to.
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class OrderSide(StrEnum):
@@ -131,7 +131,7 @@ class OrderRequest:
 class BrokerOrderResult:
     broker_order_id: str
     status: str
-    raw: dict
+    raw: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +148,7 @@ class BrokerOrder:
 class MarginInfo:
     available_margin: float
     used_margin: float
-    raw: dict
+    raw: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,10 +188,18 @@ class OptionChainEntry:
 
 
 class BrokerAdapter(Protocol):
-    broker_name: str
-    has_sandbox: bool
+    # Declared as read-only properties (not plain attributes) so a wrapper
+    # like ResilientBrokerAdapter -- which forwards them as @property,
+    # never reassignable -- still satisfies this Protocol structurally;
+    # nothing anywhere in this codebase ever assigns to either after
+    # construction, so requiring settability was stricter than what's
+    # actually used, not an intentional part of the interface.
+    @property
+    def broker_name(self) -> str: ...
+    @property
+    def has_sandbox(self) -> bool: ...
 
-    def build_order_payload(self, order: OrderRequest) -> dict: ...
+    def build_order_payload(self, order: OrderRequest) -> dict[str, Any]: ...
     async def place_order(self, order: OrderRequest) -> BrokerOrderResult: ...
     async def modify_order(
         self, broker_order_id: str, *, price: float | None = None, quantity: int | None = None

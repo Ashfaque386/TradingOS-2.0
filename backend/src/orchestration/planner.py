@@ -8,6 +8,7 @@ test here and is exercised directly with hand-built graphs, not only
 indirectly through the fake planner's own (always-valid) output.
 """
 
+from typing import Any
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -52,7 +53,7 @@ class TaskSpec:
     key: str  # plan-local identifier, stable across the plan's own graph
     capability: str
     name: str
-    params: dict = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     depends_on: tuple[DependencySpec, ...] = ()
     produces_artefact_type: str | None = None
     timeout_seconds: int = 300
@@ -234,7 +235,7 @@ def validate_plan_graph(graph: PlanGraph) -> list[str]:
     return errors
 
 
-def _graph_to_json(graph: PlanGraph) -> dict:
+def _graph_to_json(graph: PlanGraph) -> dict[str, Any]:
     return {"tasks": [asdict(t) for t in graph.tasks]}
 
 

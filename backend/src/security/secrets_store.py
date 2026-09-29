@@ -20,6 +20,7 @@ permissions on the ciphertext file, is this store's whole contract with
 Build Spec §20's "never logged" requirement.
 """
 
+from typing import Any
 import json
 import os
 import stat
@@ -45,7 +46,7 @@ class SecretsStore:
         except (ValueError, TypeError) as exc:
             raise SecretsStoreError("invalid secrets encryption key") from exc
 
-    def _read_all(self) -> dict:
+    def _read_all(self) -> dict[str, Any]:
         if not self._path.exists():
             return {}
         ciphertext = self._path.read_bytes()
@@ -60,7 +61,7 @@ class SecretsStore:
             ) from exc
         return json.loads(plaintext)
 
-    def _write_all(self, data: dict) -> None:
+    def _write_all(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         plaintext = json.dumps(data).encode("utf-8")
         ciphertext = self._fernet.encrypt(plaintext)

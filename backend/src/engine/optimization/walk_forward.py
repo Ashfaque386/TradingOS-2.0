@@ -14,6 +14,7 @@ engine only owns the windowing and the pass/fail rule, not how a
 strategy is fit -- callers range from a fixed rule to a real optimizer.
 """
 
+from typing import Any
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -22,7 +23,7 @@ import pandas as pd
 from src.engine.backtest.engine import Trade, run_vectorized_backtest
 from src.engine.backtest.friction import FrictionModel
 
-StrategyFn = Callable[[pd.DataFrame, pd.DataFrame], pd.Series]
+StrategyFn = Callable[[pd.DataFrame, pd.DataFrame], pd.Series[Any]]
 
 
 def _expectancy(trades: list[Trade]) -> float | None:

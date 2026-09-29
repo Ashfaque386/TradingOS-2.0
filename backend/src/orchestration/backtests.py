@@ -14,6 +14,7 @@ further analysis of the same underlying trade sequence, not a new
 backtest.
 """
 
+from typing import Any, cast
 import uuid
 from dataclasses import asdict
 from datetime import date
@@ -54,7 +55,7 @@ async def run_backtest(
     strategy_version_id: uuid.UUID,
     symbol: str,
     prices: pd.DataFrame,
-    signals: pd.Series,
+    signals: pd.Series[Any],
     as_of: date,
     data_lake: DataLakeFreshnessCheck,
     friction_model: FrictionModel = FrictionModel(),
@@ -94,7 +95,15 @@ async def run_backtest(
         status=BacktestStatus.COMPLETED,
         friction_config=asdict(friction_model),
         metrics=asdict(result.metrics),
-        daily_returns=[[ts.isoformat(), float(v)] for ts, v in result.daily_returns.items()],
+        # pandas-stubs types Series.items()'s key as the generic Hashable
+        # (a Series carries no static index-dtype) -- this Series' real
+        # index is always a DatetimeIndex (it's a per-day return series
+        # built off `prices`' own datetime-indexed rows), so `ts` is always
+        # a real pd.Timestamp at runtime.
+        daily_returns=[
+            [cast(pd.Timestamp, ts).isoformat(), float(v)]
+            for ts, v in result.daily_returns.items()
+        ],
         trade_pnls=[float(t.net_pnl) for t in result.trades],
         created_by=created_by,
     )
@@ -217,7 +226,7 @@ async def compare_backtest_runs(db: AsyncSession, run_ids: list[uuid.UUID]) -> C
     result = await db.execute(select(BacktestRun).where(BacktestRun.id.in_(run_ids)))
     runs = {str(r.id): r for r in result.scalars()}
 
-    daily_returns_by_run: dict[str, pd.Series] = {}
+    daily_returns_by_run: dict[str, pd.Series[Any]] = {}
     for run_id in run_ids:
         run = runs.get(str(run_id))
         if run is None or not run.daily_returns:

@@ -19,6 +19,7 @@ supplies retries, distribution across worker processes, and durability;
 none of the statistical logic lives here or is duplicated here.
 """
 
+from typing import Any
 from dataclasses import asdict
 from datetime import timedelta
 
@@ -33,7 +34,7 @@ MONTE_CARLO_TASK_QUEUE = "backtest-monte-carlo"
 @activity.defn
 async def run_monte_carlo_activity(
     trade_pnls: list[float], n_paths: int, initial_capital: float, seed: int | None
-) -> dict:
+) -> dict[str, Any]:
     result = run_monte_carlo(
         trade_pnls, n_paths=n_paths, initial_capital=initial_capital, seed=seed
     )
@@ -49,7 +50,7 @@ class MonteCarloWorkflow:
         n_paths: int = 10_000,
         initial_capital: float = 100_000.0,
         seed: int | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         return await workflow.execute_activity(
             run_monte_carlo_activity,
             args=[trade_pnls, n_paths, initial_capital, seed],

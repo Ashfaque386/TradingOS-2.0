@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -46,15 +47,15 @@ class StrategyVersion(Base):
     code: Mapped[str] = mapped_column(Text, nullable=False)
 
     static_validation_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    static_validation_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    static_validation_errors: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
 
     sandbox_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    sandbox_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    sandbox_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # Only populated for InstrumentClass.OPTIONS strategies -- grounded legs
     # (src/engine/options_grounding.py) plus the naked-options scan verdict,
     # both required before acceptance (Build Spec §9).
-    options_legs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    options_legs: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

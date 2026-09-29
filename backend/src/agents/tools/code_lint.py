@@ -6,12 +6,13 @@ out in the Strategy Pipeline & Sandbox phase (§9) -- this skill is the
 general-purpose lint tool any agent can call standalone.
 """
 
+from typing import Any
 import ast
 
 BANNED_IMPORTS = frozenset({"os", "subprocess", "socket", "sys", "shutil", "ctypes"})
 
 
-def code_format_lint(params: dict) -> dict:
+def code_format_lint(params: dict[str, Any]) -> dict[str, Any]:
     code = params.get("code", "")
     try:
         tree = ast.parse(code)

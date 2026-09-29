@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 
@@ -46,8 +47,8 @@ class ShadowModeRun(Base):
     side: Mapped[str] = mapped_column(String(8), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    order_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    broker_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    order_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    broker_response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -45,8 +46,8 @@ class PortfolioRecommendation(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
-    allocations: Mapped[list] = mapped_column(JSON, nullable=False)
-    based_on: Mapped[dict] = mapped_column(JSON, nullable=False)
+    allocations: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    based_on: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     llm_source: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[PortfolioRecommendationStatus] = mapped_column(
         Enum(

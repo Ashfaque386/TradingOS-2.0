@@ -27,6 +27,7 @@ commits once at the end -- `write_audit_entry` only `add()`s and
 site to it never changes when the transaction actually commits.
 """
 
+from typing import Any
 import uuid
 from datetime import UTC, datetime
 
@@ -64,7 +65,7 @@ async def write_audit_entry(
     action: str,
     entity_type: str | None = None,
     entity_id: str | None = None,
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
     correlation_id: str | None = None,
 ) -> AuditLog:
     await db.execute(select(func.pg_advisory_xact_lock(_AUDIT_LOCK_KEY)))

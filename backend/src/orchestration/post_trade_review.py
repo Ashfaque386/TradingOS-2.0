@@ -16,6 +16,7 @@ never conflating two different scopes under one number (Phase 16 Follow-up
 F's realized-vs-unrealized P&L split is the precedent).
 """
 
+import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
 import structlog
@@ -205,7 +206,9 @@ async def run_post_trade_review(db: AsyncSession, *, as_of: date) -> list[TradeR
     return findings
 
 
-async def latest_finding_for_strategy(db: AsyncSession, strategy_id) -> TradeReviewFinding | None:
+async def latest_finding_for_strategy(
+    db: AsyncSession, strategy_id: uuid.UUID
+) -> TradeReviewFinding | None:
     """Reads the most recent finding for a strategy -- the real
     consumption point `src.orchestration.strategy_suggestions.review_suggestion`
     calls before building its LLM prompt, so the Strategy Generator/

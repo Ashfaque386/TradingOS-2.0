@@ -15,6 +15,7 @@ object is ever constructed, for either kill-switch mode independently
 rows).
 """
 
+from typing import Any
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -75,7 +76,7 @@ async def create_order_intent(
     portfolio_value: float,
     regulatory_provider: RegulatoryDataProvider,
     option_legs: list[GroundedLeg] | None = None,
-    recent_returns: pd.Series | None = None,
+    recent_returns: pd.Series[Any] | None = None,
     benchmark_provider: NiftyBenchmarkProvider | None = None,
     correlation_threshold: float = DEFAULT_CORRELATION_THRESHOLD,
 ) -> OrderIntent:

@@ -174,7 +174,10 @@ def check_ruff(code: str) -> list[str]:
         f.write(code)
         path = Path(f.name)
     try:
-        result = subprocess.run(
+        # `path` is a name this process just generated via
+        # `tempfile.NamedTemporaryFile` above, not attacker-controlled --
+        # every other argv element is a fixed literal.
+        result = subprocess.run(  # nosec B603
             [sys.executable, "-m", "ruff", "check", "--no-cache", "--quiet", str(path)],
             capture_output=True,
             text=True,

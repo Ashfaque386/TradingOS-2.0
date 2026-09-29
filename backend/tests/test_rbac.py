@@ -124,13 +124,24 @@ def _all_app_routes() -> list[tuple[str, str]]:
     # already relies on, just swept across the whole app instead of one route.
     from src.main import app
 
+    # Deliberately NOT `for route in app.routes: route.path` (what this used
+    # to do): Phase 26's dependency-CVE pass (docs/phase20-old-vs-new-
+    # comparison.md item 28) bumped FastAPI 0.115->0.141/Starlette 0.46->1.7,
+    # and a real route.path on a nested APIRoute object now reports the path
+    # relative to its own router only, dropping every ancestor
+    # `include_router` prefix above it (confirmed live: every route came
+    # back missing api_router's own "/api/v1") -- private internal
+    # representation, not something to keep re-deriving by walking
+    # `_IncludedRouter`/`original_router` by hand every time it changes
+    # again. `app.openapi()` is FastAPI's own public, stable API for "every
+    # real route with its true absolute path" -- it has to get this right,
+    # since it's the app's actual OpenAPI contract -- so use that instead.
+    schema = app.openapi()
     routes: list[tuple[str, str]] = []
-    for route in app.routes:
-        methods = getattr(route, "methods", None)
-        path = getattr(route, "path", None)
-        if not methods or not path:
-            continue
-        routes.extend((m, path) for m in methods)
+    for path, operations in schema["paths"].items():
+        for method in operations:
+            if method.upper() in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                routes.append((method.upper(), path))
     return routes
 
 

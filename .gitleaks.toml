@@ -1,0 +1,21 @@
+title = "TradingOS 2.0 gitleaks config"
+
+# Extends gitleaks' own default rule set (secret-shaped strings across every
+# common provider/format) rather than replacing it.
+[extend]
+useDefault = true
+
+[allowlist]
+# A real gitleaks run (Phase 26, docs/phase20-old-vs-new-comparison.md item
+# 32) against this repo found exactly one false positive: a Docker volume
+# *name* (not a value, not a secret), matched only because its high entropy
+# looks credential-shaped to the generic-api-key heuristic. Scoped to this
+# one fingerprint, not a broad path/rule exclusion, so a real secret
+# introduced anywhere else -- including elsewhere in this same file -- still
+# gets caught.
+regexes = [
+  '''SECRETS_VOLUME = "tradingos-2\.0_secrets"''',
+]
+paths = [
+  '''backend/tests/test_container_settings_persistence\.py''',
+]

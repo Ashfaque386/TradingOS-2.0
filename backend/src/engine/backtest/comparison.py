@@ -9,6 +9,7 @@ constant over the overlap (zero variance makes correlation undefined,
 not zero).
 """
 
+from typing import Any
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -30,7 +31,7 @@ class ComparisonMatrix:
         return self.correlations.get(frozenset((a, b)))
 
 
-def compare_runs(daily_returns_by_run: dict[str, pd.Series]) -> ComparisonMatrix:
+def compare_runs(daily_returns_by_run: dict[str, pd.Series[Any]]) -> ComparisonMatrix:
     run_ids = list(daily_returns_by_run)
     correlations: dict[frozenset[str], float | None] = {}
 

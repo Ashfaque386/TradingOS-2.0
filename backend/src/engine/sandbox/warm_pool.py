@@ -14,7 +14,9 @@ and replaced with a freshly-spawned one rather than reused -- a pool slot
 is never left permanently broken by one bad call.
 """
 
+from typing import Any
 import queue
+from pathlib import Path
 
 from src.engine.sandbox.process_runtime import (
     SandboxWorkerCrashedError,
@@ -29,7 +31,7 @@ from src.engine.sandbox.types import SandboxLimits, SandboxResult
 class SandboxWarmPool:
     def __init__(self, *, size: int = 2) -> None:
         self._size = size
-        self._available: queue.Queue = queue.Queue()
+        self._available: queue.Queue[Any] = queue.Queue()
         for _ in range(size):
             self._available.put(spawn_worker_process())
 
@@ -37,9 +39,9 @@ class SandboxWarmPool:
         self,
         code: str,
         *,
-        params: dict,
-        scratch_dir,
-        data_dir,
+        params: dict[str, Any],
+        scratch_dir: Path,
+        data_dir: Path,
         limits: SandboxLimits | None = None,
     ) -> SandboxResult:
         limits = limits or SandboxLimits()

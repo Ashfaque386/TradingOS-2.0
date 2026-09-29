@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -126,7 +127,7 @@ async def create_refresh_token(
     )
 
 
-async def decode_token(db: AsyncSession, token: str, expected_type: TokenType) -> dict:
+async def decode_token(db: AsyncSession, token: str, expected_type: TokenType) -> dict[str, Any]:
     """Validates against the current signing key only -- a hard cutover,
     on purpose: rotation is a "this may be compromised, end every session
     now" action (see the rotate endpoint's own docstring), not something

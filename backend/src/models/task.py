@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -41,7 +42,7 @@ class Task(Base, TimestampMixin):
     plan_key: Mapped[str] = mapped_column(String(128), nullable=False)
     capability: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     # From TaskSpec.produces_artefact_type at plan time — what artefact_type
     # the task engine tags this task's ResultArtefact with on success, so a
     # dependent task's typed DependencySpec.artefact_type can match it.

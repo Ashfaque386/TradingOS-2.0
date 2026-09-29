@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -37,7 +38,7 @@ class HeartbeatLog(Base):
         ),
         nullable=False,
     )
-    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     checked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

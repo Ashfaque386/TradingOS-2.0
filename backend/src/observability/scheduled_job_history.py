@@ -9,6 +9,7 @@ real `ScheduledJobRun` row per firing, which
 reads back.
 """
 
+from typing import Any
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -28,7 +29,7 @@ _MAX_RUNS_PER_JOB = 50
 
 
 async def _record_run(
-    db_session_factory: Callable, scheduler_name: str, event: JobExecutionEvent
+    db_session_factory: Callable[..., Any], scheduler_name: str, event: JobExecutionEvent
 ) -> None:
     status = ScheduledJobRunStatus.FAILED if event.exception else ScheduledJobRunStatus.SUCCEEDED
     error = str(event.exception) if event.exception else None
@@ -64,7 +65,7 @@ async def _record_run(
 
 
 def attach_run_history_listener(
-    scheduler: AsyncIOScheduler, scheduler_name: str, db_session_factory: Callable
+    scheduler: AsyncIOScheduler, scheduler_name: str, db_session_factory: Callable[..., Any]
 ) -> None:
     def _on_event(event: JobExecutionEvent) -> None:
         task = asyncio.create_task(_record_run(db_session_factory, scheduler_name, event))

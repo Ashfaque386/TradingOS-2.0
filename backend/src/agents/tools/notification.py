@@ -11,6 +11,7 @@ specific channel an agent names, using whatever config that channel
 already has stored (src.notifications.channel_store).
 """
 
+from typing import Any
 from src.notifications.channel_store import (
     NotificationChannelStoreError,
     get_notification_channel_store,
@@ -19,7 +20,7 @@ from src.notifications.senders import send_to_channel
 from src.notifications.types import NotificationChannel
 
 
-async def notification_send(params: dict) -> dict:
+async def notification_send(params: dict[str, Any]) -> dict[str, Any]:
     channel_name = params.get("channel")
     message = params.get("message", "")
 

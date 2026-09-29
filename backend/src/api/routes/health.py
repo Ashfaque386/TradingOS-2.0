@@ -1,3 +1,4 @@
+from typing import Any
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,7 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-async def health(db: AsyncSession = Depends(get_db)) -> dict:
+async def health(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     await db.execute(text("SELECT 1"))
     return {"status": "ok"}
 

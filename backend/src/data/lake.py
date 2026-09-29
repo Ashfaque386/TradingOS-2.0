@@ -176,8 +176,11 @@ def has_data_for(root: Path, symbol: str, day: date, *, subdir: str = DAILY_SUBD
         return False
     con = duckdb.connect(":memory:")
     try:
+        # `key_column` is one of two hardcoded literals ("date"/"timestamp"
+        # above), never attacker/user-controlled -- every genuinely variable
+        # value (path, symbol, day) is a real bound parameter.
         row = con.execute(
-            f"SELECT 1 FROM read_parquet(?) WHERE symbol = ? "
+            f"SELECT 1 FROM read_parquet(?) WHERE symbol = ? "  # nosec B608
             f"AND CAST({key_column} AS DATE) = ? LIMIT 1",
             [str(path), symbol, day],
         ).fetchone()
@@ -192,16 +195,24 @@ def _create_or_replace_view(
     has_files = any((root / subdir).glob("*/*/*.parquet"))
     if has_files:
         glob = (root / subdir / "*" / "*" / "*.parquet").as_posix()
+        # DuckDB has no bind-parameter form for a view/table identifier or a
+        # glob pattern; `view_name`/`columns` are always this module's own
+        # two hardcoded call sites below ("ohlcv_daily"/"ohlcv_intraday",
+        # DAILY_OHLCV_COLUMNS/INTRADAY_OHLCV_COLUMNS), and `glob` is built
+        # from this process's own configured data-lake root, never from
+        # user/request input.
         con.execute(
-            f"CREATE OR REPLACE VIEW {view_name} AS "
+            f"CREATE OR REPLACE VIEW {view_name} AS "  # nosec B608
             f"SELECT * FROM read_parquet('{glob}', union_by_name=true)"
         )
-        return con.execute(f"SELECT COUNT(*) FROM {view_name}").fetchone()[0]  # type: ignore[index]
+        return con.execute(
+            f"SELECT COUNT(*) FROM {view_name}"  # nosec B608
+        ).fetchone()[0]  # type: ignore[index]
 
     # No partition files exist yet -- define an empty, correctly-typed view
     # rather than letting a bare read_parquet(glob) raise "no files found".
     col_defs = ", ".join(f"NULL::{_DUCKDB_TYPE[c]} AS {c}" for c in columns)
-    con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT {col_defs} WHERE FALSE")
+    con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT {col_defs} WHERE FALSE")  # nosec B608
     return 0
 
 

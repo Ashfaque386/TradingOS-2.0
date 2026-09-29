@@ -29,6 +29,7 @@ below follow Upstox's publicly documented v2 API envelope from training
 knowledge; this sandbox cannot verify them against a live call.
 """
 
+from typing import Any
 from datetime import UTC, datetime
 
 import httpx
@@ -71,13 +72,13 @@ class UpstoxAdapter:
         self._transport = transport
         self._timeout = timeout
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, Any]:
         return {
             "Authorization": f"Bearer {self._credentials.access_token}",
             "Accept": "application/json",
         }
 
-    async def _request(self, method: str, path: str, **kwargs) -> dict:
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=self._base_url, transport=self._transport, timeout=self._timeout
         ) as client:
@@ -88,8 +89,8 @@ class UpstoxAdapter:
             raise BrokerRequestError(resp.status_code, f"upstox {method} {path}: {resp.text[:200]}")
         return resp.json()
 
-    def build_order_payload(self, order: OrderRequest) -> dict:
-        payload: dict = {
+    def build_order_payload(self, order: OrderRequest) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "instrument_token": order.symbol,
             "quantity": order.quantity,
             "product": order.product,
@@ -117,7 +118,7 @@ class UpstoxAdapter:
     async def modify_order(
         self, broker_order_id: str, *, price: float | None = None, quantity: int | None = None
     ) -> BrokerOrderResult:
-        payload: dict = {"order_id": broker_order_id}
+        payload: dict[str, Any] = {"order_id": broker_order_id}
         if price is not None:
             payload["price"] = price
         if quantity is not None:

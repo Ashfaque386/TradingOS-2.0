@@ -14,6 +14,7 @@ simulated success.
 """
 
 from datetime import UTC, datetime
+from collections.abc import AsyncIterator
 
 import httpx
 import structlog
@@ -61,7 +62,7 @@ def get_channel_store() -> NotificationChannelStore:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
-async def get_telegram_http_client():
+async def get_telegram_http_client() -> AsyncIterator[httpx.AsyncClient]:
     """A FastAPI dependency, not a bare `httpx.AsyncClient(...)` call, so
     tests can override it with a client bound to httpx.MockTransport --
     same "real code, injected transport in tests" posture as

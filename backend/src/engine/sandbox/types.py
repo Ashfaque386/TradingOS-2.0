@@ -1,5 +1,6 @@
 """Shared types for the strategy sandbox (Build Spec §9)."""
 
+from typing import Any
 from dataclasses import dataclass
 
 
@@ -13,7 +14,7 @@ class SandboxLimits:
 @dataclass(frozen=True, slots=True)
 class SandboxResult:
     success: bool
-    result: dict | None = None
+    result: dict[str, Any] | None = None
     error: str | None = None
     duration_seconds: float = 0.0
     stdout: str = ""

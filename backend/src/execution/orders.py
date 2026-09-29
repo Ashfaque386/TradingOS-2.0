@@ -7,5 +7,8 @@ module from src.agents.heartbeat or src.agents.scheduler.
 """
 
 
-def place_order(*args, **kwargs):
+from typing import Any, NoReturn
+
+
+def place_order(*args: Any, **kwargs: Any) -> NoReturn:
     raise NotImplementedError("order placement ships in a later phase")

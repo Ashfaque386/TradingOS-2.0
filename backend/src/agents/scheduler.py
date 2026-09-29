@@ -33,7 +33,7 @@ def start_heartbeat_loop(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     interval_seconds: int = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
-) -> asyncio.Task:
+) -> asyncio.Task[None]:
     async def _loop() -> None:
         while True:
             await asyncio.sleep(interval_seconds)

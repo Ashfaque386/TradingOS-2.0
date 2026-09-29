@@ -21,11 +21,13 @@ cheap/small dev model wired up locally via Ollama), the same code path
 serves the real completion instead.
 """
 
+from typing import Any, cast
 import time
 from collections.abc import Awaitable, Callable
 
 import structlog
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.llm_router import LlmRouter, LlmRouterExhaustedError, get_llm_router
 from src.agents.roster import PIPELINE_NODE_AGENTS
@@ -39,10 +41,10 @@ logger = structlog.get_logger(__name__)
 MAX_VALIDATION_ATTEMPTS = 3
 MAX_REJECTIONS = 5
 
-NodeFn = Callable[[TradingOSGraphState, LlmRouter], Awaitable[dict]]
+NodeFn = Callable[[TradingOSGraphState, LlmRouter], Awaitable[dict[str, Any]]]
 
 
-async def _llm_or_fallback(router: LlmRouter, agent_id: str, prompt: str, fallback: dict) -> dict:
+async def _llm_or_fallback(router: LlmRouter, agent_id: str, prompt: str, fallback: dict[str, Any]) -> dict[str, Any]:
     try:
         result = await router.complete(agent_id=agent_id, prompt=prompt)
         return {"source": "llm", "provider": result.provider.value, "text": result.text}
@@ -61,7 +63,7 @@ def _with_active_prompt(state: TradingOSGraphState, agent_id: str, task_prompt: 
     return f"{active}\n\n{task_prompt}" if active else task_prompt
 
 
-async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     brief = await _llm_or_fallback(
         router,
         "ceo-agent",
@@ -73,12 +75,12 @@ async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> di
     return {"ceo_brief": brief, "node_log": [*state.node_log, "ceo_kickoff"]}
 
 
-async def _node_market_analysis(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_market_analysis(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     analysis = {"trend": "neutral", "confidence": 0.5, "objective": state.objective}
     return {"market_analysis": analysis, "node_log": [*state.node_log, "market_analysis"]}
 
 
-async def _node_strategy_generation(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_strategy_generation(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     strategy = await _llm_or_fallback(
         router,
         "strategy-generator",
@@ -92,12 +94,12 @@ async def _node_strategy_generation(state: TradingOSGraphState, router: LlmRoute
     return {"strategy": strategy, "node_log": [*state.node_log, "strategy_generation"]}
 
 
-async def _node_options_strategy(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_options_strategy(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     legs = {"legs": [], "naked_options_found": False}
     return {"options_legs": legs, "node_log": [*state.node_log, "options_strategy"]}
 
 
-async def _node_code_generation(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_code_generation(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     result = await _llm_or_fallback(
         router,
         "python-code-generator",
@@ -116,12 +118,12 @@ async def _node_code_generation(state: TradingOSGraphState, router: LlmRouter) -
     }
 
 
-async def _node_compliance_check(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_compliance_check(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     verdict = {"blocked": False, "reason": None}
     return {"compliance_verdict": verdict, "node_log": [*state.node_log, "compliance_check"]}
 
 
-async def _node_code_validation(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_code_validation(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     result = code_format_lint({"code": state.generated_code or ""})
     return {
         "validation_result": result,
@@ -130,33 +132,33 @@ async def _node_code_validation(state: TradingOSGraphState, router: LlmRouter) -
     }
 
 
-async def _node_backtesting(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_backtesting(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     metrics = {"sharpe": 1.0, "max_drawdown": 0.1}
     return {"backtest_metrics": metrics, "node_log": [*state.node_log, "backtesting"]}
 
 
-async def _node_evaluation(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_evaluation(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     sharpe = (state.backtest_metrics or {}).get("sharpe", 0.0)
     verdict = {"verdict": "pass" if sharpe >= 0.5 else "fail", "sharpe": sharpe}
     return {"evaluation_verdict": verdict, "node_log": [*state.node_log, "evaluation"]}
 
 
-async def _node_optimization(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_optimization(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     result = {"improved": True}
     return {"optimization_result": result, "node_log": [*state.node_log, "optimization"]}
 
 
-async def _node_risk_assessment(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_risk_assessment(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     result = {"within_limits": True}
     return {"risk_assessment": result, "node_log": [*state.node_log, "risk_assessment"]}
 
 
-async def _node_deployment(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_deployment(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     result = {"deployed": True, "target": "paper"}
     return {"deployment_result": result, "node_log": [*state.node_log, "deployment"]}
 
 
-async def _node_memory_ingest(state: TradingOSGraphState, router: LlmRouter) -> dict:
+async def _node_memory_ingest(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     return {
         "rejection_count": state.rejection_count + 1,
         "node_log": [*state.node_log, "memory_ingest"],
@@ -207,14 +209,16 @@ def _route_after_memory_ingest(state: TradingOSGraphState) -> str:
 
 def _make_skip_node(
     node_name: str, agent_id: str
-) -> Callable[[TradingOSGraphState], Awaitable[dict]]:
-    async def node(state: TradingOSGraphState) -> dict:
+) -> Callable[[TradingOSGraphState], Awaitable[dict[str, Any]]]:
+    async def node(state: TradingOSGraphState) -> dict[str, Any]:
         return {"node_log": [*state.node_log, f"{node_name}:skipped(agent-disabled:{agent_id})"]}
 
     return node
 
 
-def build_graph(enabled_agents: frozenset[str] | None = None, *, router: LlmRouter | None = None):
+def build_graph(
+    enabled_agents: frozenset[str] | None = None, *, router: LlmRouter | None = None
+) -> CompiledStateGraph[TradingOSGraphState, None, TradingOSGraphState, TradingOSGraphState]:
     """Compiles the 13-node pipeline. enabled_agents defaults to "every
     roster agent enabled"; pass the subset that's actually enabled (e.g.
     from src.gateway.state's live effective-agent config) to have every
@@ -228,12 +232,13 @@ def build_graph(enabled_agents: frozenset[str] | None = None, *, router: LlmRout
     graph = StateGraph(TradingOSGraphState)
 
     for node_name, agent_id in PIPELINE_NODE_AGENTS:
+        node: Callable[[TradingOSGraphState], Awaitable[dict[str, Any]]]
         if agent_id in enabled_agents:
             real_fn = NODE_FUNCTIONS[node_name]
 
-            async def node(
+            async def timed_node(
                 state: TradingOSGraphState, _fn: NodeFn = real_fn, _name: str = node_name
-            ) -> dict:
+            ) -> dict[str, Any]:
                 started = time.perf_counter()
                 try:
                     return await _fn(state, bound_router)
@@ -241,9 +246,19 @@ def build_graph(enabled_agents: frozenset[str] | None = None, *, router: LlmRout
                     agent_node_duration_seconds.labels(node=_name).observe(
                         time.perf_counter() - started
                     )
+
+            node = timed_node
         else:
             node = _make_skip_node(node_name, agent_id)
-        graph.add_node(node_name, node)
+        # langgraph's own add_node() overloads are generic over a
+        # TypedDict/dataclass/BaseModel-bound NodeInputT and don't cleanly
+        # resolve for a plain async Callable[[TradingOSGraphState],
+        # Awaitable[dict[str, Any]]] argument -- `node` itself keeps its
+        # real, honest type above; only this call into langgraph's own
+        # heavily-overloaded API is widened, since correctly modeling those
+        # overloads isn't worth the churn for what is, at runtime, this
+        # library's own standard "async node function" usage.
+        graph.add_node(node_name, cast(Any, node))
 
     graph.set_entry_point("ceo_kickoff")
     graph.add_edge("ceo_kickoff", "market_analysis_step")

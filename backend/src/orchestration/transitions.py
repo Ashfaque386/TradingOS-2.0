@@ -15,10 +15,13 @@ gets the same check for free, and no code path can skip it just by calling
 a different-looking function, since there's only one primitive.
 """
 
+from typing import Any, cast
 from dataclasses import dataclass
+import uuid
 
-from sqlalchemy import Column, update
+from sqlalchemy import CursorResult, Table, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql.elements import ColumnElement
 
 
@@ -46,13 +49,13 @@ class ApprovalGate:
 async def conditional_transition(
     db: AsyncSession,
     *,
-    table,
-    id_column: Column,
-    row_id,
-    status_column: Column,
-    from_status,
-    to_status,
-    extra_values: dict | None = None,
+    table: Table,
+    id_column: InstrumentedAttribute[Any],
+    row_id: uuid.UUID,
+    status_column: InstrumentedAttribute[Any],
+    from_status: Any,
+    to_status: Any,
+    extra_values: dict[ColumnElement[Any] | InstrumentedAttribute[Any] | str, object] | None = None,
     approval: ApprovalGate | None = None,
 ) -> bool:
     """Race-safe UPDATE ... WHERE id = row_id AND status = from_status,
@@ -79,7 +82,7 @@ async def conditional_transition(
                 approval.subject_type, approval.subject_id, approval.transition_type
             )
 
-    values: dict[ColumnElement | str, object] = {status_column: to_status}
+    values: dict[ColumnElement[Any] | InstrumentedAttribute[Any] | str, object] = {status_column: to_status}
     if extra_values:
         values.update(extra_values)
 
@@ -88,4 +91,7 @@ async def conditional_transition(
     stmt = update(table).where(id_column == row_id, status_column == from_status).values(values)
     result = await db.execute(stmt)
     await db.commit()
-    return result.rowcount == 1
+    # An UPDATE statement's execute() always returns a real CursorResult at
+    # runtime (.rowcount is populated) -- Result[Any] is only the generic
+    # base type db.execute()'s signature can express statically.
+    return cast(CursorResult[Any], result).rowcount == 1

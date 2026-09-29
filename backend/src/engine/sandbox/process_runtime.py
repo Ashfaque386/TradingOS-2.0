@@ -22,6 +22,7 @@ warm_pool.py's job, built on the same spawn_worker_process()/send_request()
 primitives this module exposes.
 """
 
+from typing import Any
 import json
 import select
 import subprocess
@@ -47,14 +48,16 @@ class SandboxWorkerHungError(SandboxError):
     pass
 
 
-def spawn_worker_process() -> subprocess.Popen:
+def spawn_worker_process() -> subprocess.Popen[str]:
     """The one place `unshare --net` + the worker subprocess is spawned --
     both the cold one-off runtime below and the warm pool build on this
     exact primitive, so there's only one code path whose network isolation
     needs to be trusted (and tested).
     """
     cmd = [*UNSHARE_NET_ARGS, sys.executable, "-u", "-m", "src.engine.sandbox.worker_main"]
-    return subprocess.Popen(
+    # `cmd` is this module's own fixed unshare/python invocation -- the
+    # strategy code being sandboxed is sent over stdin below, never argv.
+    return subprocess.Popen(  # nosec B603
         cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -64,7 +67,7 @@ def spawn_worker_process() -> subprocess.Popen:
     )
 
 
-def send_request(proc: subprocess.Popen, request: dict, *, timeout_seconds: float) -> dict:
+def send_request(proc: subprocess.Popen[str], request: dict[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
     """One newline-delimited JSON request/response round-trip against an
     already-spawned worker (see worker_main.py for the protocol). Raises
     rather than blocking forever if the worker doesn't answer in time or
@@ -89,7 +92,7 @@ def send_request(proc: subprocess.Popen, request: dict, *, timeout_seconds: floa
     return json.loads(line)
 
 
-def terminate_worker(proc: subprocess.Popen) -> None:
+def terminate_worker(proc: subprocess.Popen[str]) -> None:
     try:
         if proc.stdin:
             proc.stdin.close()
@@ -108,7 +111,7 @@ class RestrictedProcessSandboxRuntime:
         self,
         code: str,
         *,
-        params: dict,
+        params: dict[str, Any],
         scratch_dir: Path,
         data_dir: Path,
         limits: SandboxLimits | None = None,

@@ -5,7 +5,8 @@ callers can be written against the real interface now.
 """
 
 
-def sandbox_dry_run(params: dict) -> dict:
+from typing import Any
+def sandbox_dry_run(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "ran": True,
         "sandboxed": False,

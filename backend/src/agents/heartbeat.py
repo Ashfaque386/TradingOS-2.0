@@ -21,6 +21,7 @@ src.agents.tools.registry.execute_skill() -- the same grant-gated call path
 everything else uses -- restricted to read-only skills (market-data-read).
 """
 
+from typing import Any
 import time
 
 import structlog
@@ -49,7 +50,7 @@ async def run_heartbeat(db: AsyncSession, agent_id: str) -> HeartbeatLog:
     if agent_id not in ROSTER_BY_ID:
         raise ValueError(f"unknown agent id: {agent_id!r}")
 
-    details: dict = {"checked_at": time.time()}
+    details: dict[str, Any] = {"checked_at": time.time()}
     status = HeartbeatStatus.OK
     try:
         details["market_data"] = await execute_skill(agent_id, "market-data-read")

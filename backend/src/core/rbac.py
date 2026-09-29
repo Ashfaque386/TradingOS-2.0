@@ -12,7 +12,13 @@ from collections.abc import Iterable
 from fastapi import Depends, HTTPException, Request, status
 
 from src.api.deps import get_current_user
-from src.core.roles import Role
+# "as Role" (not a plain re-import): every route module imports Role from
+# here, not from src.core.roles directly, since this is where it's used
+# alongside register_policy/require_role -- mypy --strict's
+# --no-implicit-reexport otherwise treats that as a private import and
+# refuses to let those ~25 call sites see it as a real attribute of this
+# module.
+from src.core.roles import Role as Role
 from src.models.user import User
 
 # (HTTP method, route path template) -> roles allowed to call it.
@@ -37,6 +43,20 @@ async def require_role(request: Request, current_user: User = Depends(get_curren
     """
     route = request.scope.get("route")
     path = route.path if route is not None else request.url.path
+    # Phase 26's dependency-CVE pass (docs/phase20-old-vs-new-comparison.md
+    # item 28) bumped FastAPI 0.115->0.141/Starlette 0.46->1.7 to close real
+    # CVEs, and surfaced a real behavior change: `route.path` now omits an
+    # outer `include_router` prefix specifically when two sibling routers
+    # share an identical inner prefix (this app's `broker_oauth.py` and
+    # `broker_credentials.py` both use prefix="/broker-credentials") --
+    # confirmed live: `route.path` came back `/broker-credentials/zerodha/
+    # login-url`, missing the outer api_router's `/api/v1`, while
+    # `request.url.path` was still the correct full path. Every entry in
+    # `_POLICY_TABLE` is registered with the `/api/v1` prefix (the whole
+    # app's own convention), so reconstruct it the same way for a route
+    # whose own `.path` dropped it, rather than trusting `.path` blindly.
+    if not path.startswith("/api/v1") and request.url.path.startswith("/api/v1"):
+        path = "/api/v1" + path
     allowed_roles = _POLICY_TABLE.get((request.method.upper(), path))
 
     if not allowed_roles:
