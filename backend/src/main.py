@@ -11,7 +11,7 @@ from src.agents.scheduler import start_heartbeat_loop
 from src.api.router import api_router
 from src.api.routes.health import router as health_router
 from src.brokers.factory import build_configured_adapter
-from src.brokers.tick_source import build_tick_source
+from src.brokers.tick_source import get_tick_source
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
@@ -114,16 +114,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # (data_lake_price_provider), not a permanent fake. The tick source is
     # no longer a permanent mock as of Phase 8: build_tick_source() polls
     # real broker quotes when credentials are configured in the secrets
-    # store, and falls back to the Phase 7 mock feed otherwise (which is
-    # what this sandbox, with no live broker credentials, always
-    # resolves to).
+    # store, and falls back to the Phase 7 mock feed otherwise. Passed as
+    # a factory (get_tick_source itself, not get_tick_source()) so the
+    # tick-publish job re-resolves it on every firing -- a broker
+    # connected or disconnected later via Settings now takes effect on
+    # that job's next firing instead of only after a backend restart
+    # (Phase 17 Part 4 real-world testing fix); get_tick_source only
+    # actually rebuilds when the configured broker/credentials changed,
+    # see src.brokers.tick_source's own docstring for why.
     paper_trading_scheduler = start_paper_trading_scheduler(
         AsyncSessionLocal,
         redis=redis,
         price_provider=data_lake_price_provider,
         order_book_provider=MockOrderBookProvider(),
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
-        tick_source=build_tick_source(),
+        tick_source_factory=get_tick_source,
     )
 
     # Autonomous LiveExecutionPipeline (Build Spec §12, Phase 18) --

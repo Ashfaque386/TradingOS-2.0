@@ -9,7 +9,12 @@ import httpx
 from cryptography.fernet import Fernet
 
 from src.brokers.base import BrokerCredentials
-from src.brokers.tick_source import BrokerQuoteTickSource, build_tick_source, is_broker_configured
+from src.brokers.tick_source import (
+    BrokerQuoteTickSource,
+    _RefreshingTickSource,
+    build_tick_source,
+    is_broker_configured,
+)
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.config import get_settings
 from src.engine.paper_trading.tick_feed import MockTickSource
@@ -115,5 +120,109 @@ def test_is_broker_configured_is_true_once_a_broker_has_real_credentials(tmp_pat
 
         assert is_broker_configured() is True
         assert isinstance(build_tick_source(), BrokerQuoteTickSource)
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_refreshing_tick_source_reuses_the_same_instance_when_config_is_unchanged(
+    tmp_path, monkeypatch
+):
+    """The real bug this fix closes was two-sided: rebuilding on every
+    call would silently reset MockTickSource's per-symbol random walk
+    every tick-publish firing. Proves the cached instance survives
+    repeated calls when nothing about the broker config changed."""
+    monkeypatch.delenv("SECRETS_ENCRYPTION_KEY", raising=False)
+    _reset_settings_and_store_caches()
+    try:
+        refreshing = _RefreshingTickSource()
+        first = refreshing()
+        second = refreshing()
+        assert first is second
+        assert isinstance(first, MockTickSource)
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_refreshing_tick_source_rebuilds_the_moment_a_broker_is_connected(tmp_path, monkeypatch):
+    """The actual Phase 17 Part 4 bug: a broker connected via Settings
+    used to only take effect after a backend restart, since
+    build_tick_source() was resolved once at process startup. Proves the
+    next call after credentials are saved picks it up immediately."""
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_settings_and_store_caches()
+    try:
+        refreshing = _RefreshingTickSource()
+        before = refreshing()
+        assert isinstance(before, MockTickSource)
+
+        store = SecretsStore(store_path, key)
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
+        get_secrets_store.cache_clear()
+
+        after = refreshing()
+        assert isinstance(after, BrokerQuoteTickSource)
+        assert after.adapter.broker_name == "zerodha"
+        assert after is not before
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_refreshing_tick_source_rebuilds_when_the_same_brokers_credentials_change(
+    tmp_path, monkeypatch
+):
+    """Re-saving a corrected key/token for an already-configured broker
+    must also refresh -- the broker-name-only half of the fingerprint
+    wouldn't catch this, since "zerodha" stays "zerodha" either way."""
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_settings_and_store_caches()
+    try:
+        store = SecretsStore(store_path, key)
+        store.set_credentials("zerodha", BrokerCredentials(api_key="old-key", access_token="t"))
+        get_secrets_store.cache_clear()
+
+        refreshing = _RefreshingTickSource()
+        before = refreshing()
+        assert isinstance(before, BrokerQuoteTickSource)
+
+        store.set_credentials("zerodha", BrokerCredentials(api_key="new-key", access_token="t2"))
+        get_secrets_store.cache_clear()
+
+        after = refreshing()
+        assert isinstance(after, BrokerQuoteTickSource)
+        assert after is not before
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_refreshing_tick_source_falls_back_to_mock_once_a_broker_is_disconnected(
+    tmp_path, monkeypatch
+):
+    """The symmetric case: disconnecting a broker must also take effect
+    on the next call, not just connecting one."""
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_settings_and_store_caches()
+    try:
+        store = SecretsStore(store_path, key)
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
+        get_secrets_store.cache_clear()
+
+        refreshing = _RefreshingTickSource()
+        before = refreshing()
+        assert isinstance(before, BrokerQuoteTickSource)
+
+        store.delete_credentials("zerodha")
+        get_secrets_store.cache_clear()
+
+        after = refreshing()
+        assert isinstance(after, MockTickSource)
     finally:
         _reset_settings_and_store_caches()

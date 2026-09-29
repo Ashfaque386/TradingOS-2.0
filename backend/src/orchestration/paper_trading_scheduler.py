@@ -7,14 +7,28 @@ outside market hours the job is a fast no-op, not skipped or cancelled, so
 "runs continuously during market hours" is literally true even when
 there's nothing to do at 2am.
 
-The tick-publish job's behavior depends entirely on which `TickSource` it
-is constructed with (`src.brokers.tick_source.build_tick_source`, Build
-Spec §13): a `BrokerQuoteTickSource` polling real broker quotes when
-credentials are configured, or the Phase 7 `MockTickSource` fallback
-otherwise -- this job itself has no opinion on which. It is
+The tick-publish job's behavior depends entirely on which `TickSource`
+`tick_source_factory` (`src.brokers.tick_source.build_tick_source`, Build
+Spec §13) resolves to: a `BrokerQuoteTickSource` polling real broker
+quotes when credentials are configured, or the Phase 7 `MockTickSource`
+fallback otherwise -- this job itself has no opinion on which. It is
 market-hours-gated either way, since a mock feed advancing prices (or a
 real feed polling a broker) outside real trading hours would be
 dishonest simulation or wasted API calls, not extra test coverage.
+
+`tick_source_factory` is called fresh on every firing (Phase 17 Part 4
+real-world testing fix), not resolved once at startup and reused forever
+-- the earlier design captured a single `TickSource` when the scheduler
+was built, so a broker connected (or disconnected) later via Settings
+only took effect after a backend restart, the same class of staleness
+Phase 17's LLM-router fix ("the router singleton never saw keys saved in
+Settings... it now re-reads... on each call") already closed in a sibling
+subsystem. `build_configured_adapter` (what `build_tick_source` calls)
+is cheap to call repeatedly -- it only reads the secrets store and
+constructs a lightweight adapter object; the real per-broker
+`BrokerCircuitBreaker` it wraps comes from `breaker_registry`'s shared
+registry, not a fresh instance per call, so re-resolving every 3 seconds
+never loses circuit-breaker state.
 
 No job here, or anywhere in `src.orchestration.paper_trading`, ever waits
 on a human: the daily job persists signals straight away, and the drain
@@ -24,6 +38,7 @@ order" means operationally.
 """
 
 import time
+from collections.abc import Callable
 
 import pandas as pd
 import structlog
@@ -87,13 +102,15 @@ async def run_daily_signal_job(
 
 
 async def run_tick_publish_job(
-    session_factory: async_sessionmaker[AsyncSession], redis: Redis, tick_source: TickSource
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    tick_source_factory: Callable[[], TickSource],
 ) -> None:
     if not is_market_open_ist():
         return
     symbols = await _active_symbols(session_factory)
     if symbols:
-        await publish_ticks_once(redis, tick_source, symbols)
+        await publish_ticks_once(redis, tick_source_factory(), symbols)
 
 
 async def run_tick_drain_job(
@@ -158,7 +175,7 @@ def start_paper_trading_scheduler(
     price_provider: PriceDataProvider,
     order_book_provider: OrderBookProvider,
     regulatory_provider: RegulatoryDataProvider,
-    tick_source: TickSource,
+    tick_source_factory: Callable[[], TickSource],
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST)
 
@@ -173,7 +190,7 @@ def start_paper_trading_scheduler(
         with_job_correlation_id(TICK_PUBLISH_JOB_ID, run_tick_publish_job),
         "interval",
         seconds=TICK_PUBLISH_INTERVAL_SECONDS,
-        args=[session_factory, redis, tick_source],
+        args=[session_factory, redis, tick_source_factory],
         id=TICK_PUBLISH_JOB_ID,
         replace_existing=True,
     )

@@ -61,12 +61,12 @@ async def test_mock_tick_publish_job_is_gated_by_market_hours(
     await redis_client.delete(tick_stream_key("SCHEDSTOCK"))
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: False)
-    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource)
     length = await redis_client.xlen(tick_stream_key("SCHEDSTOCK"))
     assert length == 0, "closed-market gating must prevent any tick publish"
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
-    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource)
     length_after = await redis_client.xlen(tick_stream_key("SCHEDSTOCK"))
     assert length_after == 1
 
@@ -85,7 +85,7 @@ async def test_tick_drain_job_processes_ticks_and_advances_the_cursor(
         )
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
-    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource)
 
     await scheduler_module.run_tick_drain_job(
         db_session_factory,
@@ -132,7 +132,7 @@ async def test_start_paper_trading_scheduler_registers_and_runs_all_jobs(
         price_provider=FakeDailyPriceProvider(seed_by_symbol={"SCHEDSTOCK": 1}),
         order_book_provider=MockOrderBookProvider(),
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
-        tick_source=MockTickSource(),
+        tick_source_factory=MockTickSource,
     )
     try:
         job_ids = {job.id for job in scheduler.get_jobs()}
@@ -178,7 +178,7 @@ async def test_tick_drain_job_observes_ws_latency_metric_and_feeds_the_latency_g
     )
 
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
-    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource())
+    await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource)
 
     before = _ws_latency_observation_count()
 
