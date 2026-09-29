@@ -1,8 +1,8 @@
-from typing import Any
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Any
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext

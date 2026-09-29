@@ -6,11 +6,13 @@ filesystem events for a single logical save (many editors write-then-
 rename, or fire multiple modify events) don't cause redundant DB writes.
 """
 
-from typing import Any
 import asyncio
 import hashlib
+import os
 from collections.abc import Callable
+from concurrent.futures import Future as ConcurrentFuture
 from pathlib import Path
+from typing import Any
 
 import structlog
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -37,15 +39,15 @@ class _Handler(FileSystemEventHandler):
         self._on_change()
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        self._maybe_trigger(event.src_path, event.is_directory)
+        self._maybe_trigger(os.fsdecode(event.src_path), event.is_directory)
 
     def on_created(self, event: FileSystemEvent) -> None:
-        self._maybe_trigger(event.src_path, event.is_directory)
+        self._maybe_trigger(os.fsdecode(event.src_path), event.is_directory)
 
     def on_moved(self, event: FileSystemEvent) -> None:
         # Some editors save via write-to-temp-file then rename over the target.
         dest_path = getattr(event, "dest_path", "")
-        self._maybe_trigger(dest_path, event.is_directory)
+        self._maybe_trigger(os.fsdecode(dest_path), event.is_directory)
 
 
 class ConfigWatcher:
@@ -83,7 +85,7 @@ class ConfigWatcher:
         future.add_done_callback(self._log_task_exception)
 
     @staticmethod
-    def _log_task_exception(future: "asyncio.Future[Any]") -> None:
+    def _log_task_exception(future: "ConcurrentFuture[Any]") -> None:
         exc = future.exception()
         if exc is not None:
             logger.error("agent_gateway.hot_reload_apply_crashed", error=str(exc))

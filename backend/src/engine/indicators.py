@@ -13,8 +13,9 @@ elsewhere (Phase 5's null correlations, Phase 7's honest partial fills,
 Phase 9's honest `pending_confirmation`).
 """
 
-from typing import Any
 from __future__ import annotations
+
+from typing import Any
 
 import pandas as pd
 

@@ -2,8 +2,9 @@
 broker/options data feed is wired yet.
 """
 
-
 from typing import Any
+
+
 def option_chain_read(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "underlying": params.get("underlying"),

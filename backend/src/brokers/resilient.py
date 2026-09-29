@@ -15,8 +15,8 @@ open/cooldown/half-open state machine, only adapts the richer Phase 8
 `send_order`) onto that one breaker's generic `call(fn)`.
 """
 
-from typing import Any
 import time
+from typing import Any
 
 from src.brokers.base import (
     BrokerAdapter,

@@ -9,10 +9,10 @@ real `ScheduledJobRun` row per firing, which
 reads back.
 """
 
-from typing import Any
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, JobExecutionEvent

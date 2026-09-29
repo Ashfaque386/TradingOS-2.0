@@ -17,8 +17,8 @@ self-service check (an admin acting on a *different* admin account could
 just as easily lock the whole system out).
 """
 
-from typing import Any, cast
 import uuid
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import CursorResult, func, select, update

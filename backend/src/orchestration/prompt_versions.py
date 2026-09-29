@@ -103,7 +103,7 @@ async def get_active_prompts(db: AsyncSession, agent_ids: list[str]) -> dict[str
             PromptVersion.status == PromptVersionStatus.ACTIVE,
         )
     )
-    return dict(result.all())
+    return {agent_id: content for agent_id, content in result.all()}
 
 
 def _unified_diff(old: PromptVersion, new: PromptVersion) -> str:

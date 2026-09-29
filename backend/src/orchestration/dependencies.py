@@ -4,7 +4,6 @@ upstream failure.
 """
 
 import uuid
-
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update

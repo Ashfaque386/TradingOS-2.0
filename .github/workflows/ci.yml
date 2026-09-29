@@ -124,13 +124,12 @@ jobs:
         working-directory: backend
         run: bandit -c pyproject.toml -r src -q
 
-      # Advisory only, deliberately not gating: a real `mypy --strict` run
-      # against this codebase (which had never been type-checked this
-      # strictly before) found 428 errors across 136 of 249 source files --
-      # see [tool.mypy] in pyproject.toml. Reports on every build so the
-      # real number stays visible; clearing that backlog is its own future
-      # effort, not something to rush through gating merges on a
-      # pre-existing debt this step didn't create.
+      # Still advisory, not gating, even though the original 428-error
+      # backlog (see [tool.mypy] in pyproject.toml) is now fully closed: a
+      # clean run today doesn't by itself make this project's stated policy
+      # "mypy failures block merges" -- kept `continue-on-error` so a
+      # regression here is loud in the Actions log on every build without
+      # silently blocking a PR whose author hasn't opted into that gate.
       - name: mypy --strict (advisory)
         working-directory: backend
         run: mypy src

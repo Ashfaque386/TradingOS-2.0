@@ -13,9 +13,9 @@ those same real, already-decided numbers, the same
 already uses.
 """
 
-from typing import Any
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

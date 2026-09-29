@@ -19,8 +19,8 @@ gate in addition to this pre-deployment check (Build Spec §8 requires
 both; this module is only the pre-deployment half).
 """
 
-from typing import Any
 from dataclasses import dataclass, field
+from typing import Any
 
 
 def mock_option_chain(underlying: str, expiry: str) -> dict[str, Any]:

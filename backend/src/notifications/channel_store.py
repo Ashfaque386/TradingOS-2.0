@@ -18,13 +18,13 @@ inbound_router). An empty allowlist is not "allow everyone"; it is "no one
 is verified yet."
 """
 
-from typing import Any
 import json
 import os
 import stat
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -89,7 +89,7 @@ class NotificationChannelStore:
                 f"notification channel store at {self._path} could not be decrypted "
                 "-- wrong encryption key or a corrupted file"
             ) from exc
-        return json.loads(plaintext)
+        return cast(dict[str, Any], json.loads(plaintext))
 
     def _write_all(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

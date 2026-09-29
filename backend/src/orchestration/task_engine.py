@@ -20,11 +20,11 @@ per-test `db_session_factory` fixture, so this is fully exercisable in
 isolation without touching the app's real global engine.
 """
 
-from typing import Any, cast
 import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import structlog
 from redis.asyncio import Redis

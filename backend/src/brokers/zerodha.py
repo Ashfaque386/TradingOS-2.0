@@ -47,11 +47,11 @@ in CI, same honest-stub posture as src.agents.llm_router's provider
 clients.
 """
 
-from typing import Any
 import csv
 import io
 import time
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import httpx
 
@@ -96,7 +96,7 @@ class ZerodhaKiteAdapter:
         credentials: BrokerCredentials,
         *,
         base_url: str = DEFAULT_BASE_URL,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         self._credentials = credentials
@@ -124,7 +124,8 @@ class ZerodhaKiteAdapter:
             raise BrokerRequestError(
                 resp.status_code, f"zerodha {method} {path}: {resp.text[:200]}"
             )
-        return resp.json()
+        # httpx's own Response.json() return type is untyped (Any).
+        return cast(dict[str, Any], resp.json())
 
     def build_order_payload(self, order: OrderRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -251,7 +252,7 @@ class ZerodhaKiteAdapter:
             return {}
         params = [("i", f"NFO:{symbol}") for symbol in tradingsymbols]
         data = await self._request("GET", "/quote", params=params)
-        return data.get("data", {})
+        return cast(dict[str, dict[str, Any]], data.get("data", {}))
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         """Real Kite Connect data end to end: strikes/tradingsymbols

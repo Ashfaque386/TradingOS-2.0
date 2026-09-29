@@ -13,11 +13,11 @@ divergence-check is nothing more than running the same verification twice
 against two different sources and comparing.
 """
 
-from typing import Any
 import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 # Sequence 1's previous_hash -- a fixed, documented genesis marker, not a
 # real hash of anything. Distinguishing "first row" from "a row whose

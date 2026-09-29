@@ -1,7 +1,7 @@
 """Shared types for the strategy sandbox (Build Spec §9)."""
 
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)

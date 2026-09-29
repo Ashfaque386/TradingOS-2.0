@@ -16,6 +16,7 @@ established for its own Redis publish.
 """
 
 from typing import Any
+
 import structlog
 
 from src.notifications.channel_store import get_notification_channel_store

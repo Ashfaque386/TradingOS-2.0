@@ -8,10 +8,10 @@ test here and is exercised directly with hand-built graphs, not only
 indirectly through the fake planner's own (always-valid) output.
 """
 
-from typing import Any
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from typing import Any
 
 import structlog
 from sqlalchemy import update

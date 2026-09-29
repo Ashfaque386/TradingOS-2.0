@@ -8,10 +8,12 @@ phase's demo-trigger endpoints (Phase 7's `/daily-signal-run`, Phase 9's
 `/generate-intent`).
 """
 
-from typing import Any
+from __future__ import annotations
+
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import structlog

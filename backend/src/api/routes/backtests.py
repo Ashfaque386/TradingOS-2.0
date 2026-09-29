@@ -3,8 +3,10 @@ acceptance: a strategy can be backtested with realistic Indian costs,
 walk-forward and Monte Carlo validated, and compared against another run.
 """
 
-from typing import Any
+from __future__ import annotations
+
 import uuid
+from typing import Any
 
 import optuna
 import pandas as pd

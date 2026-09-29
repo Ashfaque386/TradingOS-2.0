@@ -1,6 +1,6 @@
-from typing import Any
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Enum, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column

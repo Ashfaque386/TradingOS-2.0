@@ -28,7 +28,7 @@ shape.
 import time
 import zlib
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 from redis.asyncio import Redis
@@ -46,9 +46,14 @@ class Tick:
 
 
 async def publish_tick(redis: Redis, tick: Tick) -> str:
-    return await redis.xadd(
-        tick_stream_key(tick.symbol),
-        {"price": repr(tick.price), "timestamp_ms": str(tick.timestamp_ms)},
+    # redis-py's own xadd() return type is untyped (Any) regardless of the
+    # real ID string it returns.
+    return cast(
+        str,
+        await redis.xadd(
+            tick_stream_key(tick.symbol),
+            {"price": repr(tick.price), "timestamp_ms": str(tick.timestamp_ms)},
+        ),
     )
 
 

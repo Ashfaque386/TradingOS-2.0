@@ -1,6 +1,6 @@
-from typing import Any
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DDL, JSON, BigInteger, DateTime, String, UniqueConstraint, event, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -85,10 +85,14 @@ event.listen(
     # through that substitution; the Alembic migration's op.execute() call
     # (using this same CREATE_AUDIT_LOG_TRIGGER_FUNCTION_SQL constant,
     # unescaped) isn't bound to a table event and never hits it.
-    DDL(CREATE_AUDIT_LOG_TRIGGER_FUNCTION_SQL.replace("%", "%%")).execute_if(dialect="postgresql"),
+    DDL(  # type: ignore[no-untyped-call]  # sqlalchemy's own DDL.__init__ has no type annotations
+        CREATE_AUDIT_LOG_TRIGGER_FUNCTION_SQL.replace("%", "%%")
+    ).execute_if(dialect="postgresql"),
 )
 event.listen(
     AuditLog.__table__,
     "after_create",
-    DDL(CREATE_AUDIT_LOG_TRIGGER_SQL).execute_if(dialect="postgresql"),
+    DDL(  # type: ignore[no-untyped-call]  # sqlalchemy's own DDL.__init__ has no type annotations
+        CREATE_AUDIT_LOG_TRIGGER_SQL
+    ).execute_if(dialect="postgresql"),
 )

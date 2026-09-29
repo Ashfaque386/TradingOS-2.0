@@ -3,9 +3,9 @@ against the schema, and computes the effective (defaults + per-agent
 overrides) config for every agent in the fixed roster.
 """
 
-from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import json5
 from pydantic import ValidationError
@@ -51,7 +51,10 @@ def parse_config_text(text: str) -> dict[str, Any]:
             errors=["top-level value is not an object"],
         )
     try:
-        return _join_surrogate_pairs(data)
+        # _join_surrogate_pairs is Any->Any (a generic recursive JSON-value
+        # walk) -- the isinstance check above already guarantees the
+        # top-level shape stays a dict.
+        return cast(dict[str, Any], _join_surrogate_pairs(data))
     except UnicodeDecodeError as exc:
         raise ConfigLoadError(
             "Config contains an unpaired UTF-16 surrogate escape",

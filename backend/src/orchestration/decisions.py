@@ -9,6 +9,7 @@ strings mean to whichever agent recorded them.
 
 import uuid
 from dataclasses import dataclass
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,7 +60,11 @@ async def detect_conflicts(db: AsyncSession, run_id: uuid.UUID) -> list[Conflict
 
     groups: dict[tuple[uuid.UUID, str], list[OrganizationalDecision]] = {}
     for d in decisions:
-        key = (d.subject_artefact_id, d.decision_type)
+        # The query above already filters subject_artefact_id.is_not(None),
+        # so every row here has a real UUID -- the column's own Mapped type
+        # stays "UUID | None" regardless (it's nullable), which the filter
+        # doesn't narrow for mypy.
+        key = (cast(uuid.UUID, d.subject_artefact_id), d.decision_type)
         groups.setdefault(key, []).append(d)
 
     reports: list[ConflictReport] = []

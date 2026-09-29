@@ -23,6 +23,8 @@ distinguishable from a genuine below-threshold pass, never silently
 mistaken for one.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Protocol
 

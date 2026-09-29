@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from fastapi import Depends, HTTPException, Request, status
 
 from src.api.deps import get_current_user
+
 # "as Role" (not a plain re-import): every route module imports Role from
 # here, not from src.core.roles directly, since this is where it's used
 # alongside register_policy/require_role -- mypy --strict's

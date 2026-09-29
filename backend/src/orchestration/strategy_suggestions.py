@@ -7,10 +7,10 @@ StrategyVersion and links it back to the suggestion; there's no path that
 regenerates without that diff having been produced.
 """
 
-from typing import Any
 import difflib
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

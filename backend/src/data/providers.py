@@ -20,7 +20,7 @@ falling back to this same synthetic generator.
 import zlib
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 import pandas as pd
@@ -295,7 +295,8 @@ class FakeMarketDataProvider:
             window = series.loc[: pd.Timestamp(today)].tail(2)
             if len(window) < 2:
                 return 0.0
-            prev_close, last_close = window["close"].iloc[0], window["close"].iloc[1]
+            prev_close = cast(float, window["close"].iloc[0])
+            last_close = cast(float, window["close"].iloc[1])
             return round(((last_close - prev_close) / prev_close) * 100, 3)
 
         vix_series = self._full_daily_series("INDIAVIX")

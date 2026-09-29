@@ -36,10 +36,10 @@ data, not a new parallel event-logging system invented for this phase:
   poll interval late.
 """
 
-from typing import Any
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -77,7 +77,9 @@ def _audit_row_to_dict(row: AuditLog) -> dict[str, Any]:
     }
 
 
-async def _stream_audit_log(websocket: WebSocket, session_factory: async_sessionmaker[AsyncSession]) -> None:
+async def _stream_audit_log(
+    websocket: WebSocket, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
     async with session_factory() as db:
         backfill = (
             (
@@ -176,7 +178,8 @@ async def organization_events_ws(
         pass
     finally:
         await pubsub.punsubscribe(pattern)
-        await pubsub.aclose()
+        # redis-py's own PubSub.aclose() has no type annotations.
+        await pubsub.aclose()  # type: ignore[no-untyped-call]
 
 
 async def _signoff_snapshot(db: AsyncSession) -> dict[str, Any]:

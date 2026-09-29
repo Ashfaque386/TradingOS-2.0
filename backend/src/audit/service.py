@@ -27,9 +27,9 @@ commits once at the end -- `write_audit_entry` only `add()`s and
 site to it never changes when the transaction actually commits.
 """
 
-from typing import Any
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from sqlalchemy import func, select

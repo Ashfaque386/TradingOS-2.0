@@ -46,7 +46,7 @@ _WINDOW_SECONDS = 60
 
 
 def _request_origin(scope: Scope) -> str | None:
-    headers = dict(scope.get("headers") or [])
+    headers: dict[bytes, bytes] = dict(scope.get("headers") or [])
     origin = headers.get(b"origin")
     return origin.decode("latin-1") if origin else None
 
@@ -56,7 +56,7 @@ def _client_ip(scope: Scope) -> str:
     # proxy that sets it (Build Spec's loopback-by-default posture means
     # it usually isn't) -- fall back to the raw ASGI client tuple either
     # way, never trusting an unset/spoofable value silently.
-    headers = dict(scope.get("headers") or [])
+    headers: dict[bytes, bytes] = dict(scope.get("headers") or [])
     forwarded = headers.get(b"x-forwarded-for")
     if forwarded:
         return forwarded.decode("latin-1").split(",")[0].strip()

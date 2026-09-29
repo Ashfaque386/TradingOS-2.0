@@ -19,9 +19,9 @@ supplies retries, distribution across worker processes, and durability;
 none of the statistical logic lives here or is duplicated here.
 """
 
-from typing import Any
 from dataclasses import asdict
 from datetime import timedelta
+from typing import Any
 
 from temporalio import activity, workflow
 

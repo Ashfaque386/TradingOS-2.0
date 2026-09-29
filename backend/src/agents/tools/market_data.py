@@ -3,8 +3,9 @@ market data feed is wired yet (data-ingestion phase); returns a
 structurally-shaped, honestly-empty result rather than fabricating a price.
 """
 
-
 from typing import Any
+
+
 def market_data_read(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol": params.get("symbol"),

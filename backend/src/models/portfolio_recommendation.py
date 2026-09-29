@@ -1,7 +1,7 @@
-from typing import Any
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Enum, String, Text
 from sqlalchemy.dialects.postgresql import UUID

@@ -11,6 +11,8 @@ drift apart -- the same "one function, multiple call sites" posture Phase
 for the HTTP layer rather than defining its own copy.
 """
 
+from __future__ import annotations
+
 from typing import Any, Literal
 
 import pandas as pd

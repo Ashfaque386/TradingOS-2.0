@@ -26,6 +26,7 @@ stale duplicate rows behind, since the later batch always wins
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import pandas as pd
@@ -205,9 +206,12 @@ def _create_or_replace_view(
             f"CREATE OR REPLACE VIEW {view_name} AS "  # nosec B608
             f"SELECT * FROM read_parquet('{glob}', union_by_name=true)"
         )
-        return con.execute(
-            f"SELECT COUNT(*) FROM {view_name}"  # nosec B608
-        ).fetchone()[0]  # type: ignore[index]
+        return cast(
+            int,
+            con.execute(
+                f"SELECT COUNT(*) FROM {view_name}"  # nosec B608
+            ).fetchone()[0],  # type: ignore[index]
+        )
 
     # No partition files exist yet -- define an empty, correctly-typed view
     # rather than letting a bare read_parquet(glob) raise "no files found".
@@ -239,7 +243,10 @@ def refresh_catalog_views(root: Path) -> CatalogRefreshResult:
 def row_count(path: Path) -> int:
     con = duckdb.connect(":memory:")
     try:
-        return con.execute("SELECT COUNT(*) FROM read_parquet(?)", [str(path)]).fetchone()[0]  # type: ignore[index]
+        return cast(
+            int,
+            con.execute("SELECT COUNT(*) FROM read_parquet(?)", [str(path)]).fetchone()[0],  # type: ignore[index]
+        )
     finally:
         con.close()
 

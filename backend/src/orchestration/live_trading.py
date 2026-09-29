@@ -320,8 +320,12 @@ async def run_live_daily_signal_generation(
         bars = price_provider.daily_bars(
             subscription.symbol, as_of=pd.Timestamp(as_of), lookback_days=DAILY_LOOKBACK_DAYS
         )
+        # A real DB CHECK constraint (ck_live_trading_subscriptions_builtin_strategy)
+        # already restricts this column to exactly these two literal values --
+        # the Mapped column itself is plain `str` since SQLAlchemy has no way
+        # to express that constraint in its own type.
         signals = generate_builtin_signals(
-            bars, subscription.builtin_strategy, subscription.sma_window
+            bars, cast(BuiltinStrategy, subscription.builtin_strategy), subscription.sma_window
         )
         # Same posture as Phase 7's daily job: the real Phase 5 engine
         # runs here too so a genuinely failing backtest surfaces, but its

@@ -15,10 +15,10 @@ blocking; the task engine dispatches them through a thread pool either way
 matches what real capabilities will look like.
 """
 
-from typing import Any
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 CapabilityFn = Callable[[dict[str, Any]], dict[str, Any]]
 

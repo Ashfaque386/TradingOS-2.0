@@ -14,9 +14,9 @@ and replaced with a freshly-spawned one rather than reused -- a pool slot
 is never left permanently broken by one bad call.
 """
 
-from typing import Any
 import queue
 from pathlib import Path
+from typing import Any
 
 from src.engine.sandbox.process_runtime import (
     SandboxWorkerCrashedError,

@@ -6,8 +6,8 @@ out in the Strategy Pipeline & Sandbox phase (§9) -- this skill is the
 general-purpose lint tool any agent can call standalone.
 """
 
-from typing import Any
 import ast
+from typing import Any
 
 BANNED_IMPORTS = frozenset({"os", "subprocess", "socket", "sys", "shutil", "ctypes"})
 

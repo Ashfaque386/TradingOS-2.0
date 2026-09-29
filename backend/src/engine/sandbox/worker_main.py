@@ -27,16 +27,16 @@ between bytecode ticks) as well as anything RLIMIT_CPU wouldn't catch
 (e.g. a hung blocking call that burns wall clock without CPU).
 """
 
-from typing import Any
 import io
 import json
 import resource
 import signal
 import sys
 import time
-from types import FrameType
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import FrameType
+from typing import Any
 
 from src.engine.sandbox.restricted_exec import SandboxPermissionError, build_restricted_globals
 from src.engine.validation import check_ast

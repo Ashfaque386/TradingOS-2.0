@@ -2,8 +2,9 @@
 portfolio-tracking store is wired yet.
 """
 
-
 from typing import Any
+
+
 def portfolio_status_read(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "positions": [],

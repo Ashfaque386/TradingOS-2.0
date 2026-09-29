@@ -26,11 +26,11 @@ HTTP clients (Phase 3), which also have no credentials/egress to run
 against in this sandbox.
 """
 
-from typing import Any
 import json
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from src.engine.sandbox.types import SandboxLimits, SandboxResult, SandboxRuntimeUnavailableError
 

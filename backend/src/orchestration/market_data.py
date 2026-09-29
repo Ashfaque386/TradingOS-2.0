@@ -16,10 +16,10 @@ failed), or `failed` (every symbol failed), never a bare exception
 bubbling out of a scheduled job.
 """
 
-from typing import Any
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pandas as pd

@@ -15,9 +15,11 @@ object is ever constructed, for either kill-switch mode independently
 rows).
 """
 
-from typing import Any
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession

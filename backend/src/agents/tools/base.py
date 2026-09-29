@@ -1,7 +1,7 @@
 """Shared types for the Skill Registry (Build Spec §16)."""
 
-from typing import Any
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 # Phase 12 (Build Spec §18): notification-send genuinely needs real
 # network I/O, so a skill function may now be sync (every other entry --

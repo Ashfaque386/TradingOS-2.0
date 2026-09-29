@@ -14,11 +14,11 @@ file, its watcher will independently notice the same write and apply it
 again — a harmless extra version row, not a correctness issue.)
 """
 
-from typing import Any
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

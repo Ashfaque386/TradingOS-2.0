@@ -4,11 +4,11 @@ would call; this file's only job is argument parsing and human-readable
 output.
 """
 
-from typing import Any, TypeVar
-from collections.abc import Coroutine
 import asyncio
 import json
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any, TypeVar
 
 import click
 

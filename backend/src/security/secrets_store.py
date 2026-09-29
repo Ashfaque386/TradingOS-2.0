@@ -20,13 +20,13 @@ permissions on the ciphertext file, is this store's whole contract with
 Build Spec §20's "never logged" requirement.
 """
 
-from typing import Any
 import json
 import os
 import stat
 from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -59,7 +59,7 @@ class SecretsStore:
                 f"secrets store at {self._path} could not be decrypted "
                 "-- wrong encryption key or a corrupted file"
             ) from exc
-        return json.loads(plaintext)
+        return cast(dict[str, Any], json.loads(plaintext))
 
     def _write_all(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

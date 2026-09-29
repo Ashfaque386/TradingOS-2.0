@@ -4,8 +4,9 @@ Pipeline & Sandbox phase. This stands in with the same result shape so
 callers can be written against the real interface now.
 """
 
-
 from typing import Any
+
+
 def sandbox_dry_run(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "ran": True,

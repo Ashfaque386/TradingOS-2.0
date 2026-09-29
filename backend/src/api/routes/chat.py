@@ -9,6 +9,7 @@ state, not per-user-private data).
 import json
 import uuid
 from collections.abc import AsyncIterator
+from typing import Literal, cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -168,7 +169,9 @@ async def export_session_endpoint(
 ) -> Response:
     if format not in ("markdown", "json"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "format must be 'markdown' or 'json'")
-    content = await chat_orchestration.export_session(db, session_id, format=format)
+    content = await chat_orchestration.export_session(
+        db, session_id, format=cast(Literal["markdown", "json"], format)
+    )
     if content is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "chat session not found")
     media_type = "application/json" if format == "json" else "text/markdown"

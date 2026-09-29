@@ -23,6 +23,7 @@ responsibility, not something this function silently fixes up.
 """
 
 from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry

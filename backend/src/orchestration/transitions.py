@@ -15,14 +15,15 @@ gets the same check for free, and no code path can skip it just by calling
 a different-looking function, since there's only one primitive.
 """
 
-from typing import Any, cast
-from dataclasses import dataclass
 import uuid
+from dataclasses import dataclass
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, Table, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import FromClause
 
 
 class ApprovalRequiredError(Exception):
@@ -49,7 +50,7 @@ class ApprovalGate:
 async def conditional_transition(
     db: AsyncSession,
     *,
-    table: Table,
+    table: FromClause,
     id_column: InstrumentedAttribute[Any],
     row_id: uuid.UUID,
     status_column: InstrumentedAttribute[Any],
@@ -82,13 +83,23 @@ async def conditional_transition(
                 approval.subject_type, approval.subject_id, approval.transition_type
             )
 
-    values: dict[ColumnElement[Any] | InstrumentedAttribute[Any] | str, object] = {status_column: to_status}
+    values: dict[ColumnElement[Any] | InstrumentedAttribute[Any] | str, object] = {
+        status_column: to_status
+    }
     if extra_values:
         values.update(extra_values)
 
     # .values(values) (a single dict positional arg), not .values(**values):
     # the dict's keys can be Column objects, which aren't valid **kwargs keys.
-    stmt = update(table).where(id_column == row_id, status_column == from_status).values(values)
+    # update()'s own signature wants a narrower type than a declarative
+    # class's __table__ (FromClause, accepted as this function's own
+    # `table` param above) -- every real caller's __table__ is a plain
+    # Table, a real TableClause subtype, at runtime.
+    stmt = (
+        update(cast(Table, table))
+        .where(id_column == row_id, status_column == from_status)
+        .values(values)
+    )
     result = await db.execute(stmt)
     await db.commit()
     # An UPDATE statement's execute() always returns a real CursorResult at

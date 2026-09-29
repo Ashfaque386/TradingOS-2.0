@@ -29,8 +29,8 @@ below follow Upstox's publicly documented v2 API envelope from training
 knowledge; this sandbox cannot verify them against a live call.
 """
 
-from typing import Any
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import httpx
 
@@ -63,7 +63,7 @@ class UpstoxAdapter:
         credentials: BrokerCredentials,
         *,
         sandbox: bool = False,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         self._credentials = credentials
@@ -87,7 +87,8 @@ class UpstoxAdapter:
             raise BrokerServerError(resp.status_code, f"upstox {method} {path}: {resp.text[:200]}")
         if resp.status_code >= 400:
             raise BrokerRequestError(resp.status_code, f"upstox {method} {path}: {resp.text[:200]}")
-        return resp.json()
+        # httpx's own Response.json() return type is untyped (Any).
+        return cast(dict[str, Any], resp.json())
 
     def build_order_payload(self, order: OrderRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {

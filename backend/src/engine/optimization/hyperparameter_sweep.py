@@ -8,9 +8,11 @@ the sweep, over the real completed trials -- it explains how much of the
 objective's variance each parameter accounts for, not a guessed ranking.
 """
 
-from typing import Any
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, cast
 
 import optuna
 import pandas as pd
@@ -26,7 +28,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 ParamSpaceFn = Callable[[optuna.Trial], dict[str, Any]]
 # Builds a position-signal series from price data + one set of sampled
 # parameters -- the thing being optimized.
-SignalFromParamsFn = Callable[[pd.DataFrame, dict[str, Any]], pd.Series[Any]]
+SignalFromParamsFn = Callable[[pd.DataFrame, dict[str, Any]], "pd.Series[Any]"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +72,9 @@ def run_hyperparameter_sweep(
             # sampler learns to avoid that region, rather than silently
             # reading "undefined" as "exactly 0".
             return float("-inf")
-        return value
+        # objective_metric names one of BacktestMetrics' own numeric
+        # fields -- getattr()'s own return type is untyped (Any).
+        return cast(float, value)
 
     study.optimize(objective, n_trials=n_trials, catch=())
 

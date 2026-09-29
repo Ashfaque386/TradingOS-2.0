@@ -17,8 +17,8 @@ ingestion path") -- a name not in SKILLS is a SkillNotFoundError, never a
 lookup that falls through to loading something.
 """
 
-from typing import Any
 import inspect
+from typing import Any
 
 from src.agents.tools.base import SkillFn, SkillNotFoundError, SkillNotGrantedError
 from src.agents.tools.code_lint import code_format_lint
@@ -54,7 +54,9 @@ def granted_skills_for(agent_id: str) -> frozenset[str]:
     return frozenset(effective.skills)
 
 
-async def execute_skill(agent_id: str, skill_name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+async def execute_skill(
+    agent_id: str, skill_name: str, params: dict[str, Any] | None = None
+) -> dict[str, Any]:
     if skill_name not in SKILLS:
         raise SkillNotFoundError(
             f"no such skill: {skill_name!r} -- only in-repo SKILLS entries can be executed"

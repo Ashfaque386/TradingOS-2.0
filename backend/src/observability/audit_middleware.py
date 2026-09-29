@@ -19,8 +19,9 @@ semantics the way that route's own code does -- it exists for blanket
 coverage, not for detail.
 """
 
-from typing import Any
 import json
+from collections.abc import MutableMapping
+from typing import Any
 
 import structlog
 from starlette.requests import Request
@@ -48,7 +49,7 @@ class AuditLoggingMiddleware:
         status_holder: dict[str, int] = {}
         body_chunks: list[bytes] = []
 
-        async def send_wrapper(message: dict[str, Any]) -> None:
+        async def send_wrapper(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 status_holder["status_code"] = message["status"]
             elif message["type"] == "http.response.body":

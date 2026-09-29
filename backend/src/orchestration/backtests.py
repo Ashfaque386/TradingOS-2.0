@@ -14,10 +14,12 @@ further analysis of the same underlying trade sequence, not a new
 backtest.
 """
 
-from typing import Any, cast
+from __future__ import annotations
+
 import uuid
 from dataclasses import asdict
 from datetime import date
+from typing import Any, cast
 
 import pandas as pd
 from sqlalchemy import select
@@ -101,8 +103,7 @@ async def run_backtest(
         # built off `prices`' own datetime-indexed rows), so `ts` is always
         # a real pd.Timestamp at runtime.
         daily_returns=[
-            [cast(pd.Timestamp, ts).isoformat(), float(v)]
-            for ts, v in result.daily_returns.items()
+            [cast(pd.Timestamp, ts).isoformat(), float(v)] for ts, v in result.daily_returns.items()
         ],
         trade_pnls=[float(t.net_pnl) for t in result.trades],
         created_by=created_by,

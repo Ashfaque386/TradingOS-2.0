@@ -11,8 +11,8 @@ from src.api.schemas import CheckDrawdownRequest, KillSwitchStateResponse, Reset
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.engine.risk.kill_switch import KillSwitchMode
-from src.models.user import User
 from src.models.kill_switch_state import KillSwitchState
+from src.models.user import User
 from src.orchestration.kill_switch import check_drawdown, get_kill_switch_state, reset_kill_switch
 
 router = APIRouter(prefix="/kill-switch", tags=["kill-switch"])

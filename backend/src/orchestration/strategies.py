@@ -45,10 +45,12 @@ every individual intent still needs its own per-intent approval on top of
 this one-time strategy-level sign-off (Build Spec §12.2).
 """
 
-from typing import Any
+from __future__ import annotations
+
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 from sqlalchemy import func, select, update
@@ -378,7 +380,7 @@ async def _latest_completed_backtest_returns(
         return None
 
     index = pd.DatetimeIndex([pd.Timestamp(ts) for ts, _ in run.daily_returns])
-    values = [value for _, value in run.daily_returns]
+    values: list[float] = [value for _, value in run.daily_returns]
     return pd.Series(values, index=index)
 
 
@@ -405,11 +407,20 @@ async def promote_to_paper_trading(
     """
     returns = await _latest_completed_backtest_returns(db, strategy_id)
     if returns is not None:
-        provider = benchmark_provider or make_fake_nifty_benchmark(returns.index, seed=0)
+        # _latest_completed_backtest_returns always builds this Series with
+        # a real pd.DatetimeIndex (see its own construction) -- pandas-stubs
+        # erases the index dtype from Series' own generic type regardless.
+        index = cast(pd.DatetimeIndex, returns.index)
+        provider = benchmark_provider or make_fake_nifty_benchmark(index, seed=0)
         result = evaluate_correlation_constraint(
             returns, provider.daily_returns(), threshold=correlation_threshold
         )
         if result.breached:
+            # CorrelationCheckResult only sets breached=True on the branch
+            # that also computes a real `corr` float (see its own
+            # evaluate_correlation_constraint) -- every breached=False path
+            # sets correlation=None instead.
+            assert result.correlation is not None
             raise CorrelationConstraintBreachedError(
                 strategy_id, result.correlation, correlation_threshold
             )

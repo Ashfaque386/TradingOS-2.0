@@ -21,8 +21,8 @@ src.agents.tools.registry.execute_skill() -- the same grant-gated call path
 everything else uses -- restricted to read-only skills (market-data-read).
 """
 
-from typing import Any
 import time
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession

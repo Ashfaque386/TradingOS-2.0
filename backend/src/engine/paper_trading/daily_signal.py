@@ -12,6 +12,8 @@ and never a second, independently-written lag rule that could drift from
 the engine's.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Literal
 

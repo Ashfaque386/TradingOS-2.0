@@ -27,9 +27,11 @@ acted on at the *next* bar's open (never the same bar it was computed on)
 to avoid lookahead bias.
 """
 
-from typing import Any
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd

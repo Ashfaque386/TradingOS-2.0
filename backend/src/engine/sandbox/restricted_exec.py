@@ -19,10 +19,10 @@ Two independent guards:
   banned outright.
 """
 
-from typing import Any
 import builtins
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from src.engine.validation import ALLOWED_IMPORTS
 

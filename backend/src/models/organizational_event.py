@@ -1,6 +1,6 @@
-from typing import Any
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID

@@ -22,12 +22,12 @@ warm_pool.py's job, built on the same spawn_worker_process()/send_request()
 primitives this module exposes.
 """
 
-from typing import Any
 import json
 import select
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from src.engine.sandbox.types import SandboxError, SandboxLimits, SandboxResult
 
@@ -67,7 +67,9 @@ def spawn_worker_process() -> subprocess.Popen[str]:
     )
 
 
-def send_request(proc: subprocess.Popen[str], request: dict[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
+def send_request(
+    proc: subprocess.Popen[str], request: dict[str, Any], *, timeout_seconds: float
+) -> dict[str, Any]:
     """One newline-delimited JSON request/response round-trip against an
     already-spawned worker (see worker_main.py for the protocol). Raises
     rather than blocking forever if the worker doesn't answer in time or
@@ -89,7 +91,10 @@ def send_request(proc: subprocess.Popen[str], request: dict[str, Any], *, timeou
     if not line:
         stderr = proc.stderr.read()
         raise SandboxWorkerCrashedError(f"sandbox worker exited unexpectedly: {stderr.strip()}")
-    return json.loads(line)
+    # worker_main.py's protocol always responds with one JSON object per
+    # line -- json.loads()'s own return type is Any regardless of what's
+    # actually parsed.
+    return cast(dict[str, Any], json.loads(line))
 
 
 def terminate_worker(proc: subprocess.Popen[str]) -> None:

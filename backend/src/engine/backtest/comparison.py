@@ -9,8 +9,10 @@ constant over the overlap (zero variance makes correlation undefined,
 not zero).
 """
 
-from typing import Any
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import Any
 
 import pandas as pd
 

@@ -28,6 +28,7 @@ on its own.
 
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 
 import pandas as pd
 import structlog
@@ -104,8 +105,12 @@ async def run_daily_signal_generation(
         bars = price_provider.daily_bars(
             subscription.symbol, as_of=pd.Timestamp(as_of), lookback_days=DAILY_LOOKBACK_DAYS
         )
+        # A real DB CHECK constraint (ck_paper_trading_subscriptions_builtin_strategy)
+        # already restricts this column to exactly these two literal values --
+        # the Mapped column itself is plain `str` since SQLAlchemy has no way
+        # to express that constraint in its own type.
         signals = generate_builtin_signals(
-            bars, subscription.builtin_strategy, subscription.sma_window
+            bars, cast(BuiltinStrategy, subscription.builtin_strategy), subscription.sma_window
         )
 
         # "Re-runs the full backtest once/day" (Build Spec §11): the real
@@ -165,6 +170,10 @@ async def _persist_fill(
     leg_index: int = 0,
 ) -> PaperPosition:
     if fill.filled_quantity > 0:
+        # FillResult.avg_fill_price is None only when nothing filled at all
+        # (see its own field comment) -- filled_quantity > 0 here rules
+        # that out.
+        assert fill.avg_fill_price is not None
         application = apply_fill(
             Position(quantity=position.quantity, avg_cost=position.avg_cost),
             side=side,

@@ -14,6 +14,7 @@ webhook-only case.
 """
 
 import time
+from typing import cast
 
 from redis.asyncio import Redis
 
@@ -27,7 +28,9 @@ async def fixed_window_increment(
     user id, ...) -- this function only adds the window-bucket suffix."""
     window_bucket = int(time.time()) // window_seconds
     bucket_key = f"{key}:{window_bucket}"
-    count = await redis.incr(bucket_key)
+    # redis-py's own incr() return type is untyped (Any) regardless of the
+    # real int count it returns.
+    count = cast(int, await redis.incr(bucket_key))
     if count == 1:
         await redis.expire(bucket_key, window_seconds)
     return count <= limit

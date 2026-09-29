@@ -199,10 +199,19 @@ skips = ["B101", "B404"]
 # `mypy --strict` run against this codebase (never type-checked this
 # strictly before) found 428 errors across 136 of 249 source files --
 # genuinely too large a backlog to clear as part of adding the check
-# itself. Wired into CI as `continue-on-error` (reports real errors on
-# every build, visible in the Actions log, never silently hidden) rather
-# than gating merges on a pre-existing backlog; clearing it is its own
-# future effort, not something to rush through under this phase's scope.
+# itself, so it was wired into CI as `continue-on-error` at first (real
+# errors visible on every build, never gating a merge on a pre-existing
+# backlog). A follow-up pass (same Phase 26 item) then closed all 428,
+# file by file -- real stub packages for the untyped-import class (see
+# the dev extra above and the apscheduler override below), generic
+# type-args, SQLAlchemy Result.rowcount/Column-vs-InstrumentedAttribute
+# casts, a Role re-export fix, real None-safety asserts backed by FK/
+# invariant review, and missing annotations -- never a blanket
+# `ignore_missing_imports`/`disable_error_code` sweep. `continue-on-error`
+# stays on the CI step regardless (see .github/workflows/ci.yml's own
+# comment): a clean run today doesn't guarantee every future PR's author
+# reads a red mypy step as blocking before this project has a stated
+# policy on it, so the step is real and visible, not yet a merge gate.
 strict = true
 exclude = ["alembic/versions"]
 

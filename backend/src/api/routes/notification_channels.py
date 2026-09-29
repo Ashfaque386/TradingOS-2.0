@@ -13,8 +13,8 @@ reuse the real senders/HTTP calls a saved config would use, not a
 simulated success.
 """
 
-from datetime import UTC, datetime
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import httpx
 import structlog

@@ -16,7 +16,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_COOLDOWN_SECONDS = 60.0
@@ -73,6 +73,9 @@ class FakeBrokerAdapter:
         return {"status": "ok"}
 
 
+_T = TypeVar("_T")
+
+
 class BrokerCircuitBreaker:
     def __init__(
         self,
@@ -122,7 +125,7 @@ class BrokerCircuitBreaker:
         elapsed = self._clock() - self._opened_at
         return max(0.0, self._cooldown_seconds - elapsed)
 
-    async def call(self, fn: Callable[[], Awaitable[Any]]) -> Any:
+    async def call(self, fn: Callable[[], Awaitable[_T]]) -> _T:
         if self._state == CircuitState.OPEN:
             # Invariant: the only place `_state` becomes OPEN (below) always
             # sets `_opened_at` in the same step -- true by construction, not

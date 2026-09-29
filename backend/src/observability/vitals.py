@@ -33,8 +33,8 @@ an Indian-markets operator, and the same `IST` zone
 `src.engine.paper_trading.market_hours` already defines.
 """
 
-from typing import Any
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import psutil
@@ -120,7 +120,7 @@ async def get_order_dispatch_latency_percentiles(
     base_url: str,
     window: str = "5m",
     timeout: float = 3.0,
-    transport: httpx.BaseTransport | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, float | None]:
     """Queries Prometheus's own `/api/v1/query` HTTP endpoint rather than
     re-deriving a percentile client-side from raw histogram bucket

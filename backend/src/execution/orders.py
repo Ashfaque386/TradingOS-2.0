@@ -6,7 +6,6 @@ concrete, importable function it must never reference. Never import this
 module from src.agents.heartbeat or src.agents.scheduler.
 """
 
-
 from typing import Any, NoReturn
 
 

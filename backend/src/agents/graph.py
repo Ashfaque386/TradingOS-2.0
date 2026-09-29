@@ -21,9 +21,9 @@ cheap/small dev model wired up locally via Ollama), the same code path
 serves the real completion instead.
 """
 
-from typing import Any, cast
 import time
 from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import structlog
 from langgraph.graph import END, StateGraph
@@ -44,7 +44,9 @@ MAX_REJECTIONS = 5
 NodeFn = Callable[[TradingOSGraphState, LlmRouter], Awaitable[dict[str, Any]]]
 
 
-async def _llm_or_fallback(router: LlmRouter, agent_id: str, prompt: str, fallback: dict[str, Any]) -> dict[str, Any]:
+async def _llm_or_fallback(
+    router: LlmRouter, agent_id: str, prompt: str, fallback: dict[str, Any]
+) -> dict[str, Any]:
     try:
         result = await router.complete(agent_id=agent_id, prompt=prompt)
         return {"source": "llm", "provider": result.provider.value, "text": result.text}
@@ -80,7 +82,9 @@ async def _node_market_analysis(state: TradingOSGraphState, router: LlmRouter) -
     return {"market_analysis": analysis, "node_log": [*state.node_log, "market_analysis"]}
 
 
-async def _node_strategy_generation(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
+async def _node_strategy_generation(
+    state: TradingOSGraphState, router: LlmRouter
+) -> dict[str, Any]:
     strategy = await _llm_or_fallback(
         router,
         "strategy-generator",
