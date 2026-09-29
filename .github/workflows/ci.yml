@@ -15,8 +15,26 @@ permissions:
   contents: read
 
 jobs:
+  secrets-scan:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Phase 26 (docs/phase20-old-vs-new-comparison.md item 28): a real
+      # run against this repo's full history found exactly one false
+      # positive (a Docker volume name, not a secret), scoped out in
+      # .gitleaks.toml's own allowlist -- not a broad path exclusion, so a
+      # real secret anywhere else still fails this job.
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   backend:
-    name: Backend (pytest, ruff)
+    name: Backend (pytest, ruff, bandit, mypy, pip-audit)
     runs-on: ubuntu-latest
 
     services:
@@ -52,7 +70,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
 
-      - name: Install backend (+ dev extras: pytest, ruff comes with the main deps)
+      - name: "Install backend (+ dev extras: pytest, ruff, bandit, mypy, pip-audit)"
         working-directory: backend
         run: pip install ".[dev]"
 
@@ -89,12 +107,195 @@ jobs:
         working-directory: backend
         run: ruff format --check src tests
 
-      - name: pytest
+      # Phase 26 (docs/phase20-old-vs-new-comparison.md item 28): a real
+      # SAST pass. Every finding was individually reviewed -- genuine false
+      # positives (Prometheus label kwargs, the sandbox's own intentional
+      # subprocess/exec use, bound-parameter SQL with a hardcoded column
+      # name) got a targeted `# nosec BXXX: <reason>` at the exact site,
+      # never a blanket rule skip beyond the two documented in
+      # [tool.bandit] (B101/B404, which fire on the shape of the code, not
+      # anything a per-site review could judge) -- and two real ones
+      # (a `/tmp`-hardcoded sandbox scratch path, two bare `except: pass`
+      # blocks swallowing a broker margin lookup failure with no log line)
+      # were actually fixed. Blocking: the backlog this uncovered is
+      # already cleared, so a NEW real finding should fail the build, not
+      # join a queue nobody reviews.
+      - name: bandit
+        working-directory: backend
+        run: bandit -c pyproject.toml -r src -q
+
+      # Advisory only, deliberately not gating: a real `mypy --strict` run
+      # against this codebase (which had never been type-checked this
+      # strictly before) found 428 errors across 136 of 249 source files --
+      # see [tool.mypy] in pyproject.toml. Reports on every build so the
+      # real number stays visible; clearing that backlog is its own future
+      # effort, not something to rush through gating merges on a
+      # pre-existing debt this step didn't create.
+      - name: mypy --strict (advisory)
+        working-directory: backend
+        run: mypy src
+        continue-on-error: true
+
+      # Advisory only, deliberately not gating: a real pip-audit run found
+      # CVEs across ~9 packages, several only fixable with a major version
+      # bump (langgraph 0.2.76->1.x touches every agent call site in this
+      # codebase) -- real regression risk that deserves its own reviewed,
+      # tested change, not a rushed bump under CI pressure. Reports on
+      # every build so the real list stays visible.
+      - name: pip-audit (advisory)
+        working-directory: backend
+        run: pip-audit
+        continue-on-error: true
+
+      - name: pytest (with coverage)
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos_test
           REDIS_URL: redis://localhost:6379/0
-        run: pytest -q
+        run: pytest -q --cov=src --cov-report=term-missing --cov-fail-under=70
+
+  e2e:
+    name: Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+    # A real backend+frontend+Postgres+Redis stack, driven by the actual
+    # Playwright specs in e2e/ (Phase 26, docs/phase20-old-vs-new-comparison.md
+    # item 29) -- these already existed but were never wired into CI.
+    # Every env var/port/database name below matches e2e/README.md's own
+    # documented local setup exactly, since that's the one place this
+    # suite's real requirements are recorded.
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tradingos
+          POSTGRES_PASSWORD: tradingos
+          POSTGRES_DB: tradingos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright + Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # e2e/utils.ts::runSeedScript hardcodes `backend/.venv/bin/python` --
+      # live-autonomy.spec.ts calls it mid-test, so this exact venv path
+      # has to exist, not just "python installed somewhere on PATH".
+      - name: Create backend venv and install
+        working-directory: backend
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
+
+      - name: Make repo-root config reachable at backend/config
+        run: cp -r config backend/config
+
+      # Same real constraint as the backend job's own sandbox step --
+      # strategy-lifecycle.spec.ts drives the actual strategy pipeline
+      # through the real sandbox.
+      - name: Allow unprivileged user namespaces (needed by the strategy sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Migrate the e2e database to head
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos
+        run: .venv/bin/python -m alembic upgrade head
+
+      - name: Seed e2e fixture users
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos
+          JWT_SECRET_KEY: dev-only-secret-do-not-use-in-production
+        run: .venv/bin/python scripts/seed_e2e_users.py
+
+      - name: Generate a fresh secrets-encryption key for this run
+        working-directory: backend
+        run: |
+          echo "SECRETS_ENCRYPTION_KEY=$(.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+
+      - name: Start backend (port 8000)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos
+          JWT_SECRET_KEY: dev-only-secret-do-not-use-in-production
+          CORS_ORIGINS: http://localhost:3010
+          AGENT_GATEWAY_CONFIG_PATH: ../config/tradingos.config.json
+          NSE_HOLIDAYS_PATH: ../config/nse_holidays.json
+          SECRETS_STORE_PATH: secrets/e2e_broker_credentials.enc
+        run: |
+          mkdir -p secrets
+          nohup .venv/bin/python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && exit 0
+            sleep 1
+          done
+          echo "backend never became healthy"; cat /tmp/backend.log; exit 1
+
+      - name: Start frontend (port 3010)
+        env:
+          PORT: 3010
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: |
+          nohup pnpm dev > /tmp/frontend.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:3010 && exit 0
+            sleep 1
+          done
+          echo "frontend never became healthy"; cat /tmp/frontend.log; exit 1
+
+      - name: Resolve the installed Chromium path for playwright.config.ts
+        run: |
+          echo "PLAYWRIGHT_CHROMIUM_PATH=$(node -e "console.log(require('playwright-core').chromium.executablePath())")" >> "$GITHUB_ENV"
+
+      - name: Playwright E2E
+        env:
+          E2E_BASE_URL: http://localhost:3010
+        run: pnpm exec playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+            /tmp/backend.log
+            /tmp/frontend.log
+          retention-days: 7
 
   frontend:
     name: Frontend (tsc)

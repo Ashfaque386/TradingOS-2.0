@@ -40,6 +40,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 # mutmut (Build Spec §21-22 mutation testing, see backend/pyproject.toml's
 # [tool.mutmut]) working copy + cache -- local run artifacts, not project
 # content.
