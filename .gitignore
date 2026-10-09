@@ -10,6 +10,12 @@
 # production
 /build
 
+# Python packaging output: `pip install .` regenerates backend/build/ on
+# every run. The root-anchored /build above doesn't match it, which is how
+# a stale copy of src/ got committed and then dirtied the working tree on
+# every install.
+backend/build/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
