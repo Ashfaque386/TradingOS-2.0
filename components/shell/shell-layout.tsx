@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Sidebar } from './sidebar'
 import { TopBar } from './top-bar'
 import { MobileNav } from './mobile-nav'
+import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
 import { getKillSwitch, getMarketHours } from '@/lib/api'
@@ -16,14 +17,17 @@ interface ShellLayoutProps {
 export function ShellLayout({ children }: ShellLayoutProps) {
   const { palette, setPalette, powerSave, setPowerSave } = usePreferences()
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false)
-  const { user, role, isAuthenticated, isLoading, signOut } = useAuth()
+  const { user, role, isAuthenticated, isLoading, isUnreachable, retrySession, signOut } = useAuth()
   const router = useRouter()
   const [marketOpen, setMarketOpen] = useState(true)
   const [systemHealth, setSystemHealth] = useState<'healthy' | 'critical'>('healthy')
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) router.replace('/login')
-  }, [isLoading, isAuthenticated, router])
+    // An unreachable server is not a signed-out session: stored tokens are
+    // still good, so stay put (the screen below retries) rather than
+    // sending the operator to log in again.
+    if (!isLoading && !isAuthenticated && !isUnreachable) router.replace('/login')
+  }, [isLoading, isAuthenticated, isUnreachable, router])
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -45,6 +49,20 @@ export function ShellLayout({ children }: ShellLayoutProps) {
     const interval = setInterval(poll, 30000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [isAuthenticated])
+
+  if (isUnreachable) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div role="alert" className="max-w-md text-center space-y-3">
+          <h1 className="text-xl font-semibold">Can&apos;t reach the TradingOS server</h1>
+          <p className="text-sm text-muted-foreground">
+            Your session is still saved. Retrying automatically every few seconds.
+          </p>
+          <Button onClick={retrySession}>Retry now</Button>
+        </div>
+      </div>
+    )
+  }
 
   if (isLoading || !isAuthenticated) return null
 

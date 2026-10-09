@@ -60,35 +60,60 @@ export function isAuthenticated(): boolean {
 // Concurrent 401s must not each fire their own refresh (that would race
 // the backend's single-use refresh-token rotation and revoke the whole
 // family) -- every caller in flight shares the one in-progress refresh.
-let refreshPromise: Promise<TokenPair | null> | null = null
+// A refresh can fail two very different ways, and treating them the same
+// signs an operator out for no reason: the server looked at the refresh
+// token and refused it (the session really is over -- clear it), or the
+// server never got to judge it at all (rate-limited, down, network drop --
+// the stored tokens are still good, so keep them and let the caller retry).
+type RefreshOutcome =
+  | { kind: 'ok'; tokens: TokenPair }
+  | { kind: 'rejected' }
+  | { kind: 'transient'; status: number }
 
-async function refreshTokens(): Promise<TokenPair | null> {
+let refreshPromise: Promise<RefreshOutcome> | null = null
+
+async function refreshTokens(): Promise<RefreshOutcome> {
   const current = loadTokens()
-  if (!current) return null
+  if (!current) return { kind: 'rejected' }
   if (!refreshPromise) {
-    refreshPromise = (async () => {
+    refreshPromise = (async (): Promise<RefreshOutcome> => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refresh_token: current.refreshToken }),
         })
+        if (res.status === 429 || res.status >= 500) {
+          return { kind: 'transient', status: res.status }
+        }
         if (!res.ok) {
           clearTokens()
-          return null
+          return { kind: 'rejected' }
         }
         const data = (await res.json()) as { access_token: string; refresh_token: string }
         const next: TokenPair = { accessToken: data.access_token, refreshToken: data.refresh_token }
         saveTokens(next)
-        return next
+        return { kind: 'ok', tokens: next }
       } catch {
-        return null
+        // fetch() itself rejected: no HTTP response at all (network down, or
+        // a response the browser blocked, such as a 429 with no CORS headers).
+        return { kind: 'transient', status: 0 }
       } finally {
         refreshPromise = null
       }
     })()
   }
   return refreshPromise
+}
+
+/** True when a failed API call says nothing about whether the session is
+ * valid -- the server was rate-limiting, erroring, or unreachable -- so the
+ * caller should retry rather than treat the user as signed out. `fetch()`
+ * rejecting with a TypeError (no response at all) counts, as does an
+ * ApiError with status 0, 429 or 5xx. A 401/403/404/422 is a real answer. */
+export function isTransientError(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status === 0 || err.status === 429 || err.status >= 500
+  return err instanceof TypeError
 }
 
 async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
@@ -103,7 +128,13 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
 
   if (res.status === 401 && allowRefresh && token) {
     const refreshed = await refreshTokens()
-    if (refreshed) return request<T>(path, init, false)
+    if (refreshed.kind === 'ok') return request<T>(path, init, false)
+    // The token expired but the refresh couldn't even be judged: surface
+    // that as the transient failure it is, not as the original 401 (which
+    // would read as "your session is over").
+    if (refreshed.kind === 'transient') {
+      throw new ApiError(refreshed.status, 'Session refresh is temporarily unavailable')
+    }
   }
 
   if (!res.ok) {
@@ -1366,7 +1397,10 @@ export async function streamChatMessage(
 
   if (res.status === 401 && !_isRetry && token) {
     const refreshed = await refreshTokens()
-    if (refreshed) return streamChatMessage(sessionId, content, onChunk, true)
+    if (refreshed.kind === 'ok') return streamChatMessage(sessionId, content, onChunk, true)
+    if (refreshed.kind === 'transient') {
+      throw new ApiError(refreshed.status, 'Session refresh is temporarily unavailable')
+    }
   }
   if (!res.ok || !res.body) {
     let detail: unknown = res.statusText
