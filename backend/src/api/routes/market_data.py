@@ -15,6 +15,7 @@ from datetime import date as date_type
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pandas as pd
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -115,6 +116,16 @@ def get_market_data_broker_adapter() -> BrokerAdapter | None:
 
 def get_data_lake_root() -> Path:
     return Path(get_settings().data_lake_path)
+
+
+def get_bhavcopy_transport() -> httpx.AsyncBaseTransport | None:
+    """The httpx transport the on-demand Bhavcopy fallback fetches NSE's
+    archive through. `None` (real network) in production; a dependency
+    only so tests can inject a deterministic transport instead of
+    depending on whether NSE happens to be reachable from wherever the
+    suite runs -- a CI runner with real egress would otherwise get real
+    data back and fail an assertion that only holds with no egress."""
+    return None
 
 
 def get_data_lake_backup_root() -> Path:
@@ -549,10 +560,16 @@ async def run_bhavcopy_fallback_endpoint(
     body: RunBhavcopyFallbackRequest,
     db: AsyncSession = Depends(get_db),
     root: Path = Depends(get_data_lake_root),
+    transport: httpx.AsyncBaseTransport | None = Depends(get_bhavcopy_transport),
     current_user: User = Depends(require_role),
 ) -> MarketDataProvenanceResponse:
     result = await market_data_orch.run_bhavcopy_fallback(
-        db, root=root, symbols=body.symbols, day=body.day, segment=body.segment
+        db,
+        root=root,
+        symbols=body.symbols,
+        day=body.day,
+        segment=body.segment,
+        transport=transport,
     )
     return _provenance_response(result)
 

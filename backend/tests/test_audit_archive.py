@@ -96,7 +96,13 @@ def _clear_append_only(path) -> None:
     itself -- the module's own docstring is explicit that the OS attribute
     is defense in depth, not the sole guarantee.
     """
-    subprocess.run(["chattr", "-a", str(path)], capture_output=True, check=False)
+    try:
+        subprocess.run(["chattr", "-a", str(path)], capture_output=True, check=False)
+    except FileNotFoundError:
+        # No chattr binary (e.g. the slim backend image): nothing could
+        # have set the attribute in the first place, so there is nothing
+        # to clear.
+        pass
 
 
 async def test_verify_archive_chain_divergence_flags_a_tampered_archive_copy(

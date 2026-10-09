@@ -9,6 +9,7 @@ import pytest
 from httpx import AsyncClient
 
 from src.api.routes.market_data import (
+    get_bhavcopy_transport,
     get_data_lake_backup_root,
     get_data_lake_root,
     get_market_data_broker_adapter,
@@ -29,8 +30,16 @@ def _isolated_data_lake_root(tmp_path):
     tests never touch (or pollute) the repo's own data_lake/ directory."""
     app.dependency_overrides[get_data_lake_root] = lambda: tmp_path / "lake"
     app.dependency_overrides[get_data_lake_backup_root] = lambda: tmp_path / "backups"
+    # Never let a test depend on whether real NSE is reachable from the
+    # machine running the suite: a developer laptop or CI runner with real
+    # egress would get genuine bhavcopy data back instead of the failure
+    # these tests assume.
+    app.dependency_overrides[get_bhavcopy_transport] = lambda: httpx.MockTransport(
+        lambda request: httpx.Response(503)
+    )
     yield
     app.dependency_overrides.pop(get_data_lake_root, None)
+    app.dependency_overrides.pop(get_bhavcopy_transport, None)
     app.dependency_overrides.pop(get_data_lake_backup_root, None)
 
 
@@ -257,9 +266,9 @@ async def test_bhavcopy_fallback_trigger_honestly_reports_synthetic_source(
     )
     assert resp.status_code == 200
     body = resp.json()
-    # This sandbox has no real egress to NSE's archive, so the real fetch
-    # always fails and this must honestly report the synthetic fallback,
-    # never silently claim real data.
+    # The injected transport (see _isolated_data_lake_root) makes NSE's
+    # archive fail deterministically, so this must honestly report the
+    # synthetic fallback, never silently claim real data.
     assert body["source"] == "bhavcopy_fallback_synthetic"
     assert body["details"]["real_fetch_error"] is not None
 
