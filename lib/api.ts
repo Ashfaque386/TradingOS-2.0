@@ -520,6 +520,49 @@ export type RunPipelineResult = {
 export const runAgentPipeline = (objective: string) =>
   apiPost<RunPipelineResult>('/api/v1/agents/pipeline/run', { objective })
 
+// ---- Agent long-term vector memory (docs/phase20-old-vs-new-comparison.md
+// item 18) ----
+// `available: false` is a normal, honest state (no Qdrant URL, or no embedding
+// provider configured) -- `reason` says exactly what is missing, and the
+// operations that need memory return 503 with the same reason.
+export type MemoryKind = 'strategy' | 'news' | 'organization'
+export type MemoryCollectionStatus = {
+  kind: MemoryKind
+  exists: boolean
+  count: number
+  dimension: number | null
+}
+export type MemoryStatus = {
+  available: boolean
+  reason: string | null
+  qdrant_configured: boolean
+  qdrant_reachable: boolean
+  embedding_provider: string | null
+  embedding_model: string | null
+  kinds: MemoryKind[]
+  collections: MemoryCollectionStatus[]
+}
+export type MemoryHit = {
+  id: string
+  kind: MemoryKind
+  score: number
+  text: string
+  metadata: Record<string, unknown>
+}
+
+export const getMemoryStatus = () => apiGet<MemoryStatus>('/api/v1/memory/status')
+
+export const queryMemory = (q: string, kind?: MemoryKind, limit = 8) =>
+  apiGet<MemoryHit[]>(
+    `/api/v1/memory/query?q=${encodeURIComponent(q)}&limit=${limit}${kind ? `&kind=${kind}` : ''}`,
+  )
+
+export const rememberMemory = (kind: MemoryKind, text: string) =>
+  apiPost<{ id: string; kind: MemoryKind }>(`/api/v1/memory/${kind}`, { text })
+
+export const forgetMemory = (kind: MemoryKind, id: string) =>
+  apiDelete<void>(`/api/v1/memory/${kind}/${id}`)
+
 export type SignoffSnapshot = {
   type: 'snapshot'
   server_time: string

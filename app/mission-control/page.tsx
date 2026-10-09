@@ -6,6 +6,7 @@ import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertCircle, ArrowRight, BarChart3, Beaker, CalendarClock, Check, CheckCircle2, ChevronRight, Clock3, Inbox, Layers3, MessageSquarePlus, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, Trash2, X } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { AgentPipelinePanel } from '@/components/mission-control/agent-pipeline-panel'
+import { AgentMemoryPanel } from '@/components/mission-control/agent-memory-panel'
 import { useAuth } from '@/components/auth/auth-provider'
 import { ChartContainer } from '@/components/ui/chart'
 import {
@@ -855,6 +856,7 @@ export default function MissionControlPage() {
   return <ShellLayout><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5"><header className="mission-hero"><div><p className="eyebrow flex items-center gap-2"><Sparkles className="size-3 text-cyan-300" />CONTROL PLANE // MISSION CONTROL</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">Operator command center</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Coordinate the agent organization and review strategy promotions -- live order intents now execute autonomously per strategy, see the Strategies page.</p></div><div className="flex items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[.06] px-3 py-2 text-xs text-amber-100"><AlertCircle className="size-4" />{pendingCount ? `${pendingCount} item${pendingCount === 1 ? '' : 's'} pending sign-off` : 'No approvals waiting'}</div></header>
     {canCreateRun && <form onSubmit={handleCreateRun} className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/[.02] p-3"><Inbox className="size-4 shrink-0 text-cyan-300" /><input value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="Give the organization a new objective..." className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground" /><button type="submit" disabled={creating || !objective.trim()} className="button-primary">{creating ? <RefreshCw className="size-3 animate-spin" /> : <ArrowRight className="size-3" />}Dispatch</button>{createError && <span className="text-xs text-rose-300">{createError}</span>}</form>}
     <AgentPipelinePanel canRun={canCreateRun} />
+    <AgentMemoryPanel canWrite={canCreateRun} canDelete={isSystemAdmin} />
     <div className="grid gap-4 xl:grid-cols-3">
       <LiveActivityPanel activities={activities} />
       <AutomationSchedulePanel jobs={scheduledJobs} heartbeatSeconds={heartbeatSeconds} canManage={isSystemAdmin} onChanged={refreshSchedule} />

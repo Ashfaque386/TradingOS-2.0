@@ -46,6 +46,16 @@ services:
       # healthy) -- the vitals endpoint tolerates that ordering and reports
       # both percentiles as null until Prometheus is actually reachable.
       PROMETHEUS_URL: http://prometheus:9090
+      # Agent long-term vector memory (src/memory/): the Qdrant service below,
+      # reached by service name like redis/temporal. Not in `backend`'s
+      # depends_on on purpose -- memory is an aid, and with Qdrant down (or
+      # no embedding provider chosen) it reports itself unavailable instead
+      # of blocking the API. The embedding provider/model have no default:
+      # an embedding model is a real choice (see src/core/config.py); the
+      # provider's credentials come from Settings > LLM providers.
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      MEMORY_EMBEDDING_PROVIDER: ${MEMORY_EMBEDDING_PROVIDER:-}
+      MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-}
       # Opt-in: unset by default, so a stock deployment never gets a
       # hardcoded credential baked in. Set both in .env to have the
       # container ensure this SystemAdministrator user exists on every
@@ -153,6 +163,25 @@ services:
       retries: 5
       start_period: 10s
 
+  qdrant:
+    # Vector store for agent long-term memory (src/memory/). Pinned to the
+    # same minor as the qdrant-client in backend/pyproject.toml. Not
+    # published to the host: only the backend talks to it, over the internal
+    # Docker network -- same rule as Redis and Postgres.
+    image: qdrant/qdrant:v1.19.1
+    container_name: TradingOS-2.0-Qdrant
+    restart: unless-stopped
+    volumes:
+      - tradingos-2.0_qdrant_data:/qdrant/storage
+    healthcheck:
+      # The image ships neither curl nor wget; a bare TCP connect to the
+      # HTTP port is what bash can do.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   temporal:
     # Single-node dev server (Build Spec §10: Monte Carlo "distributed via
     # Temporal") -- the official `temporal server start-dev` quick-start
@@ -252,6 +281,8 @@ volumes:
     name: tradingos-2.0_pgdata
   tradingos-2.0_secrets:
     name: tradingos-2.0_secrets
+  tradingos-2.0_qdrant_data:
+    name: tradingos-2.0_qdrant_data
   tradingos-2.0_prometheus_data:
     name: tradingos-2.0_prometheus_data
   tradingos-2.0_grafana_data:

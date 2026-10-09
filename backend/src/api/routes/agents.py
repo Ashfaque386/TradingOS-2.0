@@ -49,6 +49,7 @@ from src.core.redis_client import get_redis
 from src.gateway.roster import ROSTER, ROSTER_BY_ID
 from src.gateway.service import ServiceError, set_identity
 from src.gateway.state import get_state
+from src.memory.service import get_pipeline_memory
 from src.models.agent_pipeline_event import AgentPipelineEvent
 from src.models.heartbeat_log import HeartbeatLog
 from src.models.prompt_version import PromptVersion
@@ -445,6 +446,7 @@ async def run_pipeline_endpoint(
         active_prompts=active_prompts,
         run_id=str(run_id),
         event_sink=recorder,
+        memory=get_pipeline_memory(),
     )
     return RunPipelineResponse(
         objective=state.objective,

@@ -69,6 +69,26 @@ class Settings(BaseSettings):
     huggingface_api_key: str | None = None
     ollama_base_url: str = "http://localhost:11434"
 
+    # Agent long-term vector memory (src/memory/). Both halves are required
+    # and either one missing leaves memory honestly "unavailable" -- never a
+    # fake: there is no built-in fallback embedder, because a hash or random
+    # vector would make similarity search return confident-looking nonsense.
+    # `qdrant_url`: the Qdrant server (docker-compose.yml's `qdrant` service
+    # sets http://qdrant:6333); empty disables memory. The embedding
+    # provider is one of ollama|openai|gemini|custom and reuses that
+    # provider's credentials from Settings (the encrypted LLM provider
+    # store, then these env-backed fields above), so there is no second
+    # place to enter a key. `memory_embedding_model` has no default on
+    # purpose: an embedding model is a real choice (Ollama needs one pulled,
+    # e.g. nomic-embed-text), and a dimension mismatch if it later changes is
+    # reported, not papered over.
+    qdrant_url: str = ""
+    qdrant_api_key: str | None = None
+    memory_embedding_provider: str = ""
+    memory_embedding_model: str = ""
+    # How many prior lessons a pipeline run recalls into its prompts.
+    memory_recall_limit: int = 3
+
     # Strategy sandbox (src/engine/sandbox/, Build Spec §9) AND, as of
     # Phase 10, the real DuckDB + Parquet data lake root (src/data/lake.py)
     # -- the same directory, on purpose: a sandboxed strategy's read-only

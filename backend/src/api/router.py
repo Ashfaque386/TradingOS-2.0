@@ -17,6 +17,7 @@ from src.api.routes import (
     live_trading,
     llm_providers,
     market_data,
+    memory,
     notification_channels,
     operator_guidance,
     orchestration,
@@ -37,6 +38,7 @@ api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(orchestration.router)
 api_router.include_router(agents.router)
+api_router.include_router(memory.router)
 api_router.include_router(strategies.router)
 api_router.include_router(approvals.router)
 api_router.include_router(backtests.router)

@@ -61,6 +61,17 @@ class PipelineEventSink(Protocol):
     ) -> None: ...
 
 
+class AgentMemory(Protocol):
+    """Agent long-term memory as the pipeline sees it. Same reasoning as
+    `PipelineEventSink`: a Protocol so this module needs neither Qdrant nor an
+    embedding provider -- `src.memory.service.PipelineMemory` satisfies it.
+    Implementations must not raise; memory only ever adds context to a run."""
+
+    async def recall(self, objective: str) -> list[str]: ...
+
+    async def remember(self, text: str, metadata: dict[str, Any]) -> None: ...
+
+
 async def _safe_emit(
     sink: PipelineEventSink | None,
     event_type: str,
@@ -131,7 +142,13 @@ def _with_active_prompt(state: TradingOSGraphState, agent_id: str, task_prompt: 
     own task framing (what field to fill, what format is expected) always
     still reaches the LLM even when an operator has set a custom prompt."""
     active = state.active_prompts.get(agent_id)
-    return f"{active}\n\n{task_prompt}" if active else task_prompt
+    prompt = f"{active}\n\n{task_prompt}" if active else task_prompt
+    if state.memory_context:
+        # Agent long-term memory: lessons from earlier, similar runs, after
+        # the task so its framing still leads.
+        lessons = "\n".join(f"- {lesson}" for lesson in state.memory_context)
+        prompt = f"{prompt}\n\nLessons from earlier similar runs (use if relevant):\n{lessons}"
+    return prompt
 
 
 async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
@@ -238,6 +255,30 @@ async def _node_memory_ingest(state: TradingOSGraphState, router: LlmRouter) -> 
     }
 
 
+def _strategy_label(state: TradingOSGraphState) -> str:
+    strategy = state.strategy or {}
+    return str(strategy.get("name") or strategy.get("kind") or strategy.get("source") or "unnamed")
+
+
+def _rejection_lesson(state: TradingOSGraphState) -> str:
+    sharpe = (state.evaluation_verdict or {}).get("sharpe")
+    return (
+        f"Objective {_preview(state.objective)!r}: strategy {_strategy_label(state)!r} was "
+        f"rejected at evaluation (sharpe {sharpe}); rejection {state.rejection_count + 1}."
+    )
+
+
+def _outcome_lesson(final: TradingOSGraphState) -> str:
+    verdict = (final.evaluation_verdict or {}).get("verdict", "none")
+    sharpe = (final.evaluation_verdict or {}).get("sharpe")
+    outcome = "deployed to paper" if final.deployment_result else "not deployed"
+    return (
+        f"Objective {_preview(final.objective)!r}: strategy {_strategy_label(final)!r} "
+        f"evaluated {verdict} (sharpe {sharpe}) after {final.rejection_count} rejection(s); "
+        f"{outcome}."
+    )
+
+
 NODE_FUNCTIONS: dict[str, NodeFn] = {
     "ceo_kickoff": _node_ceo_kickoff,
     "market_analysis_step": _node_market_analysis,
@@ -296,11 +337,35 @@ def _make_skip_node(
     return node
 
 
+def _remembering_ingest(fn: NodeFn, memory: AgentMemory) -> NodeFn:
+    """The `memory_ingest` node's real job: besides counting the rejection,
+    write what was rejected and why into agent long-term memory, so a later
+    run on a similar objective starts knowing it."""
+
+    async def ingest(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
+        await _safe_remember(
+            memory,
+            _rejection_lesson(state),
+            {"event": "rejection", "run_id": state.run_id, "strategy": _strategy_label(state)},
+        )
+        return await fn(state, router)
+
+    return ingest
+
+
+async def _safe_remember(memory: AgentMemory, text: str, metadata: dict[str, Any]) -> None:
+    try:
+        await memory.remember(text, metadata)
+    except Exception:  # noqa: BLE001 - memory must never break the run it serves
+        logger.warning("agents.graph.memory_remember_failed")
+
+
 def build_graph(
     enabled_agents: frozenset[str] | None = None,
     *,
     router: LlmRouter | None = None,
     event_sink: PipelineEventSink | None = None,
+    memory: AgentMemory | None = None,
 ) -> CompiledStateGraph[TradingOSGraphState, None, TradingOSGraphState, TradingOSGraphState]:
     """Compiles the 13-node pipeline. enabled_agents defaults to "every
     roster agent enabled"; pass the subset that's actually enabled (e.g.
@@ -318,6 +383,8 @@ def build_graph(
         node: Callable[[TradingOSGraphState], Awaitable[dict[str, Any]]]
         if agent_id in enabled_agents:
             real_fn = NODE_FUNCTIONS[node_name]
+            if node_name == "memory_ingest" and memory is not None:
+                real_fn = _remembering_ingest(real_fn, memory)
 
             async def timed_node(
                 state: TradingOSGraphState,
@@ -419,12 +486,24 @@ async def run_pipeline(
     run_id: str | None = None,
     active_prompts: dict[str, str] | None = None,
     event_sink: PipelineEventSink | None = None,
+    memory: AgentMemory | None = None,
 ) -> TradingOSGraphState:
-    compiled = build_graph(enabled_agents, router=router, event_sink=event_sink)
+    compiled = build_graph(enabled_agents, router=router, event_sink=event_sink, memory=memory)
+    lessons: list[str] = []
+    if memory is not None:
+        try:
+            lessons = await memory.recall(objective)
+        except Exception:  # noqa: BLE001 - memory must never break the run it serves
+            logger.warning("agents.graph.memory_recall_failed")
     initial = TradingOSGraphState(
-        objective=objective, run_id=run_id, active_prompts=active_prompts or {}
+        objective=objective,
+        run_id=run_id,
+        active_prompts=active_prompts or {},
+        memory_context=lessons,
     )
     await _safe_emit(event_sink, "pipeline.started", payload={"objective": _preview(objective)})
+    if memory is not None:
+        await _safe_emit(event_sink, "memory.recalled", payload={"lessons": len(lessons)})
     # LangGraph's default recursion_limit (25) is well under the step count
     # a full validator-retry (up to MAX_VALIDATION_ATTEMPTS) plus
     # evaluation-rejection (up to MAX_REJECTIONS full strategy-generation
@@ -440,6 +519,18 @@ async def run_pipeline(
         )
         raise
     final = TradingOSGraphState.model_validate(dict(result))
+    if memory is not None:
+        await _safe_remember(
+            memory,
+            _outcome_lesson(final),
+            {
+                "event": "outcome",
+                "run_id": final.run_id,
+                "strategy": _strategy_label(final),
+                "verdict": (final.evaluation_verdict or {}).get("verdict"),
+                "rejections": final.rejection_count,
+            },
+        )
     await _safe_emit(
         event_sink,
         "pipeline.completed",

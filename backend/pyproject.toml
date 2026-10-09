@@ -93,6 +93,11 @@ dependencies = [
     # directly from the API process's own OS view, not derived from any
     # Prometheus metric (none of the five this app tracks are host-level).
     "psutil>=6.0,<7.0",
+    # Agent long-term vector memory (src/memory/): the Qdrant client. Its
+    # in-process ":memory:" mode is what the test suite runs real vector
+    # search against, so no Qdrant server is needed in CI. Checked against
+    # the existing pins before adding (numpy/httpx/pydantic unchanged).
+    "qdrant-client>=1.12,<2",
 ]
 
 [project.scripts]

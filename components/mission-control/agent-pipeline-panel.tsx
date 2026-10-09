@@ -42,6 +42,8 @@ type RunView = {
   status: 'running' | 'completed' | 'failed'
   steps: StepRow[]
   startedAt: string
+  /** Lessons recalled from agent memory before the run; null if memory wasn't consulted. */
+  lessonsRecalled: number | null
 }
 
 function summarizeOutput(output: unknown): string {
@@ -77,6 +79,7 @@ export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunVi
   const steps: StepRow[] = []
   let status: RunView['status'] = 'running'
   let objective: string | null = null
+  let lessonsRecalled: number | null = null
 
   const findStep = (node: string | null, stepIndex: number) =>
     steps.find((s) => s.node === node && s.stepIndex === stepIndex)
@@ -89,6 +92,9 @@ export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunVi
     switch (event.event_type) {
       case 'pipeline.started':
         objective = typeof payload.objective === 'string' ? payload.objective : null
+        break
+      case 'memory.recalled':
+        lessonsRecalled = typeof payload.lessons === 'number' ? payload.lessons : null
         break
       case 'pipeline.completed':
         status = 'completed'
@@ -140,7 +146,7 @@ export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunVi
         break
     }
   }
-  return { runId, objective, status, steps, startedAt: ordered[0]?.created_at ?? '' }
+  return { runId, objective, status, steps, startedAt: ordered[0]?.created_at ?? '', lessonsRecalled }
 }
 
 function StatusIcon({ status }: { status: StepStatus }) {
@@ -236,6 +242,7 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {view?.objective ? `Objective: ${view.objective}` : 'What each agent is doing as the pipeline runs, step by step'}
+            {view?.lessonsRecalled ? ` · ${view.lessonsRecalled} lesson${view.lessonsRecalled === 1 ? '' : 's'} recalled from memory` : ''}
           </p>
         </div>
         {canRun && (

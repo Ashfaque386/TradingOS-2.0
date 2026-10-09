@@ -49,3 +49,10 @@ class TradingOSGraphState(BaseModel):
     # real, common case -- in which the LLM-backed nodes keep using their
     # existing hardcoded prompt exactly as before this field existed.
     active_prompts: dict[str, str] = Field(default_factory=dict)
+
+    # Lessons recalled from agent long-term memory (src.memory) for this
+    # run's objective, resolved once up front by run_pipeline -- empty when
+    # memory is unconfigured, unreachable, or has nothing similar yet, the
+    # honest common case, in which every prompt is exactly what it was
+    # before memory existed.
+    memory_context: list[str] = Field(default_factory=list)
