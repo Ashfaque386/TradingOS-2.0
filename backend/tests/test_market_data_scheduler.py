@@ -7,12 +7,15 @@ scheduler's own entry point (not just the orchestration function it
 calls).
 """
 
+from datetime import date, datetime
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.data import lake
+from src.data.nse_calendar import is_nse_trading_day
 from src.data.providers import FakeMarketDataProvider
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.live_trading_subscription import LiveTradingSubscription
@@ -20,6 +23,22 @@ from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.strategy import Strategy
 from src.models.strategy_version import StrategyVersion
 from src.orchestration import market_data_scheduler as scheduler_module
+
+# The daily job ingests "today in IST" (`datetime.now(IST).date()`) and, correctly,
+# does nothing on a day NSE is closed. A test that lets the real clock decide
+# whether anything gets ingested passes on weekdays and fails every weekend and
+# exchange holiday -- so these tests pin the scheduler's "today" instead.
+_TRADING_DAY = date(2026, 9, 16)  # a Wednesday, not on config/nse_holidays.json
+_WEEKEND_DAY = date(2026, 9, 19)  # a Saturday
+
+
+def _freeze_scheduler_today(monkeypatch: pytest.MonkeyPatch, day: date) -> None:
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(day.year, day.month, day.day, 19, 0, tzinfo=tz)
+
+    monkeypatch.setattr(scheduler_module, "datetime", _FrozenDatetime)
 
 
 async def _make_strategy_and_version(db_session_factory) -> tuple:
@@ -80,8 +99,12 @@ async def test_daily_job_no_ops_with_no_active_symbols(
 
 
 async def test_daily_job_ingests_for_active_subscription_symbols(
-    db_session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+    db_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    assert is_nse_trading_day(_TRADING_DAY), "fixture date must be a real NSE trading day"
+    _freeze_scheduler_today(monkeypatch, _TRADING_DAY)
     strategy, version = await _make_strategy_and_version(db_session_factory)
     await _enroll_paper_subscription(db_session_factory, version, "DEMOSTOCK")
     provider = FakeMarketDataProvider()
@@ -95,6 +118,30 @@ async def test_daily_job_ingests_for_active_subscription_symbols(
         )
         rows = result.scalars().all()
     assert len(rows) == 1
+
+
+async def test_daily_job_ingests_nothing_on_a_day_nse_is_closed(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The behaviour that made the test above date-dependent: on a weekend
+    (or exchange holiday) the job runs, records that it skipped, and writes no
+    freshness rows -- never a fabricated bar for a day that had no session."""
+    assert not is_nse_trading_day(_WEEKEND_DAY)
+    _freeze_scheduler_today(monkeypatch, _WEEKEND_DAY)
+    strategy, version = await _make_strategy_and_version(db_session_factory)
+    await _enroll_paper_subscription(db_session_factory, version, "DEMOSTOCK")
+    root = tmp_path / "lake"
+
+    await scheduler_module.run_incremental_daily_job(
+        db_session_factory, FakeMarketDataProvider(), root
+    )
+
+    async with db_session_factory() as db:
+        rows = (await db.execute(select(DatasetFreshnessRecord))).scalars().all()
+    assert rows == []
+    assert lake.all_parquet_files(root) == []
 
 
 async def test_intraday_job_skips_when_market_closed(
