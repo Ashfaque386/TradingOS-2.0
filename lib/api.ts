@@ -487,6 +487,39 @@ export type ActivityFeedMessage =
   | { type: 'backfill'; events: ActivityEvent[] }
   | { type: 'event'; event: ActivityEvent }
 
+// ---- Agent pipeline live step feed (Phase 19 Finding #1) ----
+// One event per step of one LangGraph pipeline run, from
+// GET /api/v1/agents/pipeline/events (history) and the
+// /ws/agent-pipeline-events channel (live). event_type is one of
+// pipeline.started|completed|failed and step.started|completed|failed|skipped.
+export type AgentPipelineEvent = {
+  run_id: string
+  sequence: number
+  event_type: string
+  node: string | null
+  agent_id: string | null
+  payload: Record<string, unknown> | null
+  created_at: string
+}
+export type AgentPipelineEventMessage = { type: 'event'; event: AgentPipelineEvent }
+
+export const listAgentPipelineEvents = (limit = 200, runId?: string) =>
+  apiGet<AgentPipelineEvent[]>(
+    `/api/v1/agents/pipeline/events?limit=${limit}${runId ? `&run_id=${runId}` : ''}`,
+  )
+
+export type RunPipelineResult = {
+  objective: string
+  node_log: string[]
+  deployment_result: Record<string, unknown> | null
+  evaluation_verdict: Record<string, unknown> | null
+  rejection_count: number
+  run_id: string
+}
+
+export const runAgentPipeline = (objective: string) =>
+  apiPost<RunPipelineResult>('/api/v1/agents/pipeline/run', { objective })
+
 export type SignoffSnapshot = {
   type: 'snapshot'
   server_time: string

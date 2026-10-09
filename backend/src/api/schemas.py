@@ -143,6 +143,20 @@ class RunPipelineResponse(BaseModel):
     deployment_result: dict[str, Any] | None
     evaluation_verdict: dict[str, Any] | None
     rejection_count: int
+    # Phase 19 Finding #1: the id this run's live step events were recorded
+    # and published under -- feed it to GET /agents/pipeline/events or the
+    # /ws/agent-pipeline-events `run_id` filter to follow or replay the run.
+    run_id: str
+
+
+class AgentPipelineEventResponse(BaseModel):
+    run_id: str
+    sequence: int
+    event_type: str
+    node: str | None
+    agent_id: str | None
+    payload: dict[str, Any] | None
+    created_at: str
 
 
 class SetAgentIdentityRequest(BaseModel):

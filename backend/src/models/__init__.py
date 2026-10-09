@@ -10,6 +10,7 @@
 from src.models.agent_binding import AgentBinding
 from src.models.agent_config_version import AgentConfigVersion, ConfigVersionStatus
 from src.models.agent_identity import AgentIdentity
+from src.models.agent_pipeline_event import AgentPipelineEvent
 from src.models.agent_to_agent_policy import AgentToAgentPolicy
 from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
@@ -73,6 +74,7 @@ __all__ = [
     "AgentBinding",
     "AgentConfigVersion",
     "AgentIdentity",
+    "AgentPipelineEvent",
     "AgentToAgentPolicy",
     "ApprovalRequest",
     "ApprovalStatus",

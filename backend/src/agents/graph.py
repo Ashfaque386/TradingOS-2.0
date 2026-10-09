@@ -23,7 +23,7 @@ serves the real completion instead.
 
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import structlog
 from langgraph.graph import END, StateGraph
@@ -42,6 +42,75 @@ MAX_VALIDATION_ATTEMPTS = 3
 MAX_REJECTIONS = 5
 
 NodeFn = Callable[[TradingOSGraphState, LlmRouter], Awaitable[dict[str, Any]]]
+
+
+class PipelineEventSink(Protocol):
+    """Where a pipeline run reports what each step is doing (Phase 19
+    Finding #1, the live per-step agent feed). A Protocol, not an import of
+    `src.orchestration.events`: this module deliberately stays DB-independent
+    (see `run_pipeline`), so whoever owns a database session and Redis hands
+    in an implementation -- `src.orchestration.pipeline_events` does."""
+
+    async def emit(
+        self,
+        event_type: str,
+        *,
+        node: str | None = None,
+        agent_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None: ...
+
+
+async def _safe_emit(
+    sink: PipelineEventSink | None,
+    event_type: str,
+    *,
+    node: str | None = None,
+    agent_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Observability must never break the pipeline it observes: a sink that
+    raises (a dropped DB connection, a full disk) costs a missing feed row
+    and a warning, never a failed strategy run."""
+    if sink is None:
+        return
+    try:
+        await sink.emit(event_type, node=node, agent_id=agent_id, payload=payload)
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.warning("agents.graph.event_sink_failed", event_type=event_type, node=node)
+
+
+_PREVIEW_CHARS = 300
+_MAX_SUMMARY_FIELDS = 12
+
+
+def _preview(value: str) -> str:
+    return value if len(value) <= _PREVIEW_CHARS else value[:_PREVIEW_CHARS] + "..."
+
+
+def _summarize_output(update: dict[str, Any]) -> dict[str, Any]:
+    """A bounded, JSON-safe account of what a node actually produced, for
+    the live feed: each state field the node set, reduced to its scalar
+    values (a dict's top-level scalars, a long string's length plus a
+    preview). Never the whole object -- generated code or an LLM response
+    can be large, and the feed needs "what happened", not a data dump."""
+    summary: dict[str, Any] = {}
+    for key, value in update.items():
+        if key == "node_log":
+            continue
+        if isinstance(value, dict):
+            summary[key] = {
+                k: (_preview(v) if isinstance(v, str) else v)
+                for k, v in list(value.items())[:_MAX_SUMMARY_FIELDS]
+                if isinstance(v, str | int | float | bool) or v is None
+            }
+        elif isinstance(value, str):
+            summary[key] = {"chars": len(value), "preview": _preview(value)}
+        elif isinstance(value, str | int | float | bool) or value is None:
+            summary[key] = value
+        else:
+            summary[key] = type(value).__name__
+    return summary
 
 
 async def _llm_or_fallback(
@@ -212,16 +281,26 @@ def _route_after_memory_ingest(state: TradingOSGraphState) -> str:
 
 
 def _make_skip_node(
-    node_name: str, agent_id: str
+    node_name: str, agent_id: str, event_sink: PipelineEventSink | None = None
 ) -> Callable[[TradingOSGraphState], Awaitable[dict[str, Any]]]:
     async def node(state: TradingOSGraphState) -> dict[str, Any]:
+        await _safe_emit(
+            event_sink,
+            "step.skipped",
+            node=node_name,
+            agent_id=agent_id,
+            payload={"step_index": len(state.node_log), "reason": "agent-disabled"},
+        )
         return {"node_log": [*state.node_log, f"{node_name}:skipped(agent-disabled:{agent_id})"]}
 
     return node
 
 
 def build_graph(
-    enabled_agents: frozenset[str] | None = None, *, router: LlmRouter | None = None
+    enabled_agents: frozenset[str] | None = None,
+    *,
+    router: LlmRouter | None = None,
+    event_sink: PipelineEventSink | None = None,
 ) -> CompiledStateGraph[TradingOSGraphState, None, TradingOSGraphState, TradingOSGraphState]:
     """Compiles the 13-node pipeline. enabled_agents defaults to "every
     roster agent enabled"; pass the subset that's actually enabled (e.g.
@@ -241,19 +320,55 @@ def build_graph(
             real_fn = NODE_FUNCTIONS[node_name]
 
             async def timed_node(
-                state: TradingOSGraphState, _fn: NodeFn = real_fn, _name: str = node_name
+                state: TradingOSGraphState,
+                _fn: NodeFn = real_fn,
+                _name: str = node_name,
+                _agent: str = agent_id,
             ) -> dict[str, Any]:
+                step_index = len(state.node_log)
+                await _safe_emit(
+                    event_sink,
+                    "step.started",
+                    node=_name,
+                    agent_id=_agent,
+                    payload={"step_index": step_index},
+                )
                 started = time.perf_counter()
                 try:
-                    return await _fn(state, bound_router)
+                    update = await _fn(state, bound_router)
+                except Exception as exc:
+                    await _safe_emit(
+                        event_sink,
+                        "step.failed",
+                        node=_name,
+                        agent_id=_agent,
+                        payload={
+                            "step_index": step_index,
+                            "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                            "error": _preview(f"{type(exc).__name__}: {exc}"),
+                        },
+                    )
+                    raise
                 finally:
                     agent_node_duration_seconds.labels(node=_name).observe(
                         time.perf_counter() - started
                     )
+                await _safe_emit(
+                    event_sink,
+                    "step.completed",
+                    node=_name,
+                    agent_id=_agent,
+                    payload={
+                        "step_index": step_index,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "output": _summarize_output(update),
+                    },
+                )
+                return update
 
             node = timed_node
         else:
-            node = _make_skip_node(node_name, agent_id)
+            node = _make_skip_node(node_name, agent_id, event_sink)
         # langgraph's own add_node() overloads are generic over a
         # TypedDict/dataclass/BaseModel-bound NodeInputT and don't cleanly
         # resolve for a plain async Callable[[TradingOSGraphState],
@@ -303,15 +418,36 @@ async def run_pipeline(
     router: LlmRouter | None = None,
     run_id: str | None = None,
     active_prompts: dict[str, str] | None = None,
+    event_sink: PipelineEventSink | None = None,
 ) -> TradingOSGraphState:
-    compiled = build_graph(enabled_agents, router=router)
+    compiled = build_graph(enabled_agents, router=router, event_sink=event_sink)
     initial = TradingOSGraphState(
         objective=objective, run_id=run_id, active_prompts=active_prompts or {}
     )
+    await _safe_emit(event_sink, "pipeline.started", payload={"objective": _preview(objective)})
     # LangGraph's default recursion_limit (25) is well under the step count
     # a full validator-retry (up to MAX_VALIDATION_ATTEMPTS) plus
     # evaluation-rejection (up to MAX_REJECTIONS full strategy-generation
     # loops, each ~8 nodes) run can legitimately take -- raise it rather
     # than let a real retry sequence be mistaken for a runaway graph.
-    result = await compiled.ainvoke(initial, config={"recursion_limit": 200})
-    return TradingOSGraphState.model_validate(dict(result))
+    try:
+        result = await compiled.ainvoke(initial, config={"recursion_limit": 200})
+    except Exception as exc:
+        await _safe_emit(
+            event_sink,
+            "pipeline.failed",
+            payload={"error": _preview(f"{type(exc).__name__}: {exc}")},
+        )
+        raise
+    final = TradingOSGraphState.model_validate(dict(result))
+    await _safe_emit(
+        event_sink,
+        "pipeline.completed",
+        payload={
+            "steps": len(final.node_log),
+            "rejection_count": final.rejection_count,
+            "evaluation_verdict": (final.evaluation_verdict or {}).get("verdict"),
+            "deployed": bool(final.deployment_result),
+        },
+    )
+    return final

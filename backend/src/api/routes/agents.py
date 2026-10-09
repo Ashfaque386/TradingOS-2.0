@@ -20,9 +20,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from redis.asyncio import Redis
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.agents.graph import run_pipeline
 from src.agents.roster import NO_DATA_SOURCE_AGENTS, capabilities_for
@@ -32,6 +33,7 @@ from src.api.schemas import (
     AgentAnalyticsSummaryRow,
     AgentAnalyticsTrendPoint,
     AgentHeartbeatEntryResponse,
+    AgentPipelineEventResponse,
     AgentSummaryResponse,
     AgentTaskEntryResponse,
     CreatePromptVersionRequest,
@@ -41,15 +43,18 @@ from src.api.schemas import (
     SetAgentIdentityRequest,
 )
 from src.core.config import get_settings
-from src.core.db import get_db
+from src.core.db import get_db, get_session_factory
 from src.core.rbac import Role, register_policy, require_role
+from src.core.redis_client import get_redis
 from src.gateway.roster import ROSTER, ROSTER_BY_ID
 from src.gateway.service import ServiceError, set_identity
 from src.gateway.state import get_state
+from src.models.agent_pipeline_event import AgentPipelineEvent
 from src.models.heartbeat_log import HeartbeatLog
 from src.models.prompt_version import PromptVersion
 from src.models.task import Task, TaskStatus
 from src.models.user import User
+from src.orchestration.pipeline_events import PipelineEventRecorder, list_pipeline_events
 from src.orchestration.prompt_versions import (
     NoSuchPromptVersionError,
     activate_prompt_version,
@@ -67,6 +72,7 @@ register_policy(
     "/api/v1/agents/pipeline/run",
     roles=[Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER],
 )
+register_policy("GET", "/api/v1/agents/pipeline/events", roles=list(Role))
 register_policy("PUT", "/api/v1/agents/{agent_id}/identity", roles=_WRITE_ROLES)
 register_policy("GET", "/api/v1/agents/{agent_id}/activity", roles=list(Role))
 register_policy("GET", "/api/v1/agents/analytics/summary", roles=list(Role))
@@ -380,10 +386,39 @@ async def activate_prompt_version_endpoint(
     return _prompt_version_response(version)
 
 
+def _pipeline_event_response(event: AgentPipelineEvent) -> AgentPipelineEventResponse:
+    return AgentPipelineEventResponse(
+        run_id=str(event.run_id),
+        sequence=event.sequence,
+        event_type=event.event_type,
+        node=event.node,
+        agent_id=event.agent_id,
+        payload=event.payload,
+        created_at=event.created_at.isoformat(),
+    )
+
+
+@router.get("/pipeline/events")
+async def list_pipeline_events_endpoint(
+    run_id: uuid.UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[AgentPipelineEventResponse]:
+    """Phase 19 Finding #1's history half: replay one pipeline run's steps
+    (`run_id`, in order) or, with no `run_id`, the most recent `limit` steps
+    across runs -- what the Mission Control feed backfills from on open. The
+    live half is `/ws/agent-pipeline-events`."""
+    events = await list_pipeline_events(db, run_id=run_id, limit=limit)
+    return [_pipeline_event_response(e) for e in events]
+
+
 @router.post("/pipeline/run")
 async def run_pipeline_endpoint(
     body: RunPipelineRequest,
     db: AsyncSession = Depends(get_db),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+    redis: Redis = Depends(get_redis),
     _current_user: User = Depends(require_role),
 ) -> RunPipelineResponse:
     effective_by_id = get_state().get_all_effective_agents()
@@ -400,8 +435,16 @@ async def run_pipeline_endpoint(
     active_prompts = await get_active_prompts(
         db, ["ceo-agent", "strategy-generator", "python-code-generator"]
     )
+    # Phase 19 Finding #1: every step of this run is recorded and published
+    # live under this id (see src.orchestration.pipeline_events).
+    run_id = uuid.uuid4()
+    recorder = PipelineEventRecorder(session_factory, redis, run_id)
     state = await run_pipeline(
-        body.objective, enabled_agents=enabled_agents, active_prompts=active_prompts
+        body.objective,
+        enabled_agents=enabled_agents,
+        active_prompts=active_prompts,
+        run_id=str(run_id),
+        event_sink=recorder,
     )
     return RunPipelineResponse(
         objective=state.objective,
@@ -409,4 +452,5 @@ async def run_pipeline_endpoint(
         deployment_result=state.deployment_result,
         evaluation_verdict=state.evaluation_verdict,
         rejection_count=state.rejection_count,
+        run_id=str(run_id),
     )

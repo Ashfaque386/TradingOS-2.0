@@ -54,6 +54,7 @@ from src.core.redis_client import get_redis
 from src.engine.paper_trading.tick_feed import tick_stream_key
 from src.models.approval_request import ApprovalRequest, ApprovalStatus
 from src.models.audit_log import AuditLog
+from src.orchestration.pipeline_events import channel_for
 
 logger = structlog.get_logger(__name__)
 
@@ -162,6 +163,44 @@ async def organization_events_ws(
 
     run_id_param = websocket.query_params.get("run_id")
     pattern = f"organization-events:{run_id_param}" if run_id_param else "organization-events:*"
+
+    pubsub = redis.pubsub()
+    try:
+        await pubsub.psubscribe(pattern)
+        async for message in pubsub.listen():
+            if message["type"] != "pmessage":
+                continue
+            try:
+                payload = json.loads(message["data"])
+            except (TypeError, ValueError):
+                continue
+            await websocket.send_json({"type": "event", "event": payload})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await pubsub.punsubscribe(pattern)
+        # redis-py's own PubSub.aclose() has no type annotations.
+        await pubsub.aclose()  # type: ignore[no-untyped-call]
+
+
+@router.websocket("/agent-pipeline-events")
+async def agent_pipeline_events_ws(
+    websocket: WebSocket,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> None:
+    """Phase 19 Finding #1: each step of a LangGraph pipeline run as it
+    happens (`src.orchestration.pipeline_events`), optionally filtered to one
+    run with `?run_id=`. Same shape and auth as `/organization-events`; that
+    channel carries the Phase 2 task-graph engine's events and this one
+    carries the agent pipeline's -- two different run systems."""
+    user = await authenticate_websocket(websocket, db)
+    if user is None:
+        return
+    await websocket.accept()
+
+    run_id_param = websocket.query_params.get("run_id")
+    pattern = channel_for(run_id_param) if run_id_param else channel_for("*")
 
     pubsub = redis.pubsub()
     try:
