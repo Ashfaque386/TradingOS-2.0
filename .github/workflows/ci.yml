@@ -254,6 +254,14 @@ jobs:
           AGENT_GATEWAY_CONFIG_PATH: ../config/tradingos.config.json
           NSE_HOLIDAYS_PATH: ../config/nse_holidays.json
           SECRETS_STORE_PATH: secrets/e2e_broker_credentials.enc
+          # The suite drives a Next dev server that polls dozens of
+          # endpoints per page, all from one IP (127.0.0.1) -- measured at
+          # ~300 requests/minute, exactly the blanket API limiter's default
+          # ceiling (settings.api_rate_limit_per_minute). Once it trips, a
+          # 429 on the page's session check bounces the browser to /login
+          # and every later spec fails. tests/conftest.py disables the same
+          # limiter for the pytest suite for the same reason.
+          API_RATE_LIMIT_PER_MINUTE: 100000
         run: |
           mkdir -p secrets
           nohup .venv/bin/python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &

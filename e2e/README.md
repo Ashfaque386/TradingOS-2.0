@@ -57,6 +57,7 @@ You need, running locally (not via Docker):
    NSE_HOLIDAYS_PATH=../config/nse_holidays.json \
    SECRETS_ENCRYPTION_KEY=<output of: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"> \
    SECRETS_STORE_PATH=secrets/e2e_broker_credentials.enc \
+   API_RATE_LIMIT_PER_MINUTE=100000 \
      .venv/bin/python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
    ```
 4. **The frontend**, on port 3010 (matches `playwright.config.ts`'s
