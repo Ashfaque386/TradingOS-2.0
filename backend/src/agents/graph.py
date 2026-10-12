@@ -61,6 +61,43 @@ class PipelineEventSink(Protocol):
     ) -> None: ...
 
 
+class CancelSignal(Protocol):
+    """Where a pipeline run learns the operator has cancelled it. A Protocol
+    for the same reason as `PipelineEventSink`: this module stays free of
+    Redis/DB -- `src.orchestration.pipeline_events.PipelineEventRecorder`
+    answers from a Redis flag. Checked at every step boundary."""
+
+    async def is_cancelled(self) -> bool: ...
+
+
+class PipelineCancelledError(Exception):
+    """Raised at a step boundary when the run was cancelled. Cooperative: a
+    step that is already executing is never interrupted (an LLM call that
+    has started finishes first), so `state` is the pipeline's state as of
+    the last *completed* step -- exactly what the caller can truthfully
+    report as done."""
+
+    def __init__(self, state: TradingOSGraphState, *, node: str, step_index: int) -> None:
+        super().__init__(f"pipeline cancelled before step {step_index} ({node})")
+        self.state = state
+        self.node = node
+        self.step_index = step_index
+
+
+async def _cancel_requested(signal: CancelSignal | None) -> bool:
+    """A signal that cannot be read (Redis down) counts as 'not cancelled':
+    failing open keeps the run going rather than killing it over an
+    observability-grade dependency -- the cost is only that a cancel issued
+    during the outage is not honoured."""
+    if signal is None:
+        return False
+    try:
+        return await signal.is_cancelled()
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.warning("agents.graph.cancel_signal_unreadable")
+        return False
+
+
 class AgentMemory(Protocol):
     """Agent long-term memory as the pipeline sees it. Same reasoning as
     `PipelineEventSink`: a Protocol so this module needs neither Qdrant nor an
@@ -333,9 +370,14 @@ def _route_after_memory_ingest(state: TradingOSGraphState) -> str:
 
 
 def _make_skip_node(
-    node_name: str, agent_id: str, event_sink: PipelineEventSink | None = None
+    node_name: str,
+    agent_id: str,
+    event_sink: PipelineEventSink | None = None,
+    cancel_signal: CancelSignal | None = None,
 ) -> Callable[[TradingOSGraphState], Awaitable[dict[str, Any]]]:
     async def node(state: TradingOSGraphState) -> dict[str, Any]:
+        if await _cancel_requested(cancel_signal):
+            raise PipelineCancelledError(state, node=node_name, step_index=len(state.node_log))
         await _safe_emit(
             event_sink,
             "step.skipped",
@@ -377,6 +419,7 @@ def build_graph(
     router: LlmRouter | None = None,
     event_sink: PipelineEventSink | None = None,
     memory: AgentMemory | None = None,
+    cancel_signal: CancelSignal | None = None,
 ) -> CompiledStateGraph[TradingOSGraphState, None, TradingOSGraphState, TradingOSGraphState]:
     """Compiles the 13-node pipeline. enabled_agents defaults to "every
     roster agent enabled"; pass the subset that's actually enabled (e.g.
@@ -404,6 +447,10 @@ def build_graph(
                 _agent: str = agent_id,
             ) -> dict[str, Any]:
                 step_index = len(state.node_log)
+                # Cancellation is honoured here, between steps, never inside
+                # one -- before this step starts anything it cannot take back.
+                if await _cancel_requested(cancel_signal):
+                    raise PipelineCancelledError(state, node=_name, step_index=step_index)
                 await _safe_emit(
                     event_sink,
                     "step.started",
@@ -446,7 +493,7 @@ def build_graph(
 
             node = timed_node
         else:
-            node = _make_skip_node(node_name, agent_id, event_sink)
+            node = _make_skip_node(node_name, agent_id, event_sink, cancel_signal)
         # langgraph's own add_node() overloads are generic over a
         # TypedDict/dataclass/BaseModel-bound NodeInputT and don't cleanly
         # resolve for a plain async Callable[[TradingOSGraphState],
@@ -498,8 +545,19 @@ async def run_pipeline(
     active_prompts: dict[str, str] | None = None,
     event_sink: PipelineEventSink | None = None,
     memory: AgentMemory | None = None,
+    cancel_signal: CancelSignal | None = None,
 ) -> TradingOSGraphState:
-    compiled = build_graph(enabled_agents, router=router, event_sink=event_sink, memory=memory)
+    """Runs the pipeline to completion. Raises `PipelineCancelledError`
+    (carrying the state as of the last completed step) if `cancel_signal`
+    reports a cancel at a step boundary -- a cancelled run is not a result,
+    so nothing is recorded to agent memory for it."""
+    compiled = build_graph(
+        enabled_agents,
+        router=router,
+        event_sink=event_sink,
+        memory=memory,
+        cancel_signal=cancel_signal,
+    )
     lessons: list[str] = []
     if memory is not None:
         try:
@@ -522,6 +580,14 @@ async def run_pipeline(
     # than let a real retry sequence be mistaken for a runaway graph.
     try:
         result = await compiled.ainvoke(initial, config={"recursion_limit": 200})
+    except PipelineCancelledError as exc:
+        await _safe_emit(
+            event_sink,
+            "pipeline.cancelled",
+            node=exc.node,
+            payload={"step_index": exc.step_index, "steps_completed": len(exc.state.node_log)},
+        )
+        raise
     except Exception as exc:
         await _safe_emit(
             event_sink,

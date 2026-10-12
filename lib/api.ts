@@ -491,7 +491,8 @@ export type ActivityFeedMessage =
 // One event per step of one LangGraph pipeline run, from
 // GET /api/v1/agents/pipeline/events (history) and the
 // /ws/agent-pipeline-events channel (live). event_type is one of
-// pipeline.started|completed|failed and step.started|completed|failed|skipped.
+// pipeline.started|completed|failed|cancelled and step.started|completed|failed|skipped
+// (plus memory.recalled).
 export type AgentPipelineEvent = {
   run_id: string
   sequence: number
@@ -515,10 +516,22 @@ export type RunPipelineResult = {
   evaluation_verdict: Record<string, unknown> | null
   rejection_count: number
   run_id: string
+  /** True when the run was cancelled at a step boundary: the other fields then
+   * describe only the steps that finished before it stopped. */
+  cancelled: boolean
 }
 
 export const runAgentPipeline = (objective: string) =>
   apiPost<RunPipelineResult>('/api/v1/agents/pipeline/run', { objective })
+
+/** Asks a running pipeline to stop. Cooperative: 202 means "requested" -- the
+ * run ends at its next step boundary (the step in progress finishes first),
+ * and its own `pipeline.cancelled` event says it really stopped. 409 if it
+ * had already finished. */
+export const cancelAgentPipelineRun = (runId: string) =>
+  apiPost<{ run_id: string; status: 'cancel_requested' }>(
+    `/api/v1/agents/pipeline/runs/${runId}/cancel`,
+  )
 
 // ---- Agent long-term vector memory (docs/phase20-old-vs-new-comparison.md
 // item 18) ----

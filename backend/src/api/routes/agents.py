@@ -20,12 +20,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.agents.graph import run_pipeline
+from src.agents.graph import PipelineCancelledError, run_pipeline
 from src.agents.roster import NO_DATA_SOURCE_AGENTS, capabilities_for
 from src.api.routes.gateway import ApplyResultResponse
 from src.api.routes.memory import memory_service_dependency
@@ -37,6 +38,7 @@ from src.api.schemas import (
     AgentPipelineEventResponse,
     AgentSummaryResponse,
     AgentTaskEntryResponse,
+    CancelPipelineRunResponse,
     CreatePromptVersionRequest,
     PromptVersionResponse,
     RunPipelineRequest,
@@ -56,13 +58,21 @@ from src.models.heartbeat_log import HeartbeatLog
 from src.models.prompt_version import PromptVersion
 from src.models.task import Task, TaskStatus
 from src.models.user import User
-from src.orchestration.pipeline_events import PipelineEventRecorder, list_pipeline_events
+from src.orchestration.pipeline_events import (
+    PipelineEventRecorder,
+    clear_cancel,
+    list_pipeline_events,
+    pipeline_run_state,
+    request_cancel,
+)
 from src.orchestration.prompt_versions import (
     NoSuchPromptVersionError,
     activate_prompt_version,
     create_prompt_version,
     get_active_prompts,
 )
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -75,6 +85,12 @@ register_policy(
     roles=[Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER],
 )
 register_policy("GET", "/api/v1/agents/pipeline/events", roles=list(Role))
+# Stopping a run is held to the same roles as starting one.
+register_policy(
+    "POST",
+    "/api/v1/agents/pipeline/runs/{run_id}/cancel",
+    roles=[Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER],
+)
 register_policy("PUT", "/api/v1/agents/{agent_id}/identity", roles=_WRITE_ROLES)
 register_policy("GET", "/api/v1/agents/{agent_id}/activity", roles=list(Role))
 register_policy("GET", "/api/v1/agents/analytics/summary", roles=list(Role))
@@ -442,14 +458,27 @@ async def run_pipeline_endpoint(
     # live under this id (see src.orchestration.pipeline_events).
     run_id = uuid.uuid4()
     recorder = PipelineEventRecorder(session_factory, redis, run_id)
-    state = await run_pipeline(
-        body.objective,
-        enabled_agents=enabled_agents,
-        active_prompts=active_prompts,
-        run_id=str(run_id),
-        event_sink=recorder,
-        memory=get_pipeline_memory(memory_service),
-    )
+    cancelled = False
+    try:
+        state = await run_pipeline(
+            body.objective,
+            enabled_agents=enabled_agents,
+            active_prompts=active_prompts,
+            run_id=str(run_id),
+            event_sink=recorder,
+            memory=get_pipeline_memory(memory_service),
+            cancel_signal=recorder,
+        )
+    except PipelineCancelledError as exc:
+        # Not an error: the operator asked for this. Report what finished
+        # before it stopped.
+        state = exc.state
+        cancelled = True
+    finally:
+        try:
+            await clear_cancel(redis, run_id)
+        except Exception:  # noqa: BLE001 - housekeeping; the flag also expires on its own
+            logger.warning("agents.pipeline_cancel_flag_not_cleared", run_id=str(run_id))
     return RunPipelineResponse(
         objective=state.objective,
         node_log=state.node_log,
@@ -457,4 +486,34 @@ async def run_pipeline_endpoint(
         evaluation_verdict=state.evaluation_verdict,
         rejection_count=state.rejection_count,
         run_id=str(run_id),
+        cancelled=cancelled,
     )
+
+
+@router.post("/pipeline/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_pipeline_run_endpoint(
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    _current_user: User = Depends(require_role),
+) -> CancelPipelineRunResponse:
+    """Ask a running pipeline to stop. The run executes inside the request that
+    started it, so this only sets a flag; the run notices it at its next step
+    boundary (a step already in progress -- an LLM call -- finishes first) and
+    ends with a `pipeline.cancelled` event. 202, because nothing has stopped
+    yet. 404 for an id no event was ever recorded under; 409 for a run that
+    already ended (nothing left to stop -- and no audit row for a cancel that
+    did nothing, since the audit trail records only 2xx responses)."""
+    state = await pipeline_run_state(db, run_id)
+    if state == "unknown":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such pipeline run")
+    if state == "finished":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This pipeline run has already finished")
+    try:
+        await request_cancel(redis, run_id)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a 503, not swallowed
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Could not record the cancel request (Redis is unavailable)",
+        ) from exc
+    return CancelPipelineRunResponse(run_id=str(run_id))

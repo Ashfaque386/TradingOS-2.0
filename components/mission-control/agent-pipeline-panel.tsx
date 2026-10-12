@@ -1,11 +1,12 @@
 'use client'
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, AlertCircle, ArrowRight, CheckCircle2, Circle, Loader2, MinusCircle, RefreshCw } from 'lucide-react'
+import { Activity, AlertCircle, ArrowRight, Ban, CheckCircle2, Circle, Loader2, MinusCircle, RefreshCw } from 'lucide-react'
 import {
   type AgentPipelineEvent,
   type AgentPipelineEventMessage,
   ApiError,
+  cancelAgentPipelineRun,
   listAgentPipelineEvents,
   runAgentPipeline,
 } from '@/lib/api'
@@ -39,7 +40,7 @@ type StepRow = {
 type RunView = {
   runId: string
   objective: string | null
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   steps: StepRow[]
   startedAt: string
   /** Lessons recalled from agent memory before the run; null if memory wasn't consulted. */
@@ -102,6 +103,9 @@ export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunVi
       case 'pipeline.failed':
         status = 'failed'
         break
+      case 'pipeline.cancelled':
+        status = 'cancelled'
+        break
       case 'step.started':
         steps.push({
           key: `${event.run_id}:${event.sequence}`,
@@ -161,6 +165,10 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
   const [objective, setObjective] = useState('')
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The run a cancel has been requested for. Cancelling is cooperative -- the
+  // step in progress finishes first -- so the panel says so until the run's
+  // own `pipeline.cancelled` event arrives, rather than claiming it stopped.
+  const [cancelRequestedFor, setCancelRequestedFor] = useState<string | null>(null)
 
   const append = useCallback((incoming: AgentPipelineEvent[]) => {
     setEvents((prev) => {
@@ -228,8 +236,28 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
     }
   }
 
+  async function handleCancel(runId: string) {
+    setError(null)
+    setCancelRequestedFor(runId)
+    try {
+      await cancelAgentPipelineRun(runId)
+    } catch (err) {
+      setCancelRequestedFor(null)
+      setError(err instanceof ApiError ? err.message : 'Failed to cancel the run')
+    }
+  }
+
   const statusLabel =
-    view?.status === 'running' ? 'RUNNING' : view?.status === 'completed' ? 'COMPLETED' : view?.status === 'failed' ? 'FAILED' : ''
+    view?.status === 'running'
+      ? 'RUNNING'
+      : view?.status === 'completed'
+        ? 'COMPLETED'
+        : view?.status === 'failed'
+          ? 'FAILED'
+          : view?.status === 'cancelled'
+            ? 'CANCELLED'
+            : ''
+  const cancelPending = view !== null && cancelRequestedFor === view.runId
 
   return (
     <section className="pulse-panel flex flex-col overflow-hidden" aria-label="Agent pipeline steps">
@@ -245,6 +273,23 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
             {view?.lessonsRecalled ? ` · ${view.lessonsRecalled} lesson${view.lessonsRecalled === 1 ? '' : 's'} recalled from memory` : ''}
           </p>
         </div>
+        {canRun && view?.status === 'running' && (
+          <div className="flex items-center gap-2">
+            {cancelPending && (
+              <span className="text-[10px] text-muted-foreground">Stops when the current step finishes</span>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleCancel(view.runId)}
+              disabled={cancelPending}
+              aria-label="Cancel pipeline run"
+              className="button-secondary"
+            >
+              {cancelPending ? <Loader2 className="size-3 animate-spin" /> : <Ban className="size-3" />}
+              {cancelPending ? 'Cancelling…' : 'Cancel run'}
+            </button>
+          </div>
+        )}
         {canRun && (
           <form onSubmit={handleRun} className="flex min-w-[260px] flex-1 items-center gap-2 rounded-xl border border-white/10 bg-white/[.02] px-3 py-2 md:max-w-xl">
             <input
