@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.agents.graph import run_pipeline
 from src.agents.roster import NO_DATA_SOURCE_AGENTS, capabilities_for
 from src.api.routes.gateway import ApplyResultResponse
+from src.api.routes.memory import memory_service_dependency
 from src.api.schemas import (
     AgentActivityResponse,
     AgentAnalyticsSummaryRow,
@@ -49,7 +50,7 @@ from src.core.redis_client import get_redis
 from src.gateway.roster import ROSTER, ROSTER_BY_ID
 from src.gateway.service import ServiceError, set_identity
 from src.gateway.state import get_state
-from src.memory.service import get_pipeline_memory
+from src.memory.service import MemoryService, get_pipeline_memory
 from src.models.agent_pipeline_event import AgentPipelineEvent
 from src.models.heartbeat_log import HeartbeatLog
 from src.models.prompt_version import PromptVersion
@@ -420,6 +421,7 @@ async def run_pipeline_endpoint(
     db: AsyncSession = Depends(get_db),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
     redis: Redis = Depends(get_redis),
+    memory_service: MemoryService = Depends(memory_service_dependency),
     _current_user: User = Depends(require_role),
 ) -> RunPipelineResponse:
     effective_by_id = get_state().get_all_effective_agents()
@@ -446,7 +448,7 @@ async def run_pipeline_endpoint(
         active_prompts=active_prompts,
         run_id=str(run_id),
         event_sink=recorder,
-        memory=get_pipeline_memory(),
+        memory=get_pipeline_memory(memory_service),
     )
     return RunPipelineResponse(
         objective=state.objective,

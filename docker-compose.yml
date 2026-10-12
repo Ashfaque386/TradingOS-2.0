@@ -51,8 +51,16 @@ services:
       # depends_on on purpose -- memory is an aid, and with Qdrant down (or
       # no embedding provider chosen) it reports itself unavailable instead
       # of blocking the API. The embedding provider/model have no default:
-      # an embedding model is a real choice (see src/core/config.py); the
-      # provider's credentials come from Settings > LLM providers.
+      # an embedding model is a real choice (see src/core/config.py). Pick
+      # them in Mission Control's Agent memory panel (saved in the database,
+      # persists across rebuilds) -- these two variables are only the
+      # fallback when nothing has been saved. The provider's credentials
+      # come from Settings > LLM providers.
+      # Ollama runs on the host (not in this stack), so `localhost` inside the
+      # container -- the code default -- can never reach it. This default
+      # works on Docker Desktop and, via this service's extra_hosts entry,
+      # on Linux; a base URL saved in Settings > LLM providers still wins.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       MEMORY_EMBEDDING_PROVIDER: ${MEMORY_EMBEDDING_PROVIDER:-}
       MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-}

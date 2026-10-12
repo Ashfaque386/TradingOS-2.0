@@ -5,12 +5,16 @@ import { AlertCircle, Brain, Plus, RefreshCw, Search, Trash2 } from 'lucide-reac
 import {
   type MemoryHit,
   type MemoryKind,
+  type MemorySettings,
   type MemoryStatus,
   ApiError,
   forgetMemory,
+  getMemorySettings,
   getMemoryStatus,
   queryMemory,
   rememberMemory,
+  resetMemorySettings,
+  saveMemorySettings,
 } from '@/lib/api'
 
 // Agent long-term vector memory (backlog item 18). What the pipeline recalls
@@ -23,7 +27,22 @@ const KINDS: MemoryKind[] = ['strategy', 'news', 'organization']
 
 const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ? err.message : fallback)
 
-export function AgentMemoryPanel({ canWrite, canDelete }: { canWrite: boolean; canDelete: boolean }) {
+const MODEL_HINTS: Record<string, string> = {
+  ollama: 'nomic-embed-text',
+  openai: 'text-embedding-3-small',
+  gemini: 'text-embedding-004',
+  custom: 'embedding model name',
+}
+
+export function AgentMemoryPanel({
+  canWrite,
+  canDelete,
+  canConfigure,
+}: {
+  canWrite: boolean
+  canDelete: boolean
+  canConfigure: boolean
+}) {
   const [status, setStatus] = useState<MemoryStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -34,6 +53,10 @@ export function AgentMemoryPanel({ canWrite, canDelete }: { canWrite: boolean; c
   const [newText, setNewText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [settings, setSettings] = useState<MemorySettings | null>(null)
+  const [provider, setProvider] = useState('')
+  const [model, setModel] = useState('')
+  const [savingSettings, setSavingSettings] = useState(false)
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -44,9 +67,45 @@ export function AgentMemoryPanel({ canWrite, canDelete }: { canWrite: boolean; c
     }
   }, [])
 
+  const applySettings = useCallback((s: MemorySettings) => {
+    setSettings(s)
+    setProvider(s.provider || s.supported_providers[0] || '')
+    setModel(s.model)
+  }, [])
+
   useEffect(() => {
     void refreshStatus()
-  }, [refreshStatus])
+    getMemorySettings()
+      .then(applySettings)
+      .catch(() => {
+        // the status line still reports availability
+      })
+  }, [refreshStatus, applySettings])
+
+  async function handleSaveSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!provider || !model.trim()) return
+    setSavingSettings(true)
+    setError(null)
+    try {
+      applySettings(await saveMemorySettings(provider, model.trim()))
+      await refreshStatus()
+    } catch (err) {
+      setError(errorText(err, 'Could not save the memory settings'))
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  async function handleResetSettings() {
+    setError(null)
+    try {
+      applySettings(await resetMemorySettings())
+      await refreshStatus()
+    } catch (err) {
+      setError(errorText(err, 'Could not reset the memory settings'))
+    }
+  }
 
   async function runSearch(text: string) {
     setSearching(true)
@@ -129,6 +188,48 @@ export function AgentMemoryPanel({ canWrite, canDelete }: { canWrite: boolean; c
             <p className="mt-1 font-mono text-[10px] text-amber-100/80">{status.reason}</p>
           </div>
         </div>
+      )}
+
+      {canConfigure && settings && (
+        <form onSubmit={handleSaveSettings} className="flex flex-wrap items-center gap-2 border-b border-white/5 px-4 py-3" aria-label="Memory embedding settings">
+          <span className="text-[10px] tracking-wider text-muted-foreground">EMBEDDINGS</span>
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            aria-label="Embedding provider"
+            className="rounded-md border border-white/10 bg-transparent px-2 py-1 text-xs"
+          >
+            {settings.supported_providers.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={MODEL_HINTS[provider] ?? 'embedding model'}
+            aria-label="Embedding model"
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+          />
+          <button type="submit" disabled={savingSettings || !provider || !model.trim()} className="button-primary">
+            {savingSettings ? <RefreshCw className="size-3 animate-spin" /> : null}
+            Save
+          </button>
+          {settings.source === 'database' && (
+            <button type="button" onClick={() => void handleResetSettings()} className="button-secondary">
+              Reset
+            </button>
+          )}
+          <p className="basis-full text-[10px] text-muted-foreground">
+            {settings.source === 'database'
+              ? `Saved by ${settings.updated_by ?? 'an operator'} — persists across restarts. `
+              : settings.source === 'environment'
+                ? 'Using the MEMORY_EMBEDDING_* environment defaults — save to override. '
+                : 'Nothing chosen yet. '}
+            The provider&apos;s key or base URL comes from Settings → LLM providers.
+          </p>
+        </form>
       )}
 
       {available && (

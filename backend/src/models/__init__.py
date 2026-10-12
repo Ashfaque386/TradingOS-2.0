@@ -31,6 +31,7 @@ from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
 from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.market_data_provenance import MarketDataProvenance
+from src.models.memory_settings import MemorySettings
 from src.models.operator_guidance import OperatorGuidance
 from src.models.optimization_run import OptimizationRun
 from src.models.order import Order
@@ -102,6 +103,7 @@ __all__ = [
     "JwtSigningKey",
     "LiveTradingSubscription",
     "MarketDataProvenance",
+    "MemorySettings",
     "OperatorGuidance",
     "OptimizationRun",
     "Order",

@@ -690,3 +690,119 @@ async def test_pipeline_run_endpoint_still_works_with_memory_unconfigured(client
         "/api/v1/agents/pipeline/run", json={"objective": "memory off"}, headers=admin
     )
     assert resp.status_code == 200 and "deployment" in resp.json()["node_log"]
+
+
+# ---- persisted embedding choice (memory_settings) -----------------------------
+
+
+async def test_saved_choice_beats_env_defaults_and_env_applies_when_nothing_is_saved(
+    client, make_user, db_session_factory, monkeypatch: pytest.MonkeyPatch
+):
+    _no_stored_credentials(monkeypatch)
+    from src.memory.settings_store import save_choice, source_from_factory
+
+    svc = MemoryService(
+        _settings(memory_embedding_provider="ollama", memory_embedding_model="env-model"),
+        override_source=source_from_factory(db_session_factory),
+    )
+    assert (await svc.effective_choice())[:3] == ("ollama", "env-model", "environment")
+
+    async with db_session_factory() as session:
+        await save_choice(session, provider="ollama", model="saved-model", actor="op@example.com")
+
+    provider, model, source, saved = await svc.effective_choice()
+    assert (provider, model, source) == ("ollama", "saved-model", "database")
+    assert saved is not None and saved.updated_by == "op@example.com"
+    embedder = await svc._resolve_embedder()
+    assert isinstance(embedder, OllamaEmbeddings) and embedder.model == "saved-model"
+
+
+async def test_an_unreadable_settings_table_falls_back_to_env_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _no_stored_credentials(monkeypatch)
+
+    async def broken() -> Any:
+        raise RuntimeError("database is down")
+
+    svc = MemoryService(
+        _settings(memory_embedding_provider="ollama", memory_embedding_model="env-model"),
+        override_source=broken,
+    )
+    assert (await svc.effective_choice())[:3] == ("ollama", "env-model", "environment")
+
+
+async def test_settings_unset_when_nothing_is_configured(client, make_user, memory_service):
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-set0@example.com")
+    body = (await client.get("/api/v1/memory/settings", headers=admin)).json()
+    assert body["source"] == "unset" and body["provider"] == "" and body["model"] == ""
+    assert body["supported_providers"] == ["ollama", "openai", "gemini", "custom"]
+
+
+async def test_admin_saves_settings_and_they_persist_across_service_instances(
+    client, make_user, memory_service, monkeypatch: pytest.MonkeyPatch
+):
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-set1@example.com")
+
+    saved = await client.put(
+        "/api/v1/memory/settings",
+        json={"provider": "Ollama", "model": " nomic-embed-text "},
+        headers=admin,
+    )
+    assert saved.status_code == 200
+    body = saved.json()
+    assert (body["provider"], body["model"], body["source"]) == (
+        "ollama",
+        "nomic-embed-text",
+        "database",
+    )
+    assert body["updated_by"] == "admin-set1@example.com" and body["updated_at"]
+
+    # A brand-new service (a restarted process) reads the same choice back.
+    fresh = await client.get("/api/v1/memory/settings", headers=admin)
+    assert fresh.json()["model"] == "nomic-embed-text" and fresh.json()["source"] == "database"
+
+    # Saving again updates the one row rather than adding another.
+    again = await client.put(
+        "/api/v1/memory/settings",
+        json={"provider": "gemini", "model": "text-embedding-004"},
+        headers=admin,
+    )
+    assert again.json()["provider"] == "gemini"
+
+
+async def test_settings_writes_are_admin_only_and_validated(client, make_user, memory_service):
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-set2@example.com")
+    pm = await _login(client, make_user, Role.PORTFOLIO_MANAGER, "pm-set2@example.com")
+    auditor = await _login(client, make_user, Role.READ_ONLY_AUDITOR, "aud-set2@example.com")
+    payload = {"provider": "ollama", "model": "nomic-embed-text"}
+
+    assert (
+        await client.put("/api/v1/memory/settings", json=payload, headers=pm)
+    ).status_code == 403
+    assert (await client.delete("/api/v1/memory/settings", headers=pm)).status_code == 403
+    assert (await client.get("/api/v1/memory/settings", headers=auditor)).status_code == 200
+
+    bad = await client.put(
+        "/api/v1/memory/settings", json={"provider": "huggingface", "model": "m"}, headers=admin
+    )
+    assert bad.status_code == 422 and "unsupported provider" in bad.json()["detail"]
+    blank = await client.put(
+        "/api/v1/memory/settings", json={"provider": "ollama", "model": "   "}, headers=admin
+    )
+    assert blank.status_code == 422
+
+
+async def test_deleting_settings_reverts_to_the_environment_defaults(
+    client, make_user, memory_service
+):
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-set3@example.com")
+    await client.put(
+        "/api/v1/memory/settings", json={"provider": "ollama", "model": "m"}, headers=admin
+    )
+
+    reset = await client.delete("/api/v1/memory/settings", headers=admin)
+
+    assert reset.status_code == 200 and reset.json()["source"] == "unset"
+    # Idempotent.
+    assert (await client.delete("/api/v1/memory/settings", headers=admin)).status_code == 200

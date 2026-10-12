@@ -26,6 +26,7 @@ from src.memory.embeddings import (
     EmbeddingProvider,
     build_embedding_provider,
 )
+from src.memory.settings_store import EmbeddingChoice, OverrideSource
 from src.memory.store import (
     MEMORY_KINDS,
     CollectionStats,
@@ -87,8 +88,10 @@ class MemoryService:
         *,
         store: QdrantMemoryStore | None = None,
         embedder: EmbeddingProvider | None = None,
+        override_source: OverrideSource | None = None,
     ) -> None:
         self._settings = settings
+        self._override_source = override_source
         self._store = store
         self._embedder = embedder
         self._injected = store is not None or embedder is not None
@@ -106,20 +109,47 @@ class MemoryService:
         )
         return self._store
 
-    def _resolve_embedder(self) -> EmbeddingProvider:
+    def bind_override_source(self, source: OverrideSource) -> None:
+        """Where the operator's saved provider/model is read from. Rebound on
+        each request by the API dependency, because the session factory it
+        wraps is a per-app (and in tests, per-test) object."""
+        self._override_source = source
+
+    async def effective_choice(self) -> tuple[str, str, str, EmbeddingChoice | None]:
+        """(provider, model, source, saved) -- the operator's saved choice
+        (the `memory_settings` row) wins over the MEMORY_EMBEDDING_* env
+        defaults. A database hiccup falls back to the env defaults rather than
+        taking memory down."""
+        saved: EmbeddingChoice | None = None
+        if self._override_source is not None:
+            try:
+                saved = await self._override_source()
+            except Exception as exc:  # noqa: BLE001 - see docstring
+                logger.warning("memory.settings_unreadable", error=str(exc)[:200])
+        if saved is not None:
+            return saved.provider, saved.model, "database", saved
+        provider = self._settings.memory_embedding_provider.strip()
+        model = self._settings.memory_embedding_model.strip()
+        return provider, model, "environment" if provider or model else "unset", None
+
+    async def _resolve_embedder(self) -> EmbeddingProvider:
         # Rebuilt on every call (cheap: it only reads settings and the
         # credential store) unless one was injected, so adding an API key or
         # changing the provider in Settings takes effect without a restart.
         if self._embedder is not None:
             return self._embedder
-        provider, reason = build_embedding_provider(self._settings)
+        provider_name, model, _, _ = await self.effective_choice()
+        effective = self._settings.model_copy(
+            update={"memory_embedding_provider": provider_name, "memory_embedding_model": model}
+        )
+        provider, reason = build_embedding_provider(effective)
         if provider is None:
             raise MemoryUnavailableError(reason or "no embedding provider")
         return provider
 
     async def _embed(self, texts: list[str]) -> list[list[float]]:
         try:
-            return await self._resolve_embedder().embed(texts)
+            return await (await self._resolve_embedder()).embed(texts)
         except EmbeddingError as exc:
             raise MemoryUnavailableError(f"embedding failed: {exc}") from exc
 
@@ -155,7 +185,7 @@ class MemoryService:
         reasons: list[str] = []
 
         try:
-            embedder = self._resolve_embedder()
+            embedder = await self._resolve_embedder()
             provider_name, model = embedder.name, embedder.model
             probe_error = await self._probe_embedder(embedder)
             if probe_error:
@@ -284,5 +314,5 @@ def get_memory_service() -> MemoryService:
     return _service
 
 
-def get_pipeline_memory() -> PipelineMemory:
-    return PipelineMemory(get_memory_service(), recall_limit=get_settings().memory_recall_limit)
+def get_pipeline_memory(service: MemoryService) -> PipelineMemory:
+    return PipelineMemory(service, recall_limit=get_settings().memory_recall_limit)

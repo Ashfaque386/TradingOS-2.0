@@ -550,6 +550,25 @@ export type MemoryHit = {
   metadata: Record<string, unknown>
 }
 
+// The embedding provider/model, persisted in the database (not .env) so it
+// survives restarts and rebuilds. `source` says where the effective value
+// comes from: 'database' (saved here), 'environment' (MEMORY_EMBEDDING_*
+// defaults) or 'unset'. Credentials are never part of this -- they stay in
+// Settings > LLM providers.
+export type MemorySettings = {
+  provider: string
+  model: string
+  source: 'database' | 'environment' | 'unset'
+  updated_by: string | null
+  updated_at: string | null
+  supported_providers: string[]
+}
+
+export const getMemorySettings = () => apiGet<MemorySettings>('/api/v1/memory/settings')
+export const saveMemorySettings = (provider: string, model: string) =>
+  apiPut<MemorySettings>('/api/v1/memory/settings', { provider, model })
+export const resetMemorySettings = () => apiDelete<MemorySettings>('/api/v1/memory/settings')
+
 export const getMemoryStatus = () => apiGet<MemoryStatus>('/api/v1/memory/status')
 
 export const queryMemory = (q: string, kind?: MemoryKind, limit = 8) =>

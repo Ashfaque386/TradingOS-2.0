@@ -11,10 +11,13 @@ and the operations that need them return 503 with that same reason.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.memory.embeddings import SUPPORTED_PROVIDERS
 from src.memory.service import (
     MAX_QUERY_LIMIT,
     MAX_TEXT_CHARS,
@@ -23,6 +26,7 @@ from src.memory.service import (
     MemoryValidationError,
     get_memory_service,
 )
+from src.memory.settings_store import clear_choice, save_choice, source_from_factory
 from src.memory.store import MEMORY_KINDS, MemoryStoreError
 from src.models.user import User
 
@@ -32,10 +36,26 @@ _WRITE_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("GET", "/api/v1/memory/status", roles=list(Role))
 register_policy("GET", "/api/v1/memory/query", roles=list(Role))
+register_policy("GET", "/api/v1/memory/settings", roles=list(Role))
+register_policy("PUT", "/api/v1/memory/settings", roles=[Role.SYSTEM_ADMINISTRATOR])
+register_policy("DELETE", "/api/v1/memory/settings", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("POST", "/api/v1/memory/{kind}", roles=_WRITE_ROLES)
 register_policy("DELETE", "/api/v1/memory/{kind}/{memory_id}", roles=[Role.SYSTEM_ADMINISTRATOR])
 
-MemoryDep = Annotated[MemoryService, Depends(get_memory_service)]
+
+def memory_service_dependency(
+    request: Request, service: MemoryService = Depends(get_memory_service)
+) -> MemoryService:
+    """The shared service, pointed at this app's database for the operator's
+    saved embedding choice (the session factory lives on the app, and is a
+    different object per test)."""
+    factory = getattr(request.app.state, "db_session_factory", None)
+    if factory is not None:
+        service.bind_override_source(source_from_factory(factory))
+    return service
+
+
+MemoryDep = Annotated[MemoryService, Depends(memory_service_dependency)]
 
 
 class CollectionStatusResponse(BaseModel):
@@ -54,6 +74,22 @@ class MemoryStatusResponse(BaseModel):
     embedding_model: str | None
     kinds: list[str]
     collections: list[CollectionStatusResponse]
+
+
+class MemorySettingsResponse(BaseModel):
+    provider: str
+    model: str
+    # "database" (saved in the UI), "environment" (MEMORY_EMBEDDING_* defaults)
+    # or "unset" (nothing chosen yet).
+    source: str
+    updated_by: str | None
+    updated_at: str | None
+    supported_providers: list[str]
+
+
+class MemorySettingsRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=32)
+    model: str = Field(min_length=1, max_length=200)
 
 
 class RememberRequest(BaseModel):
@@ -103,6 +139,60 @@ async def memory_status(
             for c in s.collections
         ],
     )
+
+
+async def _settings_response(service: MemoryService) -> MemorySettingsResponse:
+    provider, model, source, saved = await service.effective_choice()
+    return MemorySettingsResponse(
+        provider=provider,
+        model=model,
+        source=source,
+        updated_by=saved.updated_by if saved else None,
+        updated_at=saved.updated_at.isoformat() if saved else None,
+        supported_providers=list(SUPPORTED_PROVIDERS),
+    )
+
+
+@router.get("/settings")
+async def get_memory_settings(
+    service: MemoryDep, _current_user: User = Depends(require_role)
+) -> MemorySettingsResponse:
+    return await _settings_response(service)
+
+
+@router.put("/settings")
+async def put_memory_settings(
+    body: MemorySettingsRequest,
+    service: MemoryDep,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> MemorySettingsResponse:
+    """Persist the embedding provider + model in the database so they survive
+    restarts without `.env`. Credentials are not stored here -- the provider's
+    key/base URL still come from Settings > LLM providers."""
+    provider = body.provider.strip().lower()
+    model = body.model.strip()
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"unsupported provider {provider!r} (one of: {', '.join(SUPPORTED_PROVIDERS)})",
+        )
+    if not model:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "model must not be empty")
+    await save_choice(db, provider=provider, model=model, actor=current_user.email)
+    return await _settings_response(service)
+
+
+@router.delete("/settings")
+async def reset_memory_settings(
+    service: MemoryDep,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> MemorySettingsResponse:
+    """Drop the saved choice; the MEMORY_EMBEDDING_* environment defaults (if
+    any) apply again."""
+    await clear_choice(db)
+    return await _settings_response(service)
 
 
 @router.get("/query")

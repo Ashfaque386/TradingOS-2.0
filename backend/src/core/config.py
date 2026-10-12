@@ -78,7 +78,9 @@ class Settings(BaseSettings):
     # provider is one of ollama|openai|gemini|custom and reuses that
     # provider's credentials from Settings (the encrypted LLM provider
     # store, then these env-backed fields above), so there is no second
-    # place to enter a key. `memory_embedding_model` has no default on
+    # place to enter a key. These two are only the fallback: an operator's
+    # choice saved in the UI (the `memory_settings` table) wins over them.
+    # `memory_embedding_model` has no default on
     # purpose: an embedding model is a real choice (Ollama needs one pulled,
     # e.g. nomic-embed-text), and a dimension mismatch if it later changes is
     # reported, not papered over.

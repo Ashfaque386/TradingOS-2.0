@@ -53,6 +53,32 @@ test('the memory panel reports its real availability and the reason when it is o
   }
 })
 
+test('an admin can save the embedding choice, it persists across a reload, and can be reset', async ({ page }) => {
+  await login(page, E2E_USERS.admin)
+  await page.goto('/mission-control')
+  const form = panel(page).getByLabel('Memory embedding settings')
+  await expect(form).toBeVisible()
+
+  await form.getByLabel('Embedding provider').selectOption('ollama')
+  await form.getByLabel('Embedding model').fill('nomic-embed-text')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(form.getByText(/Saved by e2e\.admin@example\.com/)).toBeVisible()
+
+  // Stored server-side (the database), not in the page: a reload shows it.
+  await page.reload()
+  await expect(panel(page).getByLabel('Embedding model')).toHaveValue('nomic-embed-text')
+
+  await panel(page).getByRole('button', { name: 'Reset' }).click()
+  await expect(panel(page).getByLabel('Memory embedding settings').getByText(/Saved by/)).toHaveCount(0)
+})
+
+test('only an admin sees the embedding settings form', async ({ page }) => {
+  await login(page, E2E_USERS.pm)
+  await page.goto('/mission-control')
+  await expect(panel(page)).toBeVisible()
+  await expect(panel(page).getByLabel('Memory embedding settings')).toHaveCount(0)
+})
+
 test('with memory online: add a note, find it by search, delete it', async ({ page }) => {
   test.skip(!(await memoryStatus()).available, 'no Qdrant + embedding provider in this environment')
 
