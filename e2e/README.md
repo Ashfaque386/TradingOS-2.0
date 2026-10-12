@@ -2,8 +2,8 @@
 
 Build Spec §21-22 hardening pass: a real Playwright suite driving the
 actual Next.js frontend against the actual FastAPI backend, real
-Postgres, and real Redis -- no mocked network responses. It covers four
-flows named in that pass:
+Postgres, and real Redis -- no mocked network responses. It began with four
+flows named in that pass and has grown since:
 
 - `strategy-lifecycle.spec.ts` -- the full strategy pipeline (Ideation ->
   Backtesting -> Paper Trading -> Live Eligible), including both human
@@ -25,12 +25,35 @@ flows named in that pass:
   confirming the app rejects it and keeps running on the last-known-good
   config, exactly as that file's own top-of-file comment promises an
   operator.
+- `session-resilience.spec.ts` -- a signed-in session surviving the session
+  check failing with no response at all or answering 429/503 (no sign-out), an
+  unreachable server showing a retry screen that recovers without a new login,
+  and a genuinely rejected session still going to the login screen.
+- `agent-pipeline-feed.spec.ts` -- the live per-step agent feed on Mission
+  Control: a pipeline run started elsewhere appears in an already-open panel
+  over the WebSocket (not the one-time history backfill), a run started from
+  the panel shows its steps, and a role that cannot run the pipeline sees the
+  feed but no run form.
+- `agent-memory.spec.ts` -- the Agent memory panel. With no Qdrant server or
+  embedding provider (CI's situation) it reports itself unavailable with the
+  backend's own reason; an admin can save, reload and reset the embedding
+  choice, which is stored in the database; only an admin sees that form. Two
+  further tests -- add/search/delete a memory, and the role limits -- run only
+  when memory is actually online and are skipped otherwise (see "Memory-online
+  tests" below).
+- `run-cancel.spec.ts` -- cancelling a paused organization run through the
+  confirm step and checking each task's resulting status server-side, backing
+  out with "Keep it", and a cancel that lost a race being reported rather
+  than ignored.
 
 ## Why not `docker compose up`
 
-This sandbox has no reachable Docker daemon (the same constraint
-`src/engine/sandbox/factory.py`'s gVisor fallback documents elsewhere), so
-these tests run against services started directly on the host instead.
+The suite runs against services started directly (below), not through
+`docker compose up`. It was first written in a sandbox with no reachable Docker
+daemon (the same constraint `src/engine/sandbox/factory.py`'s gVisor fallback
+documents elsewhere); CI's `e2e` job (`.github/workflows/ci.yml`) starts the
+same services directly on the runner, and doing it by hand needs no image
+build.
 
 ## Running locally
 
@@ -92,3 +115,25 @@ through the API is already completed when the request returns. The spec then
 drives the cancel flow through the real UI and API and checks each task's
 resulting status server-side. Each call seeds a fresh, uniquely-named run, so
 the spec can be re-run against the same database.
+
+## Memory-online tests
+
+Two tests in `agent-memory.spec.ts` -- add/search/delete a memory, and the role
+limits -- run only when memory is actually online, and skip otherwise. CI's
+stack has no Qdrant server and no embedding provider, so CI never runs them;
+run them by hand. Start a Qdrant server, make an embedding provider reachable,
+and add these to the backend's environment (step 3 above):
+
+```
+QDRANT_URL=http://localhost:6333
+MEMORY_EMBEDDING_PROVIDER=ollama
+MEMORY_EMBEDDING_MODEL=nomic-embed-text      # ollama pull nomic-embed-text first
+OLLAMA_BASE_URL=http://localhost:11434       # wherever that Ollama is reachable from the backend
+```
+
+e.g. `docker run -d -p 6333:6333 qdrant/qdrant:v1.19.1`. Use a **throwaway**
+Qdrant: with memory online, the pipeline specs also run real pipelines, and
+those record real outcome lessons into whatever Qdrant the backend points at.
+(An embedding choice saved from the panel overrides these two variables --
+`agent-memory.spec.ts` saves and resets one -- so run against a database that
+has none saved if you want the environment values to be what's tested.)

@@ -49,7 +49,7 @@ test('the memory panel reports its real availability and the reason when it is o
     await expect(panel(page).getByRole('status')).toContainText(status.reason ?? '')
     // No controls that could only fail.
     await expect(panel(page).getByLabel('Memory search')).toHaveCount(0)
-    await expect(panel(page).getByLabel('New memory')).toHaveCount(0)
+    await expect(panel(page).getByLabel('New memory', { exact: true })).toHaveCount(0)
   }
 })
 
@@ -86,8 +86,13 @@ test('with memory online: add a note, find it by search, delete it', async ({ pa
   await login(page, E2E_USERS.admin)
   await page.goto('/mission-control')
 
-  await panel(page).getByLabel('New memory').fill(note)
+  const newMemory = panel(page).getByLabel('New memory', { exact: true })
+  await newMemory.fill(note)
   await panel(page).getByRole('button', { name: 'Remember' }).click()
+  // The panel clears the field only once the memory has actually been stored
+  // (embedded + written), so wait for that before searching -- otherwise the
+  // search can run before the write lands and honestly find nothing.
+  await expect(newMemory).toHaveValue('')
 
   await panel(page).getByLabel('Memory search').fill('momentum sideways markets')
   await panel(page).getByRole('button', { name: 'Search' }).click()
@@ -105,5 +110,5 @@ test('with memory online: a read-only role can search but not add or delete', as
   await page.goto('/mission-control')
 
   await expect(panel(page).getByLabel('Memory search')).toBeVisible()
-  await expect(panel(page).getByLabel('New memory')).toHaveCount(0)
+  await expect(panel(page).getByLabel('New memory', { exact: true })).toHaveCount(0)
 })

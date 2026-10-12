@@ -1,5 +1,14 @@
 # Phase 19 — Mission Control, Agent Fleet & Roster Audit
 
+> **Status note (2026-10-12).** This is a point-in-time audit and no code was
+> written during it. What was built in response, and what stayed open, is
+> recorded in `docs/CLAUDE.md`'s Phase 19 entry. Finding #1 (the live per-step
+> agent feed) was closed afterwards by its "Phase 19 Finding #1 closed" entry --
+> the per-node events were built; LLM token streaming deliberately was not,
+> since only Anthropic streams for real. Findings 6 and 7 remain partly open by
+> design: the fundamentals/valuation/macro agents have no real data source, and
+> none is fabricated.
+
 Scope: compare this app against real OpenClaw-ecosystem mission-control
 dashboards and real multi-agent trading-system architectures (the 18-agent
 "AI Hedge Fund" reference design: value/growth/contrarian/macro investor
