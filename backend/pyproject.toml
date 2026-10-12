@@ -17,18 +17,15 @@ dependencies = [
     "alembic>=1.13,<1.14",
     "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.6,<3.0",
-    # Phase 26 (docs/phase20-old-vs-new-comparison.md item 28) dependency-
-    # CVE pass: pulls in `ecdsa` transitively (python-jose's EC-algorithm
-    # support), which carries CVE-2024-23342 (a Minerva timing side-channel
-    # in ECDSA signing/keygen/ECDH -- explicitly *not* signature
-    # verification) with no fix version; the ecdsa project has stated side-
-    # channel attacks are out of scope and there is no planned fix. Left
-    # as-is, deliberately, not swapped for another JWT library: this app's
-    # own `settings.jwt_algorithm` default is "HS256" (`src/core/config.py`)
-    # -- pure HMAC, never touching `ecdsa`'s vulnerable EC signing code path
-    # at all -- so the finding is real in the dependency tree but
-    # unreachable through this codebase's actual runtime behavior.
-    "python-jose[cryptography]>=3.3,<4.0",
+    # JWT signing/verification (src/core/security.py). Replaced python-jose
+    # (2026-10): it carries CVE-2026-85394 (HS256 algorithm confusion, no fix
+    # version) and pulled in `ecdsa` (CVE-2024-23342, a timing side channel the
+    # project calls out of scope and will not fix) -- both unreachable here only
+    # because this app uses HS256 with a pinned algorithm, which is a poor
+    # reason to keep shipping them. PyJWT has no such dependencies and ships
+    # its own type hints. >=2.15 is the version whose behavior was tested here
+    # (it warns -- does not fail -- on an HMAC key shorter than 32 bytes).
+    "PyJWT>=2.15,<3.0",
     "passlib[argon2]>=1.7,<2.0",
     "python-multipart>=0.0.12,<0.1",
     "email-validator>=2.2,<3.0",
@@ -71,10 +68,10 @@ dependencies = [
     # it's exercised by non-test code, not just FastAPI's TestClient.
     "httpx>=0.27,<0.28",
     # Phase 8 (Build Spec §3, §20): the encrypted local secrets store for
-    # broker credentials. Already pulled in transitively by
-    # python-jose[cryptography] above, but pinned explicitly now that
-    # src/security/secrets_store.py imports cryptography.fernet directly
-    # rather than relying on another package's transitive dependency.
+    # broker credentials. src/security/secrets_store.py imports
+    # cryptography.fernet directly, so it is a direct dependency, not
+    # something to rely on another package (it used to be python-jose) to
+    # pull in transitively.
     # >=50: 43.0.3 had 5 real CVEs (PYSEC-2026-1284/2141/35/3553/3554,
     # GHSA-537c-gmf6-5ccf), closed in Phase 26's dependency-CVE pass,
     # docs/phase20-old-vs-new-comparison.md item 28 -- a 6th
@@ -129,7 +126,6 @@ dev = [
     # `[[tool.mypy.overrides]]` below.
     "pandas-stubs>=2.2,<2.3",
     "types-passlib>=1.7,<2.0",
-    "types-python-jose>=3.3,<4.0",
     "types-psutil>=6.0,<7.0",
 ]
 
@@ -143,6 +139,14 @@ include = ["src*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Tests sign tokens with short throwaway secrets (CI sets JWT_SECRET_KEY to a
+# few characters). PyJWT warns about an HMAC key under 32 bytes -- right for a
+# deployment, where the warning is left to surface, and pure noise for a test
+# fixture. This silences that one warning class and nothing else; the one test
+# that checks the warning still fires uses pytest.warns, which overrides it.
+filterwarnings = [
+    "ignore::jwt.warnings.InsecureKeyLengthWarning",
+]
 
 [tool.mutmut]
 # Build Spec §21-22 hardening pass: scoped to the pure, deterministic
@@ -224,7 +228,7 @@ exclude = ["alembic/versions"]
 # `apscheduler` ships no inline types and has no published stub package
 # (checked: no `APScheduler-stubs`/`types-apscheduler` on PyPI) -- every
 # other untyped-import case in this codebase's original 428-error backlog
-# (pandas, passlib, jose, psutil) was closed instead with a real stub
+# (pandas, passlib, psutil) was closed instead with a real stub
 # package in the `dev` extra above, which this one genuinely has none for.
 module = ["apscheduler.*"]
 ignore_missing_imports = true

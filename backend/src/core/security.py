@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,13 @@ from src.models.jwt_signing_key import JwtSigningKey
 settings = get_settings()
 
 _pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+# JWTs are signed and verified with PyJWT. This module used to use python-jose,
+# replaced in 2026-10 because of CVE-2026-85394 (an HS256 algorithm-confusion
+# flaw with no fix version) and because python-jose dragged in `ecdsa`
+# (CVE-2024-23342, also unfixable). The token format is the standard JWT/HS256
+# one, so tokens issued by the old library keep verifying -- pinned by fixtures
+# minted with python-jose in tests/test_security_jwt.py.
 
 
 class TokenType(StrEnum):
@@ -135,8 +142,11 @@ async def decode_token(db: AsyncSession, token: str, expected_type: TokenType) -
     still works."""
     key = await get_current_signing_key(db)
     try:
+        # `algorithms` is a single pinned value, never derived from the token's
+        # own header -- the alg=none and HS384/HS512-with-the-same-secret tokens
+        # are rejected by this (tests/test_security_jwt.py).
         payload = jwt.decode(token, key, algorithms=[settings.jwt_algorithm])
-    except JWTError as exc:
+    except jwt.PyJWTError as exc:
         raise InvalidTokenError(str(exc)) from exc
 
     if payload.get("type") != expected_type.value:
