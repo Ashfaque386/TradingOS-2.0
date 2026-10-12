@@ -16,10 +16,19 @@ concurrency:
 permissions:
   contents: read
 
+# Runners are pinned to ubuntu-24.04 instead of `ubuntu-latest`. GitHub starts
+# moving the `ubuntu-latest` label to Ubuntu 26 on 2026-10-19 (gradually, until
+# 2026-11-19), and this pipeline depends on things that change between
+# releases: the AppArmor user-namespace sysctl the strategy sandbox needs,
+# Playwright's system libraries, and the apt packages. Moving to 26 should be a
+# deliberate, tested change, not something that happens to a passing main on
+# the date GitHub picks. (Today `ubuntu-latest` *is* 24.04, so the pin changes
+# nothing yet.) To try 26 early, change one job's label to `ubuntu-26.04` on a
+# branch and watch it run.
 jobs:
   secrets-scan:
     name: Secret scanning (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,7 +55,7 @@ jobs:
 
   backend:
     name: Backend (pytest, ruff, bandit, mypy, pip-audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -95,8 +104,8 @@ jobs:
       - name: Make repo-root config reachable at backend/config
         run: cp -r config backend/config
 
-      # ubuntu-latest is Ubuntu 24.04, which restricts unprivileged user
-      # namespaces via AppArmor by default
+      # ubuntu-24.04 (pinned, see the top of this file) restricts unprivileged
+      # user namespaces via AppArmor by default
       # (kernel.apparmor_restrict_unprivileged_userns=1). The strategy
       # sandbox (src/engine/sandbox/process_runtime.py) creates its network
       # namespace with `unshare --user --map-root-user --net` specifically
@@ -166,7 +175,7 @@ jobs:
 
   e2e:
     name: Frontend E2E (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A real backend+frontend+Postgres+Redis stack, driven by the actual
     # Playwright specs in e2e/ (Phase 26, docs/phase20-old-vs-new-comparison.md
     # item 29) -- these already existed but were never wired into CI.
@@ -317,7 +326,7 @@ jobs:
 
   frontend:
     name: Frontend (tsc)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -356,7 +365,7 @@ jobs:
   images:
     name: Docker image (${{ matrix.image.name }})
     needs: [secrets-scan, backend, e2e, frontend]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
