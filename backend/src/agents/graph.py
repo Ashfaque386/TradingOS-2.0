@@ -257,7 +257,8 @@ async def _node_memory_ingest(state: TradingOSGraphState, router: LlmRouter) -> 
 
 def _strategy_label(state: TradingOSGraphState) -> str:
     strategy = state.strategy or {}
-    return str(strategy.get("name") or strategy.get("kind") or strategy.get("source") or "unnamed")
+    # `source` ("llm"/"fallback") says who answered, not what the strategy is.
+    return str(strategy.get("name") or strategy.get("kind") or "unnamed")
 
 
 def _rejection_lesson(state: TradingOSGraphState) -> str:
@@ -269,13 +270,23 @@ def _rejection_lesson(state: TradingOSGraphState) -> str:
 
 
 def _outcome_lesson(final: TradingOSGraphState) -> str:
-    verdict = (final.evaluation_verdict or {}).get("verdict", "none")
-    sharpe = (final.evaluation_verdict or {}).get("sharpe")
+    """How the run actually ended -- a run that never reached evaluation (the
+    generated code failed validation, compliance blocked it) is a different
+    lesson from one that was evaluated, and must not read as 'evaluated none'."""
+    head = f"Objective {_preview(final.objective)!r}: strategy {_strategy_label(final)!r}"
+    if (final.compliance_verdict or {}).get("blocked"):
+        return f"{head} was blocked by compliance."
+    if final.evaluation_verdict is None:
+        return (
+            f"{head} stopped before evaluation: the generated code failed validation "
+            f"after {final.validation_attempts} attempt(s)."
+        )
+    verdict = final.evaluation_verdict.get("verdict", "none")
+    sharpe = final.evaluation_verdict.get("sharpe")
     outcome = "deployed to paper" if final.deployment_result else "not deployed"
     return (
-        f"Objective {_preview(final.objective)!r}: strategy {_strategy_label(final)!r} "
-        f"evaluated {verdict} (sharpe {sharpe}) after {final.rejection_count} rejection(s); "
-        f"{outcome}."
+        f"{head} evaluated {verdict} (sharpe {sharpe}) after {final.rejection_count} "
+        f"rejection(s); {outcome}."
     )
 
 

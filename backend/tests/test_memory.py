@@ -502,6 +502,21 @@ async def test_run_pipeline_recalls_up_front_and_records_the_outcome():
     assert metadata["verdict"] == "pass" and metadata["rejections"] == 0
 
 
+async def test_an_outcome_that_never_reached_evaluation_says_why(monkeypatch: pytest.MonkeyPatch):
+    async def _bad_code(state: TradingOSGraphState, router: Any) -> dict[str, Any]:
+        return {"generated_code": "def broken(:", "node_log": [*state.node_log, "code_generation"]}
+
+    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "code_generation", _bad_code)
+    memory = _RecordingMemory()
+
+    state = await run_pipeline("obj", memory=memory)
+
+    assert state.evaluation_verdict is None
+    ((text, metadata),) = memory.remembered
+    assert "stopped before evaluation" in text and "failed validation" in text
+    assert "evaluated none" not in text and metadata["verdict"] is None
+
+
 async def test_each_rejection_is_remembered_by_the_memory_ingest_node(
     monkeypatch: pytest.MonkeyPatch,
 ):
