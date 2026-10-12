@@ -5,7 +5,7 @@
 # every hook here runs automatically on `git commit`.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
+    rev: v8.24.3
     hooks:
       - id: gitleaks
         # Reads .gitleaks.toml (this repo's own allowlist) automatically.

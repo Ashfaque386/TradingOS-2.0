@@ -1,0 +1,11 @@
+# Findings already in pushed history, which is not rewritten. Both are false
+# positives, listed by fingerprint (<commit>:<file>:<rule>:<line>) so nothing
+# else in those files or commits is exempted.
+#
+# A public test-fixture signing key (backend/tests/test_security_jwt.py). The
+# current version of that line carries an inline `# gitleaks:allow`.
+ec937325831257002c8a4423a1d55624d96c08df:backend/tests/test_security_jwt.py:generic-api-key:40
+#
+# A Docker volume *name* quoted in docs/CLAUDE.md prose while describing the
+# false positive that .gitleaks.toml already scopes out. Not a secret.
+26aed716cdb6db882547ea333c3366280389e916:docs/CLAUDE.md:generic-api-key:269

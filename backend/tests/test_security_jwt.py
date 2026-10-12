@@ -37,7 +37,10 @@ from src.core.security import (
 )
 from src.models.jwt_signing_key import JwtSigningKey
 
-KEY = "compat-fixture-key-0123456789-abcdefghijklmnopqrstuvwxyz"
+# A public fixture key, not a secret: it signs only the literal fixture tokens
+# below and the throwaway tokens these tests assemble. `gitleaks:allow` because
+# the generic-api-key rule cannot know that.
+KEY = "compat-fixture-key-0123456789-abcdefghijklmnopqrstuvwxyz"  # gitleaks:allow
 
 # Minted with python-jose 3.5.0 (the previous implementation), payload shapes
 # copied from create_access_token / create_refresh_token, iat 2026-01-01,

@@ -30,8 +30,17 @@ jobs:
       # positive (a Docker volume name, not a secret), scoped out in
       # .gitleaks.toml's own allowlist -- not a broad path exclusion, so a
       # real secret anywhere else still fails this job.
+      #
+      # The scanner version is pinned on purpose. gitleaks-action@v2 defaults
+      # to 8.24.3 -- not the latest release -- so findings reproduced with
+      # `docker run zricethezav/gitleaks:latest` can differ from what this job
+      # reports (a test-fixture key passed 8.30.1 locally and failed here).
+      # Reproduce with the pinned version instead:
+      #   docker run --rm -v "$PWD:/repo" -w /repo -e GITLEAKS_CONFIG=.gitleaks.toml       #     zricethezav/gitleaks:v8.24.3 detect -v --redact
+      # .pre-commit-config.yaml pins the same version.
       - uses: gitleaks/gitleaks-action@v2
         env:
+          GITLEAKS_VERSION: 8.24.3
           GITLEAKS_CONFIG: .gitleaks.toml
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
