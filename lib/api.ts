@@ -1253,6 +1253,18 @@ export type RiskLimitChange = {
   applied_by: string | null
   applied_at: string | null
 }
+// The key that signs every session. Never returned -- only where it came from
+// and whether it can be trusted (a deployment started with defaults used to be
+// seeded with a public placeholder).
+export type JwtSigningKeyStatus = {
+  created_at: string
+  created_by: string
+  weak: boolean
+  weakness: string | null
+}
+export const getJwtSigningKeyStatus = () => apiGet<JwtSigningKeyStatus>('/api/v1/system/jwt-signing-key')
+export const rotateJwtSigningKey = () =>
+  apiPost<{ rotated_at: string; rotated_by: string; sessions_revoked: number }>('/api/v1/system/jwt-signing-key/rotate')
 export const listRiskLimits = () => apiGet<RiskLimit[]>('/api/v1/risk-limits')
 export const listRiskLimitChanges = (statusFilter?: string) =>
   apiGet<RiskLimitChange[]>(`/api/v1/risk-limits/changes${statusFilter ? `?status_filter=${statusFilter}` : ''}`)

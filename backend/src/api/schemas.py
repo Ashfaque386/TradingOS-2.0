@@ -55,6 +55,16 @@ class JwtSigningKeyRotateResponse(BaseModel):
     sessions_revoked: int
 
 
+class JwtSigningKeyStatusResponse(BaseModel):
+    """Where the signing key came from and whether it can be trusted -- never
+    the key itself."""
+
+    created_at: str
+    created_by: str
+    weak: bool
+    weakness: str | None
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str

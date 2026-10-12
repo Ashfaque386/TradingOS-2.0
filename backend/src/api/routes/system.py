@@ -25,13 +25,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.llm_router import active_llm_provider, llm_provider_health_vitals
 from src.agents.scheduler import DEFAULT_HEARTBEAT_INTERVAL_SECONDS
-from src.api.schemas import JwtSigningKeyRotateResponse, SystemVitalsResponse
+from src.api.schemas import (
+    JwtSigningKeyRotateResponse,
+    JwtSigningKeyStatusResponse,
+    SystemVitalsResponse,
+)
 from src.audit.service import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.core.redis_client import get_redis
-from src.core.security import invalidate_signing_key_cache
+from src.core.security import get_signing_key_status, invalidate_signing_key_cache
 from src.gateway.schema import LlmProvider
 from src.models.jwt_signing_key import JwtSigningKey
 from src.models.refresh_token import RefreshToken
@@ -57,6 +61,7 @@ register_policy(
     "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule",
     roles=[Role.SYSTEM_ADMINISTRATOR],
 )
+register_policy("GET", "/api/v1/system/jwt-signing-key", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("POST", "/api/v1/system/jwt-signing-key/rotate", roles=[Role.SYSTEM_ADMINISTRATOR])
 
 
@@ -298,6 +303,24 @@ async def system_vitals_endpoint(
         provider_health=llm_provider_health_vitals(),
     )
     return SystemVitalsResponse(**payload)
+
+
+@router.get("/jwt-signing-key")
+async def get_jwt_signing_key_status_endpoint(
+    _current_user: User = Depends(require_role),
+    db: AsyncSession = Depends(get_db),
+) -> JwtSigningKeyStatusResponse:
+    """Whether the key that signs every session can be trusted -- a database
+    row seeded from the public placeholder is the case this exists to show.
+    Read-only, and never returns the key (same write-only posture as the
+    rotate endpoint and every other credential store)."""
+    status = await get_signing_key_status(db)
+    return JwtSigningKeyStatusResponse(
+        created_at=status.created_at.isoformat(),
+        created_by=status.created_by,
+        weak=status.weakness is not None,
+        weakness=status.weakness,
+    )
 
 
 @router.post("/jwt-signing-key/rotate")

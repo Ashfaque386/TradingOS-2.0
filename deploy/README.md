@@ -28,8 +28,10 @@ single-service deployment instead.
    whatever it's given.
 4. Optional environment variables, worth setting for anything beyond a
    quick test:
-   - `JWT_SECRET_KEY` — defaults to a placeholder value; generate a real
-     one (`python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+   - `JWT_SECRET_KEY` — leave it unset and a random key is generated at
+     first start and kept in the database. A value shorter than 32 bytes, or
+     the old `change-me-in-production` placeholder, is ignored. To replace a
+     key later: Settings > Security > Rotate.
    - `DEFAULT_ADMIN_EMAIL` + `DEFAULT_ADMIN_PASSWORD` — set both to have
      the container ensure that `SystemAdministrator` user exists on every
      boot. Unset by default; without it, register the first user through

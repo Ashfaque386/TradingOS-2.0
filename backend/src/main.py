@@ -15,6 +15,7 @@ from src.brokers.tick_source import get_tick_source
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
+from src.core.security import warn_if_signing_key_weak
 from src.data.price_provider import DataLakePriceProvider
 from src.data.providers import FakeMarketDataProvider
 from src.engine.paper_trading.order_book import MockOrderBookProvider
@@ -65,6 +66,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             version=result.version_id,
             errors=result.errors,
         )
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await warn_if_signing_key_weak(session)
+    except Exception:  # noqa: BLE001 - a diagnostic must never stop the app starting
+        logger.warning("security.jwt_signing_key_check_failed")
 
     watcher = ConfigWatcher(config_path)
     watcher.start()

@@ -18,8 +18,9 @@ import {
 } from '@/lib/api'
 
 // Agent long-term vector memory (backlog item 18). What the pipeline recalls
-// into its prompts before a run, and records after it (rejections, outcomes),
-// is browsable and editable here. When no Qdrant server or embedding provider
+// into its prompts before a run, and records after it (only generated code that
+// failed validation or its sandbox run -- never a placeholder step's result), is
+// browsable and editable here. When no Qdrant server or embedding provider
 // is configured the panel says exactly what is missing, taken straight from
 // the backend's status -- nothing is simulated.
 

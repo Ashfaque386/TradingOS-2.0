@@ -33,6 +33,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
+import { SigningKeyCard } from '@/components/settings/signing-key-card'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
   type AgentSummary,
@@ -82,7 +83,7 @@ import {
   writeNotificationChannel,
 } from '@/lib/api'
 
-type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk'
+type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'security'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: string }[] = [
   { id: 'gateway', label: 'Agent Gateway Config', icon: Braces, desc: 'Infra & agent defaults' },
@@ -91,6 +92,7 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: strin
   { id: 'notifications', label: 'Notification Channels', icon: Bell, desc: 'Telegram / Discord / Slack' },
   { id: 'skills', label: 'Skill Marketplace', icon: Sparkles, desc: 'Grant tools to agents' },
   { id: 'risk', label: 'Risk Limits', icon: SlidersHorizontal, desc: 'Dual-control thresholds' },
+  { id: 'security', label: 'Security', icon: Lock, desc: 'Login signing key' },
 ]
 
 function copyToClipboard(text: string) {
@@ -1229,6 +1231,7 @@ export default function SettingsPage() {
             {section === 'notifications' && <NotificationsSection onStatusChanged={bumpStatus} />}
             {section === 'skills' && <SkillsSection />}
             {section === 'risk' && <RiskSection />}
+            {section === 'security' && <SigningKeyCard />}
           </section>
         </div>
       </main>
