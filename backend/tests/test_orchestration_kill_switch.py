@@ -128,3 +128,21 @@ async def test_notify_body_carries_the_real_trip_reason_not_a_generic_fallback(
     assert len(calls) == 1
     assert "20" in calls[0]
     assert calls[0] != "drawdown threshold breached"
+
+
+async def test_the_state_records_when_it_was_last_touched_and_a_reset_clears_the_reason(
+    db_session_factory,
+):
+    """Found by mutation testing (2026-10-13): `updated_at` could be set to None on a
+    trip or a reset, and a reset could leave "" instead of None as the trip reason,
+    with every test still green -- the operator-facing state is what an audit reads."""
+    async with db_session_factory() as db:
+        tripped = await check_drawdown(db, "live", current_equity=50_000, peak_equity=100_000)
+    assert tripped.updated_at is not None and tripped.trip_reason
+
+    async with db_session_factory() as db:
+        reset = await reset_kill_switch(db, "live", reset_by="risk-manager-1")
+
+    assert reset.updated_at is not None and reset.updated_at >= tripped.updated_at
+    assert reset.trip_reason is None
+    assert reset.tripped_at is None

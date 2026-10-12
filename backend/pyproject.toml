@@ -148,6 +148,94 @@ filterwarnings = [
     "ignore::jwt.warnings.InsecureKeyLengthWarning",
 ]
 
+[tool.tradingos.coverage]
+# Per-module coverage floors, enforced by scripts/check_coverage.py from the
+# coverage.json the CI pytest step writes (docs/phase20-old-vs-new-comparison.md
+# item 28). The suite-wide floor (`--cov-fail-under` in ci.yml) cannot see a
+# safety module sliding while the average holds, so these two tiers can.
+#
+# Floors are a ratchet: set a few points under what was measured on 2026-10-13
+# (suite 87.1%), so a real regression fails and run-to-run noise does not.
+# Raise one when coverage rises (`python scripts/check_coverage.py --suggest`);
+# lowering one needs a reason written next to it.
+#
+# Not gated, on purpose: src/engine/sandbox/restricted_exec.py and
+# worker_main.py read 0% only because they run inside the sandbox's own
+# subprocess, which coverage does not trace -- their tests are real
+# (tests/test_engine_sandbox.py, adversarial escapes included). Gating a number
+# that is wrong by construction would just teach everyone to ignore the gate.
+# src/main.py (app wiring), src/workers, src/execution and src/risk (empty
+# stubs) are left out for the same reason: they do not measure what they do.
+critical_file_floor = 95
+critical_files = [
+  # The deterministic safety layer (Non-Negotiable Rule #2) ...
+  "src/engine/risk/circuit_breaker.py",
+  "src/engine/risk/compliance.py",
+  "src/engine/risk/correlation_constraint.py",
+  "src/engine/risk/go_live_gate.py",
+  "src/engine/risk/kill_switch.py",
+  "src/engine/risk/latency_guard.py",
+  "src/engine/risk/position_sizing.py",
+  "src/engine/options_grounding.py",
+  "src/orchestration/kill_switch.py",
+  "src/orchestration/risk_gate.py",
+  "src/orchestration/risk_limits.py",
+  # ... the gates a strategy or an order must pass through ...
+  "src/orchestration/approvals.py",
+  "src/orchestration/transitions.py",
+  "src/engine/validation.py",
+  # ... and who may do what.
+  "src/core/rbac.py",
+]
+
+[tool.tradingos.coverage.package_floors]
+"src/agents" = 81
+"src/api" = 77
+"src/audit" = 95
+"src/brokers" = 89
+"src/core" = 95
+"src/data" = 87
+"src/engine" = 84
+"src/gateway" = 90
+"src/memory" = 92
+"src/models" = 92
+"src/notifications" = 81
+"src/observability" = 88
+"src/orchestration" = 86
+"src/security" = 85
+
+[tool.tradingos.mutation]
+# Mutation baselines, enforced per module by scripts/mutation_gate.py in CI
+# (`mutation` job in ci.yml). `max_survivors` counts mutants the module's own
+# tests did not kill, measured 2026-10-13 with mutmut 2.5.1 and then reviewed
+# one by one. What is left is deliberately cosmetic: dataclass `frozen`/`slots`
+# flags, error and notification message text, the `KillSwitchMode` type alias,
+# and the fake benchmark generator's default seed/drift. Anything that changed
+# behaviour was killed with a test (see the "Found by mutation testing" tests).
+# A ratchet: lower a number when real survivors are killed, never raise one
+# without saying why beside it. Keep these entries and the matrix in ci.yml in
+# step -- tests/test_mutation_gate.py checks they match.
+
+[[tool.tradingos.mutation.module]]
+path = "src/engine/risk/kill_switch.py"
+tests = ["tests/test_engine_kill_switch.py"]
+max_survivors = 4
+
+[[tool.tradingos.mutation.module]]
+path = "src/engine/risk/compliance.py"
+tests = ["tests/test_engine_compliance.py"]
+max_survivors = 10
+
+[[tool.tradingos.mutation.module]]
+path = "src/engine/risk/correlation_constraint.py"
+tests = ["tests/test_engine_correlation_constraint.py"]
+max_survivors = 6
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/kill_switch.py"
+tests = ["tests/test_orchestration_kill_switch.py"]
+max_survivors = 6
+
 [tool.mutmut]
 # Build Spec §21-22 hardening pass: scoped to the pure, deterministic
 # risk-critical logic named in that pass (Kill Switch, Compliance

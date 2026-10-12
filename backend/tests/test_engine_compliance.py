@@ -158,3 +158,15 @@ def test_circuit_band_move_just_under_the_limit_is_not_blocked():
         symbol="NIFTY", proposed_price=21_990, reference_price=20_000, provider=provider
     )
     assert result.blocked is False
+
+
+def test_the_index_symbols_keep_their_own_circuit_band_while_others_get_the_default():
+    """Found by mutation testing (2026-10-13): the table's NIFTY/BANKNIFTY bands could
+    be changed (10.0 -> 11.0) or a key renamed with every test still green, because
+    only the unlisted-symbol default was ever asserted. These are regulatory numbers."""
+    provider = ReferenceTableRegulatoryDataProvider()
+
+    assert provider.circuit_filter_band_pct("NIFTY") == 10.0
+    assert provider.circuit_filter_band_pct("BANKNIFTY") == 10.0
+    assert provider.circuit_filter_band_pct("banknifty") == 10.0  # symbols are case-insensitive
+    assert provider.circuit_filter_band_pct("RELIANCE") == DEFAULT_CIRCUIT_BAND_PCT
