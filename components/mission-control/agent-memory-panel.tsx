@@ -208,7 +208,7 @@ export function AgentMemoryPanel({
           <input
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder={MODEL_HINTS[provider] ?? 'embedding model'}
+            placeholder={`e.g. ${MODEL_HINTS[provider] ?? 'an embedding model'}`}
             aria-label="Embedding model"
             className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />

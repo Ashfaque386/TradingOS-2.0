@@ -11,10 +11,10 @@ indirectly through the fake planner's own (always-valid) output.
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import structlog
-from sqlalchemy import update
+from sqlalchemy import CursorResult, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.organization_run import OrganizationRun, RunStatus
@@ -271,6 +271,21 @@ async def _materialize_tasks(
     return key_to_id
 
 
+class RunNoLongerPlannableError(Exception):
+    """The run left PENDING/PLANNING while it was being planned -- an operator
+    cancelled it. The plan that was just produced must not be applied: nothing
+    it materialized is kept, and the run stays exactly as the cancel left it."""
+
+    def __init__(self, run_id: uuid.UUID) -> None:
+        super().__init__(f"run {run_id} was cancelled while it was being planned")
+        self.run_id = run_id
+
+
+# Where a run may still be planned from. The flips below are conditional on
+# this so a cancel that lands mid-planning is not overwritten back to RUNNING.
+_PLANNABLE_STATUSES = (RunStatus.PENDING, RunStatus.PLANNING)
+
+
 async def create_plan(
     db: AsyncSession,
     run_id: uuid.UUID,
@@ -282,7 +297,9 @@ async def create_plan(
     """Runs up to `max_attempts` planner attempts; the first structurally
     valid graph is accepted and materialized into `tasks`/`task_dependencies`,
     flipping the run to RUNNING. Exhausting every attempt flips the run to
-    CANNOT_PLAN and raises CannotPlanError.
+    CANNOT_PLAN and raises CannotPlanError. Both flips are conditional on the
+    run still being PENDING/PLANNING: if it was cancelled meanwhile, nothing
+    is applied and RunNoLongerPlannableError is raised instead.
     """
     attempts_errors: list[list[str]] = []
 
@@ -303,11 +320,20 @@ async def create_plan(
 
         if not errors:
             await _materialize_tasks(db, run_id, plan.id, graph)
-            await db.execute(
+            flipped = await db.execute(
                 update(OrganizationRun)
-                .where(OrganizationRun.id == run_id)
+                .where(
+                    OrganizationRun.id == run_id,
+                    OrganizationRun.status.in_(_PLANNABLE_STATUSES),
+                )
                 .values(status=RunStatus.RUNNING)
             )
+            if cast(CursorResult[Any], flipped).rowcount != 1:
+                # Cancelled mid-planning. Roll back the plan and the tasks
+                # materialized above (same transaction) instead of resurrecting
+                # the run.
+                await db.rollback()
+                raise RunNoLongerPlannableError(run_id)
             await db.commit()
             await db.refresh(plan)
             return plan
@@ -318,10 +344,13 @@ async def create_plan(
         attempts_errors.append(errors)
         await db.commit()
 
-    await db.execute(
+    gave_up = await db.execute(
         update(OrganizationRun)
-        .where(OrganizationRun.id == run_id)
+        .where(OrganizationRun.id == run_id, OrganizationRun.status.in_(_PLANNABLE_STATUSES))
         .values(status=RunStatus.CANNOT_PLAN)
     )
+    if cast(CursorResult[Any], gave_up).rowcount != 1:
+        await db.rollback()
+        raise RunNoLongerPlannableError(run_id)
     await db.commit()
     raise CannotPlanError(run_id, attempts_errors)

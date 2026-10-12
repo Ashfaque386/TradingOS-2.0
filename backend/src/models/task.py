@@ -19,6 +19,10 @@ class TaskStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     UNSATISFIABLE = "unsatisfiable"  # an upstream dependency permanently failed
+    # The run was cancelled before this task finished. A task that was already
+    # executing is cancelled too, but its capability runs in a thread that
+    # cannot be interrupted -- its late result is discarded, never recorded.
+    CANCELLED = "cancelled"
 
 
 class Task(Base, TimestampMixin):

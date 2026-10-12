@@ -16,6 +16,7 @@ a different-looking function, since there's only one primitive.
 """
 
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -54,17 +55,25 @@ async def conditional_transition(
     id_column: InstrumentedAttribute[Any],
     row_id: uuid.UUID,
     status_column: InstrumentedAttribute[Any],
-    from_status: Any,
+    from_status: Any = None,
     to_status: Any,
     extra_values: dict[ColumnElement[Any] | InstrumentedAttribute[Any] | str, object] | None = None,
     approval: ApprovalGate | None = None,
+    from_statuses: Collection[Any] | None = None,
 ) -> bool:
     """Race-safe UPDATE ... WHERE id = row_id AND status = from_status,
     optionally gated by an already-approved ApprovalRequest. Returns True
     iff the transition was applied; False means the row wasn't in
     from_status anymore (lost a race, or doesn't exist) — never raises for
     that case, only ApprovalRequiredError for a missing/unapproved gate.
+
+    Pass `from_statuses` instead of `from_status` for a transition that is
+    legal from several states (cancelling a run from any non-terminal one):
+    still one atomic UPDATE, so exactly one of any set of concurrent callers
+    wins. Exactly one of the two must be given.
     """
+    if (from_status is None) == (from_statuses is None):
+        raise ValueError("pass exactly one of from_status / from_statuses")
     if approval is not None:
         # Imported here, not at module scope, to avoid a circular import
         # (approvals.py depends on nothing from this module, but importing
@@ -97,7 +106,12 @@ async def conditional_transition(
     # Table, a real TableClause subtype, at runtime.
     stmt = (
         update(cast(Table, table))
-        .where(id_column == row_id, status_column == from_status)
+        .where(
+            id_column == row_id,
+            status_column.in_(from_statuses)
+            if from_statuses is not None
+            else status_column == from_status,
+        )
         .values(values)
     )
     result = await db.execute(stmt)

@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
-import { Activity, AlertCircle, ArrowRight, BarChart3, Beaker, CalendarClock, Check, CheckCircle2, ChevronRight, Clock3, Inbox, Layers3, MessageSquarePlus, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, Trash2, X } from 'lucide-react'
+import { Activity, AlertCircle, ArrowRight, Ban, BarChart3, Beaker, CalendarClock, Check, CheckCircle2, ChevronRight, Clock3, Inbox, Layers3, MessageSquarePlus, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, Trash2, X } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { AgentPipelinePanel } from '@/components/mission-control/agent-pipeline-panel'
 import { AgentMemoryPanel } from '@/components/mission-control/agent-memory-panel'
@@ -23,6 +23,7 @@ import {
   type ScheduledJobRunHistoryEntry,
   type SignoffSnapshot,
   ApiError,
+  cancelRun,
   continueRun,
   createOperatorGuidance,
   createRun,
@@ -591,7 +592,7 @@ function OperatorGuidancePanel({
 type Column = 'Inbox' | 'Planning' | 'In Progress' | 'Backtesting / Review' | 'Sign-off' | 'Live / Done'
 const columns: Column[] = ['Inbox', 'Planning', 'In Progress', 'Backtesting / Review', 'Sign-off', 'Live / Done']
 
-// RunStatus (pending/planning/running/paused/cannot_plan/completed/failed)
+// RunStatus (pending/planning/running/paused/cannot_plan/completed/failed/cancelled)
 // doesn't map 1:1 onto this board's 6 columns -- "Backtesting / Review" has
 // no corresponding run status (real backtesting is its own subsystem, see
 // the Backtests page) and is intentionally always empty here; a paused run
@@ -607,7 +608,7 @@ function columnForRun(run: OrganizationRun): Column {
     case 'paused':
       return 'Sign-off'
     default:
-      return 'Live / Done' // cannot_plan, completed, failed -- all terminal
+      return 'Live / Done' // cannot_plan, completed, failed, cancelled -- all terminal
   }
 }
 
@@ -635,11 +636,12 @@ function accentFor(run: OrganizationRun): string {
   if (run.status === 'failed' || run.status === 'cannot_plan') return '#f87171'
   if (run.status === 'completed') return '#4ade80'
   if (run.status === 'paused') return '#fbbf24'
+  if (run.status === 'cancelled') return '#94a3b8'
   return '#67e8f9'
 }
 
 // Text label for the same run states accentFor() colors -- several terminal
-// statuses (completed / failed / cannot_plan) land in the same "Live / Done"
+// statuses (completed / failed / cannot_plan / cancelled) land in the same "Live / Done"
 // kanban column, so the card needs a status word, not just an accent color,
 // to stay legible for colorblind users / forced-grayscale displays (WCAG 1.4.1).
 function runStatusLabel(run: OrganizationRun): string {
@@ -651,20 +653,28 @@ function runStatusLabel(run: OrganizationRun): string {
     case 'cannot_plan': return 'Cannot plan'
     case 'completed': return 'Completed'
     case 'failed': return 'Failed'
+    case 'cancelled': return 'Cancelled'
     default: return run.status
   }
 }
 
-function TaskDrawer({ run, onClose, onAction, canAct }: { run: OrganizationRun; onClose: () => void; onAction: (action: 'pause' | 'continue' | 'retry' | 'rerun') => void; canAct: boolean }) {
+type RunAction = 'pause' | 'continue' | 'retry' | 'rerun' | 'cancel'
+
+function TaskDrawer({ run, onClose, onAction, canAct, actionError }: { run: OrganizationRun; onClose: () => void; onAction: (action: RunAction) => void; canAct: boolean; actionError: string | null }) {
+  const [confirmingCancel, setConfirmingCancel] = useState(false)
+  const canCancel = ['pending', 'planning', 'running', 'paused'].includes(run.status)
   return <AnimatePresence><motion.aside initial={{ x: 440 }} animate={{ x: 0 }} exit={{ x: 440 }} className="fixed right-0 top-0 z-[60] flex h-full w-full max-w-[440px] flex-col border-l border-cyan-300/15 bg-[#080b1b]/95 p-6 shadow-2xl shadow-cyan-950/30 backdrop-blur-2xl"><div className="flex items-start justify-between"><div><p className="eyebrow">RUN INSPECTOR</p><h2 className="mt-2 text-xl font-semibold">{run.objective}</h2><p className="mt-1 font-mono text-xs text-cyan-200">RUN-{run.id.slice(0, 8).toUpperCase()} · {runElapsed(run)} · {run.status}</p></div><button onClick={onClose} aria-label="Close task inspector" className="icon-button"><X className="size-4" /></button></div>
     {run.error && <div className="mt-4 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{run.error}</div>}
-    <div className="mt-6"><p className="eyebrow">TASK GRAPH ({run.tasks.length})</p><div className="mt-3 flex flex-col gap-3">{run.tasks.length === 0 && <p className="text-xs text-muted-foreground">No tasks planned yet.</p>}{run.tasks.map((task) => <div key={task.id} className="flex gap-3 text-xs"><span className={`mt-1 size-1.5 shrink-0 rounded-full ${task.status === 'succeeded' ? 'bg-emerald-300' : task.status === 'failed' ? 'bg-rose-400' : task.status === 'running' ? 'bg-cyan-300' : 'bg-white/30'}`} /><span className="text-muted-foreground">{task.name} <small className="ml-2 font-mono text-[9px] text-cyan-200/60">{task.status}</small>{task.last_error && <span className="mt-1 block text-rose-300">{task.last_error}</span>}</span></div>)}</div></div>
+    <div className="mt-6"><p className="eyebrow">TASK GRAPH ({run.tasks.length})</p><div className="mt-3 flex flex-col gap-3">{run.tasks.length === 0 && <p className="text-xs text-muted-foreground">No tasks planned yet.</p>}{run.tasks.map((task) => <div key={task.id} className="flex gap-3 text-xs"><span className={`mt-1 size-1.5 shrink-0 rounded-full ${task.status === 'succeeded' ? 'bg-emerald-300' : task.status === 'failed' ? 'bg-rose-400' : task.status === 'running' ? 'bg-cyan-300' : task.status === 'cancelled' ? 'bg-slate-500' : 'bg-white/30'}`} /><span className="text-muted-foreground">{task.name} <small className="ml-2 font-mono text-[9px] text-cyan-200/60">{task.status}</small>{task.last_error && <span className="mt-1 block text-rose-300">{task.last_error}</span>}</span></div>)}</div></div>
     {canAct && <div className="mt-6 flex flex-wrap gap-2">
       {run.status === 'running' && <button onClick={() => onAction('pause')} className="button-secondary"><Pause className="size-3" />Pause</button>}
       {run.status === 'paused' && <button onClick={() => onAction('continue')} className="button-primary"><Play className="size-3" />Continue</button>}
       {run.status === 'failed' && run.failure_class === 'transient' && <button onClick={() => onAction('retry')} className="button-secondary"><RotateCcw className="size-3" />Retry</button>}
-      {(run.status === 'completed' || run.status === 'failed') && <button onClick={() => onAction('rerun')} className="button-secondary"><RefreshCw className="size-3" />Rerun</button>}
+      {(run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') && <button onClick={() => onAction('rerun')} className="button-secondary"><RefreshCw className="size-3" />Rerun</button>}
+      {canCancel && !confirmingCancel && <button onClick={() => setConfirmingCancel(true)} aria-label="Cancel run" className="button-secondary"><Ban className="size-3" />Cancel run</button>}
     </div>}
+    {canAct && confirmingCancel && <div role="alertdialog" aria-label="Confirm cancelling this run" className="mt-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-100"><p>Cancel this run? Its unfinished tasks are cancelled and it cannot be resumed -- use Rerun to start over. A task that is already executing cannot be interrupted: it finishes, but its result is discarded.</p><div className="mt-3 flex gap-2"><button onClick={() => { setConfirmingCancel(false); onAction('cancel') }} className="button-primary"><Ban className="size-3" />Yes, cancel run</button><button onClick={() => setConfirmingCancel(false)} className="button-secondary">Keep it</button></div></div>}
+    {actionError && <p role="alert" className="mt-3 text-xs text-rose-300">{actionError}</p>}
   </motion.aside></AnimatePresence>
 }
 
@@ -683,6 +693,7 @@ export default function MissionControlPage() {
   const [view, setView] = useState<'kanban' | 'queue'>('kanban')
   const [runs, setRuns] = useState<OrganizationRun[]>([])
   const [selected, setSelected] = useState<OrganizationRun | null>(null)
+  const [runActionError, setRunActionError] = useState<string | null>(null)
   const [signoff, setSignoff] = useState<SignoffSnapshot | null>(null)
   const [objective, setObjective] = useState('')
   const [creating, setCreating] = useState(false)
@@ -834,14 +845,17 @@ export default function MissionControlPage() {
     }
   }
 
-  async function handleRunAction(run: OrganizationRun, action: 'pause' | 'continue' | 'retry' | 'rerun') {
-    const fn = { pause: pauseRun, continue: continueRun, retry: retryRun, rerun: rerunRun }[action]
+  async function handleRunAction(run: OrganizationRun, action: RunAction) {
+    const fn = { pause: pauseRun, continue: continueRun, retry: retryRun, rerun: rerunRun, cancel: cancelRun }[action]
+    setRunActionError(null)
     try {
       await fn(run.id)
-      await refreshRuns()
-    } catch {
-      // surfaced implicitly -- the run's status won't change and the card stays put
+    } catch (err) {
+      // e.g. cancel -> 409 when the run finished a moment ago; say so, then
+      // refresh below so the drawer shows the run's real state.
+      setRunActionError(err instanceof ApiError ? err.message : `Could not ${action} the run`)
     }
+    await refreshRuns()
   }
 
   async function handleDecideApproval(approval: ApprovalRequestDto, approve: boolean) {
@@ -877,7 +891,7 @@ export default function MissionControlPage() {
     </div>
     <div className="flex items-center justify-between border-b border-white/10"><div className="flex gap-1"><button className={`mission-tab ${view === 'kanban' ? 'mission-tab-active' : ''}`} onClick={() => setView('kanban')}><Layers3 className="size-4" />Kanban board</button><button className={`mission-tab ${view === 'queue' ? 'mission-tab-active' : ''}`} onClick={() => setView('queue')}><ShieldCheck className="size-4" />Sign-off queue <span className="badge-count">{pendingCount}</span></button></div><span className="hidden font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">human-in-the-loop / paper environment</span></div>
     {view === 'kanban' ? <div className="flex gap-3 overflow-x-auto pb-3">{columns.map((column) => { const columnRuns = runs.filter((run) => columnForRun(run) === column); return <section key={column} className="kanban-column"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-cyan-300 shadow-[0_0_12px_currentColor]" /><h2 className="text-xs font-semibold uppercase tracking-wider">{column}</h2></div><span className="font-mono text-[10px] text-muted-foreground">{columnRuns.length.toString().padStart(2, '0')}</span></div><div className="flex min-h-40 flex-col gap-3">{columnRuns.map((run) => <motion.article layoutId={run.id} onClick={() => setSelected(run)} key={run.id} className="task-card"><div className="flex items-start gap-2"><h3 className="flex-1 text-xs font-medium leading-relaxed">{run.objective}</h3><ChevronRight className="size-3 text-muted-foreground" /></div><div className="mt-4 flex items-center justify-between"><div className="avatar-stack">{agentInitials(run).map((agent, i) => <span key={`${run.id}-${agent}-${i}`}>{agent}</span>)}</div><span className="font-mono text-[10px] text-muted-foreground"><Clock3 className="mr-1 inline size-3" />{runElapsed(run)}</span></div><div className="mt-3 flex items-center gap-2"><span className="font-mono text-[9px] uppercase tracking-wide shrink-0" style={{ color: accentFor(run) }}>{runStatusLabel(run)}</span><div className="progress-track flex-1"><span style={{ width: `${runProgress(run)}%`, background: accentFor(run) }} /></div><span className="font-mono text-[9px]" style={{ color: accentFor(run) }}>{runProgress(run)}%</span></div></motion.article>)}</div></section> })}</div> : <SignoffQueue signoff={signoff} canDecide={canDecide} decisionError={decisionError} onDecideApproval={handleDecideApproval} />}
-  </div>{selected && <TaskDrawer run={selected} onClose={() => setSelected(null)} onAction={(action) => handleRunAction(selected, action)} canAct={!readOnly} />}</ShellLayout>
+  </div>{selected && <TaskDrawer key={selected.id} run={selected} onClose={() => { setSelected(null); setRunActionError(null) }} onAction={(action) => handleRunAction(selected, action)} canAct={!readOnly} actionError={runActionError} />}</ShellLayout>
 }
 
 function SignoffQueue({ signoff, canDecide, decisionError, onDecideApproval }: { signoff: SignoffSnapshot | null; canDecide: boolean; decisionError: string | null; onDecideApproval: (approval: ApprovalRequestDto, approve: boolean) => void }) {

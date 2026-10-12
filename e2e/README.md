@@ -83,3 +83,12 @@ itself (via `e2e/utils.ts`'s `runSeedScript`), not something you run by
 hand -- it seeds a fresh LiveEligible strategy per test; the spec itself
 enrolls it into live trading, flips its autonomy switch, and saves its own
 fixture Zerodha credentials through the real API.
+
+`backend/scripts/seed_e2e_paused_run.py` is called the same way by
+`run-cancel.spec.ts`. It plants a PAUSED organization run (with a finished, a
+ready and a blocked task) because there is no other way to get one: every
+capability in the organization-run engine is an instant stub, so a run created
+through the API is already completed when the request returns. The spec then
+drives the cancel flow through the real UI and API and checks each task's
+resulting status server-side. Each call seeds a fresh, uniquely-named run, so
+the spec can be re-run against the same database.

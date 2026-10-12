@@ -374,6 +374,10 @@ export const retryRun = (runId: string) =>
   apiPost<OrganizationRun>(`/api/v1/orchestration/runs/${runId}/retry`)
 export const rerunRun = (runId: string) =>
   apiPost<OrganizationRun>(`/api/v1/orchestration/runs/${runId}/rerun`)
+/** Stops a pending/planning/running/paused run for good (terminal -- Rerun
+ * starts a fresh one). 409 if there was nothing to cancel (already finished). */
+export const cancelRun = (runId: string) =>
+  apiPost<OrganizationRun>(`/api/v1/orchestration/runs/${runId}/cancel`)
 
 // ---- Approvals (strategy promotion / live-eligibility sign-off) ----
 export type ApprovalRequestDto = {

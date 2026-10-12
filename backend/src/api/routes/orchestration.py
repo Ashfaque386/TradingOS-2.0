@@ -33,6 +33,7 @@ register_policy("POST", "/api/v1/orchestration/runs/{run_id}/pause", roles=_OPER
 register_policy("POST", "/api/v1/orchestration/runs/{run_id}/continue", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/orchestration/runs/{run_id}/retry", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/orchestration/runs/{run_id}/rerun", roles=_OPERATOR_ROLES)
+register_policy("POST", "/api/v1/orchestration/runs/{run_id}/cancel", roles=_OPERATOR_ROLES)
 
 
 async def _load_run_response(db: AsyncSession, run_id: uuid.UUID) -> RunResponse:
@@ -105,6 +106,33 @@ async def pause_run_endpoint(
     _current_user: User = Depends(require_role),
 ) -> RunResponse:
     await run_control.pause_run(db, redis, run_id)
+    return await _load_run_response(db, run_id)
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run_endpoint(
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(require_role),
+) -> RunResponse:
+    """Stops a pending/planning/running/paused run for good (a cancelled run
+    is terminal; Rerun starts a fresh one). 409 -- not pause's 200 no-op --
+    when there was nothing to cancel: the audit middleware writes a row for
+    every 2xx, and a "cancel" row for a run that was already finished would
+    put something in the permanent trail that never happened."""
+    result = await run_control.cancel_run(db, redis, run_id, actor=current_user.email)
+    if result is None:
+        run = await db.get(OrganizationRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This run is {run.status.value}; only a pending, planning, running or paused "
+                "run can be cancelled"
+            ),
+        )
     return await _load_run_response(db, run_id)
 
 

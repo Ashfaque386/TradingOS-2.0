@@ -85,6 +85,21 @@ async def _run_capability(fn: CapabilityFn, params: dict[str, Any]) -> dict[str,
     return await loop.run_in_executor(_executor, fn, params)
 
 
+async def _emit_result_discarded(
+    db: AsyncSession, redis: Redis | None, run_id: uuid.UUID, task_id: uuid.UUID, *, outcome: str
+) -> None:
+    """A capability finished (or failed) after its task had been cancelled.
+    Its thread could not be stopped, so the work happened -- the honest record
+    is that it happened and was thrown away, not silence."""
+    await events.emit(
+        db,
+        redis,
+        run_id=run_id,
+        event_type="task.result_discarded",
+        payload={"task_id": str(task_id), "outcome": outcome},
+    )
+
+
 async def _mark_task_failed(
     db: AsyncSession,
     redis: Redis | None,
@@ -95,9 +110,13 @@ async def _mark_task_failed(
     transient: bool,
 ) -> None:
     failure_class = FailureClass.TRANSIENT if transient else FailureClass.PERMANENT
-    await db.execute(
+    # Only a task that is still RUNNING can fail. If the run was cancelled
+    # while this capability was executing, the task is already CANCELLED and
+    # its (thread-bound, uninterruptible) outcome is discarded: a cancelled
+    # run must not be re-marked failed, nor cascade UNSATISFIABLE to dependents.
+    result = await db.execute(
         update(Task)
-        .where(Task.id == task_id)
+        .where(Task.id == task_id, Task.status == TaskStatus.RUNNING)
         .values(
             status=TaskStatus.FAILED,
             completed_at=func.now(),
@@ -105,7 +124,11 @@ async def _mark_task_failed(
             failure_class=failure_class,
         )
     )
+    applied = cast(CursorResult[Any], result).rowcount == 1
     await db.commit()
+    if not applied:
+        await _emit_result_discarded(db, redis, run_id, task_id, outcome="failed")
+        return
     await events.emit(
         db,
         redis,
@@ -123,14 +146,21 @@ async def execute_claimed_task(db: AsyncSession, redis: Redis | None, task: Task
     session dedicated to this one task, never shared with a concurrently
     running sibling.
     """
-    await db.execute(
+    # Read once, up front: a rollback below expires the ORM instance, and
+    # touching an expired attribute from async code would try to lazy-load.
+    task_id, run_id = task.id, task.run_id
+    started = await db.execute(
         update(Task)
-        .where(Task.id == task.id)
+        .where(Task.id == task_id, Task.status == TaskStatus.CLAIMED)
         .values(
             status=TaskStatus.RUNNING, started_at=func.now(), attempt_count=Task.attempt_count + 1
         )
     )
     await db.commit()
+    if cast(CursorResult[Any], started).rowcount != 1:
+        # No longer CLAIMED -- the run was cancelled between the claim and
+        # here. Never start work that has been cancelled.
+        return
     await events.emit(
         db,
         redis,
@@ -159,11 +189,17 @@ async def execute_claimed_task(db: AsyncSession, redis: Redis | None, task: Task
         await _mark_task_failed(db, redis, task.id, task.run_id, message=str(exc), transient=False)
         return
 
-    await db.execute(
+    finished = await db.execute(
         update(Task)
-        .where(Task.id == task.id)
+        .where(Task.id == task.id, Task.status == TaskStatus.RUNNING)
         .values(status=TaskStatus.SUCCEEDED, completed_at=func.now())
     )
+    if cast(CursorResult[Any], finished).rowcount != 1:
+        # Cancelled while the capability ran: keep it CANCELLED, record no
+        # artefact, and wake no dependents.
+        await db.rollback()
+        await _emit_result_discarded(db, redis, run_id, task_id, outcome="succeeded")
+        return
     if task.produces_artefact_type and isinstance(result, dict):
         db.add(
             ResultArtefact(

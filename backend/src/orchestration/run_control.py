@@ -1,15 +1,19 @@
 """Run control (Build Spec §7.3): create / pause / continue / retry
 (transient-only) / rerun (always a fresh plan), with race-safe conditional
-status transitions via src/orchestration/transitions.py.
+status transitions via src/orchestration/transitions.py. Cancel is an
+addition to the Build Spec's set (backlog item 21, from the old app's
+pause/resume/cancel/retry/rerun).
 """
 
 import uuid
+from dataclasses import dataclass
 
 from redis.asyncio import Redis
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.models.organization_run import (
+    CANCELLABLE_STATUSES,
     FailureClass,
     OrganizationRun,
     RunSource,
@@ -19,7 +23,13 @@ from src.models.organization_run import (
 from src.models.task import Task, TaskStatus
 from src.orchestration import events
 from src.orchestration.operator_guidance import fold_guidance_into_objective
-from src.orchestration.planner import CannotPlanError, PlannerFn, create_plan, fake_llm_planner
+from src.orchestration.planner import (
+    CannotPlanError,
+    PlannerFn,
+    RunNoLongerPlannableError,
+    create_plan,
+    fake_llm_planner,
+)
 from src.orchestration.task_engine import drive_run_to_quiescence
 from src.orchestration.transitions import conditional_transition
 
@@ -64,6 +74,13 @@ async def create_run(
             # input includes standing guidance.
             planning_objective = await fold_guidance_into_objective(db, objective)
             await create_plan(db, run_id, planning_objective, planner_fn=planner_fn)
+    except RunNoLongerPlannableError:
+        # Cancelled while being planned: leave the run exactly as the cancel
+        # left it -- no tasks, no cannot_plan event, nothing to drive.
+        async with session_factory() as db:
+            cancelled_run = await db.get(OrganizationRun, run_id)
+            assert cancelled_run is not None
+            return cancelled_run
     except CannotPlanError:
         async with session_factory() as db:
             await events.emit(db, redis, run_id=run_id, event_type="run.cannot_plan", payload={})
@@ -118,6 +135,90 @@ async def continue_run(
     if applied:
         await drive_run_to_quiescence(session_factory, redis, run_id)
     return applied
+
+
+@dataclass(frozen=True, slots=True)
+class CancelResult:
+    tasks_cancelled: int
+    # Of those, how many were already executing. Their capability runs in a
+    # thread that cannot be interrupted, so the work still happens; only its
+    # result is discarded.
+    tasks_in_flight: int
+
+
+async def cancel_run(
+    db: AsyncSession, redis: Redis | None, run_id: uuid.UUID, *, actor: str
+) -> CancelResult | None:
+    """Cancels a run from any non-terminal state (including PAUSED). Returns
+    None when nothing was cancelled -- the run does not exist or has already
+    finished -- so the caller can tell a no-op from a cancel.
+
+    Stops further work; it cannot undo work already done. Finished tasks keep
+    their SUCCEEDED/FAILED outcome and artefacts; every unfinished task is
+    CANCELLED, including those mid-execution (see `CancelResult`). The run's
+    transition is the single atomic step that decides the race against
+    pause/continue/another cancel; the task sweep follows it. A crash between
+    the two leaves a terminal run with a few unfinished tasks, which is
+    harmless: nothing drives a terminal run, and crash recovery only revives
+    non-terminal ones.
+    """
+    applied = await conditional_transition(
+        db,
+        table=OrganizationRun.__table__,
+        id_column=OrganizationRun.id,
+        row_id=run_id,
+        status_column=OrganizationRun.status,
+        from_statuses=CANCELLABLE_STATUSES,
+        to_status=RunStatus.CANCELLED,
+        extra_values={OrganizationRun.completed_at: func.now()},
+    )
+    if not applied:
+        return None
+
+    # Lock the unfinished tasks, read what state each was in, then cancel them
+    # in the same transaction. (An UPDATE ... RETURNING would report the *new*
+    # status.) The row locks make the counts exact: a task finishing right now
+    # either committed first and drops out of this select, or waits for this
+    # commit and then finds itself already CANCELLED -- which is what makes
+    # its late result get discarded.
+    unfinished = (
+        await db.execute(
+            select(Task.id, Task.status)
+            .where(
+                Task.run_id == run_id,
+                Task.status.in_(
+                    [TaskStatus.PENDING, TaskStatus.READY, TaskStatus.CLAIMED, TaskStatus.RUNNING]
+                ),
+            )
+            .with_for_update()
+        )
+    ).all()
+    if unfinished:
+        await db.execute(
+            update(Task)
+            .where(Task.id.in_([task_id for task_id, _ in unfinished]))
+            .values(status=TaskStatus.CANCELLED, completed_at=func.now())
+        )
+    await db.commit()
+
+    result = CancelResult(
+        tasks_cancelled=len(unfinished),
+        tasks_in_flight=sum(
+            1 for _, status in unfinished if status in (TaskStatus.CLAIMED, TaskStatus.RUNNING)
+        ),
+    )
+    await events.emit(
+        db,
+        redis,
+        run_id=run_id,
+        event_type="run.cancelled",
+        payload={
+            "cancelled_by": actor,
+            "tasks_cancelled": result.tasks_cancelled,
+            "tasks_in_flight": result.tasks_in_flight,
+        },
+    )
+    return result
 
 
 async def retry_run(
@@ -206,7 +307,7 @@ async def rerun_run(
         async with session_factory() as db:
             planning_objective = await fold_guidance_into_objective(db, objective)
             await create_plan(db, new_run_id, planning_objective, planner_fn=planner_fn)
-    except CannotPlanError:
+    except (CannotPlanError, RunNoLongerPlannableError):
         async with session_factory() as db:
             return await db.get(OrganizationRun, new_run_id)
 

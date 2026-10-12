@@ -17,6 +17,10 @@ class RunStatus(StrEnum):
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
+    # An operator stopped the run (run_control.cancel_run). Terminal, and
+    # deliberately not FAILED: a deliberate stop is not a failure, so it must
+    # neither read as one in the UI/analytics nor be retryable like one.
+    CANCELLED = "cancelled"
 
 
 # A run left in one of these the instant the app boots can only be there
@@ -29,8 +33,13 @@ NON_TERMINAL_STATUSES: frozenset[RunStatus] = frozenset(
     {RunStatus.PENDING, RunStatus.PLANNING, RunStatus.RUNNING}
 )
 TERMINAL_STATUSES: frozenset[RunStatus] = frozenset(
-    {RunStatus.CANNOT_PLAN, RunStatus.COMPLETED, RunStatus.FAILED}
+    {RunStatus.CANNOT_PLAN, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
 )
+
+# What an operator can cancel: everything not already terminal. PAUSED counts
+# (it is deliberately in neither set above -- a human decision, not a crash
+# artefact -- but a paused run is exactly the kind someone wants to abandon).
+CANCELLABLE_STATUSES: frozenset[RunStatus] = NON_TERMINAL_STATUSES | {RunStatus.PAUSED}
 
 
 class RunType(StrEnum):
