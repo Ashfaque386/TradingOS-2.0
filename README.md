@@ -65,7 +65,7 @@ The frontend-only image is **not** published: Next.js inlines `NEXT_PUBLIC_API_U
 docker run -d -p 8080:8080   --security-opt seccomp=deploy/seccomp/backend.json   -v tradingos_secrets:/app/secrets   -e SECRETS_ENCRYPTION_KEY=<fernet key>   -e JWT_SECRET_KEY=<long random string>   ghcr.io/ashfaque386/tradingos-2.0-allinone:latest
 ```
 
-The seccomp profile is required for strategy creation (the sandbox needs `unshare`); take `deploy/seccomp/backend.json` from this repo. Packages published with the workflow's token start **private**: make them public under the repository's Packages settings, or `docker login ghcr.io` with a token that has `read:packages` to pull them.
+The seccomp profile is required for strategy creation (the sandbox needs `unshare`); take `deploy/seccomp/backend.json` from this repo. Both packages are public and pull without logging in (they follow this public repository's visibility); if you fork the repo to a private one, they will not be, and you will need `docker login ghcr.io` with a token that has `read:packages`.
 
 ## Learn More
 
