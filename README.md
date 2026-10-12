@@ -52,6 +52,21 @@ instead of `docker compose up` directly — it checks whether `API_HOST_PORT` (d
 
 (Runs `scripts/docker-up.ps1` via PowerShell — same port-fallback logic, same env vars, same passthrough of extra flags.)
 
+## Published images (GHCR)
+
+CI builds both images on every run and, after every job passes, publishes them from `main` (tagged `latest` and `sha-<short>`) and from `v*` tags (`<version>`, `<major>.<minor>`):
+
+- `ghcr.io/ashfaque386/tradingos-2.0-allinone` — frontend, backend, Postgres, Redis and nginx behind one port (8080). It is built to be host-agnostic, so the same image runs anywhere.
+- `ghcr.io/ashfaque386/tradingos-2.0-backend` — the backend with its embedded Postgres, as `docker-compose.yml` runs it.
+
+The frontend-only image is **not** published: Next.js inlines `NEXT_PUBLIC_API_URL` at build time, so a registry copy would only work against a backend on `localhost:8000`. Build it yourself with the URL you need (`docker compose build frontend`).
+
+```bash
+docker run -d -p 8080:8080   --security-opt seccomp=deploy/seccomp/backend.json   -v tradingos_secrets:/app/secrets   -e SECRETS_ENCRYPTION_KEY=<fernet key>   -e JWT_SECRET_KEY=<long random string>   ghcr.io/ashfaque386/tradingos-2.0-allinone:latest
+```
+
+The seccomp profile is required for strategy creation (the sandbox needs `unshare`); take `deploy/seccomp/backend.json` from this repo. Packages published with the workflow's token start **private**: make them public under the repository's Packages settings, or `docker login ghcr.io` with a token that has `read:packages` to pull them.
+
 ## Learn More
 
 To learn more, take a look at the following resources:
