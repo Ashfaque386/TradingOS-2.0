@@ -47,6 +47,10 @@ test('a pipeline run started elsewhere appears live in an already-open panel', a
   const ceo = panel(page).locator('[data-step-status="done"]').filter({ hasText: 'ceo-agent' })
   await expect(ceo).toBeVisible()
   await expect(ceo).toContainText(/ceo_brief: (fallback|llm)/)
+  // The backtest is a placeholder today, and the feed says so: a Sharpe of 1.0
+  // nobody computed must not read as a result.
+  const backtest = panel(page).locator('[data-step-status="done"]').filter({ hasText: '· backtesting' })
+  await expect(backtest.first()).toContainText('(simulated)')
   // Every row finished: nothing left spinning.
   await expect(panel(page).locator('[data-step-status="running"]')).toHaveCount(0)
 })

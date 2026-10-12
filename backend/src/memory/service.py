@@ -5,11 +5,12 @@ when a Qdrant server is configured and reachable AND a real embedding provider
 resolves. Otherwise every operation raises `MemoryUnavailableError` carrying a
 reason an operator can act on; nothing is faked.
 
-The pipeline never sees this class. `src.agents.graph.AgentMemory` is a
-Protocol (the graph stays infra-independent, same pattern as
+The pipelines never see this class. `src.memory.lessons.AgentMemory` is a
+Protocol (the LangGraph graph stays infra-independent, same pattern as
 `PipelineEventSink`), and `PipelineMemory` below is the adapter that satisfies
 it, swallowing every failure -- memory is an aid to a run, never a reason for
-one to fail.
+one to fail. What the pipelines are *allowed to record* is decided in
+`src.memory.lessons`, not here.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from src.memory.store import (
     MemoryHit,
     MemoryStoreError,
     QdrantMemoryStore,
-    new_memory_id,
+    memory_id_for,
 )
 
 logger = structlog.get_logger(__name__)
@@ -225,7 +226,9 @@ class MemoryService:
         cleaned = _check_text(text)
         store = self._resolve_store()
         (vector,) = await self._embed([cleaned])
-        memory_id = new_memory_id()
+        # Deterministic: remembering the same thing again updates that memory
+        # (its metadata and timestamp) instead of adding a duplicate.
+        memory_id = memory_id_for(kind, cleaned)
         try:
             await store.upsert(
                 kind,
@@ -275,7 +278,7 @@ class MemoryService:
 
 
 class PipelineMemory:
-    """`src.agents.graph.AgentMemory` over a `MemoryService`: what a pipeline
+    """`src.memory.lessons.AgentMemory` over a `MemoryService`: what a pipeline
     run recalls before it starts and records as it learns. Every method
     swallows failure -- a run proceeds with less context rather than failing."""
 

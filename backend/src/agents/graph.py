@@ -34,6 +34,15 @@ from src.agents.roster import PIPELINE_NODE_AGENTS
 from src.agents.state import TradingOSGraphState
 from src.agents.tools.code_lint import code_format_lint
 from src.gateway.roster import ROSTER_IDS
+from src.memory.lessons import (
+    AgentMemory,
+    format_lessons_block,
+    is_simulated,
+    quote,
+    quote_errors,
+    recall_lessons,
+    record_lesson,
+)
 from src.observability.metrics import agent_node_duration_seconds
 
 logger = structlog.get_logger(__name__)
@@ -96,17 +105,6 @@ async def _cancel_requested(signal: CancelSignal | None) -> bool:
     except Exception:  # noqa: BLE001 - see docstring
         logger.warning("agents.graph.cancel_signal_unreadable")
         return False
-
-
-class AgentMemory(Protocol):
-    """Agent long-term memory as the pipeline sees it. Same reasoning as
-    `PipelineEventSink`: a Protocol so this module needs neither Qdrant nor an
-    embedding provider -- `src.memory.service.PipelineMemory` satisfies it.
-    Implementations must not raise; memory only ever adds context to a run."""
-
-    async def recall(self, objective: str) -> list[str]: ...
-
-    async def remember(self, text: str, metadata: dict[str, Any]) -> None: ...
 
 
 async def _safe_emit(
@@ -180,12 +178,9 @@ def _with_active_prompt(state: TradingOSGraphState, agent_id: str, task_prompt: 
     still reaches the LLM even when an operator has set a custom prompt."""
     active = state.active_prompts.get(agent_id)
     prompt = f"{active}\n\n{task_prompt}" if active else task_prompt
-    if state.memory_context:
-        # Agent long-term memory: lessons from earlier, similar runs, after
-        # the task so its framing still leads.
-        lessons = "\n".join(f"- {lesson}" for lesson in state.memory_context)
-        prompt = f"{prompt}\n\nLessons from earlier similar runs (use if relevant):\n{lessons}"
-    return prompt
+    # Agent long-term memory: lessons from earlier, similar runs, after the
+    # task so its framing still leads ('' -- no change at all -- when none).
+    return prompt + format_lessons_block(state.memory_context)
 
 
 async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
@@ -200,8 +195,22 @@ async def _node_ceo_kickoff(state: TradingOSGraphState, router: LlmRouter) -> di
     return {"ceo_brief": brief, "node_log": [*state.node_log, "ceo_kickoff"]}
 
 
+# Stand-in nodes. Market analysis, options, compliance, backtesting,
+# optimization, risk and deployment do not do their jobs yet: each returns a
+# fixed placeholder, and says so -- its output carries `simulated: True` (first
+# key, so a feed summary that shows only a few fields still shows it). That
+# marker is what keeps a stand-in's result -- a Sharpe of 1.0 nobody computed, a
+# "deployment" that deploys nothing -- from being read, or remembered, as fact
+# (src/memory/lessons.py). A node that becomes real simply stops emitting it.
+# (The LLM-backed nodes, the code-validation lint and the rejection counter are
+# real, and the evaluation rule marks itself only when its inputs were.)
 async def _node_market_analysis(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    analysis = {"trend": "neutral", "confidence": 0.5, "objective": state.objective}
+    analysis = {
+        "simulated": True,
+        "trend": "neutral",
+        "confidence": 0.5,
+        "objective": state.objective,
+    }
     return {"market_analysis": analysis, "node_log": [*state.node_log, "market_analysis"]}
 
 
@@ -222,7 +231,7 @@ async def _node_strategy_generation(
 
 
 async def _node_options_strategy(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    legs = {"legs": [], "naked_options_found": False}
+    legs = {"simulated": True, "legs": [], "naked_options_found": False}
     return {"options_legs": legs, "node_log": [*state.node_log, "options_strategy"]}
 
 
@@ -246,7 +255,7 @@ async def _node_code_generation(state: TradingOSGraphState, router: LlmRouter) -
 
 
 async def _node_compliance_check(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    verdict = {"blocked": False, "reason": None}
+    verdict = {"simulated": True, "blocked": False, "reason": None}
     return {"compliance_verdict": verdict, "node_log": [*state.node_log, "compliance_check"]}
 
 
@@ -260,28 +269,34 @@ async def _node_code_validation(state: TradingOSGraphState, router: LlmRouter) -
 
 
 async def _node_backtesting(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    metrics = {"sharpe": 1.0, "max_drawdown": 0.1}
+    metrics = {"simulated": True, "sharpe": 1.0, "max_drawdown": 0.1}
     return {"backtest_metrics": metrics, "node_log": [*state.node_log, "backtesting"]}
 
 
 async def _node_evaluation(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
     sharpe = (state.backtest_metrics or {}).get("sharpe", 0.0)
-    verdict = {"verdict": "pass" if sharpe >= 0.5 else "fail", "sharpe": sharpe}
+    verdict = {
+        # A deterministic rule, not a stand-in -- but a verdict over simulated
+        # (or missing) metrics is itself simulated.
+        "simulated": is_simulated(state.backtest_metrics),
+        "verdict": "pass" if sharpe >= 0.5 else "fail",
+        "sharpe": sharpe,
+    }
     return {"evaluation_verdict": verdict, "node_log": [*state.node_log, "evaluation"]}
 
 
 async def _node_optimization(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    result = {"improved": True}
+    result = {"simulated": True, "improved": True}
     return {"optimization_result": result, "node_log": [*state.node_log, "optimization"]}
 
 
 async def _node_risk_assessment(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    result = {"within_limits": True}
+    result = {"simulated": True, "within_limits": True}
     return {"risk_assessment": result, "node_log": [*state.node_log, "risk_assessment"]}
 
 
 async def _node_deployment(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-    result = {"deployed": True, "target": "paper"}
+    result = {"simulated": True, "deployed": True, "target": "paper"}
     return {"deployment_result": result, "node_log": [*state.node_log, "deployment"]}
 
 
@@ -292,39 +307,22 @@ async def _node_memory_ingest(state: TradingOSGraphState, router: LlmRouter) -> 
     }
 
 
-def _strategy_label(state: TradingOSGraphState) -> str:
-    strategy = state.strategy or {}
-    # `source` ("llm"/"fallback") says who answered, not what the strategy is.
-    return str(strategy.get("name") or strategy.get("kind") or "unnamed")
-
-
-def _rejection_lesson(state: TradingOSGraphState) -> str:
-    sharpe = (state.evaluation_verdict or {}).get("sharpe")
-    return (
-        f"Objective {_preview(state.objective)!r}: strategy {_strategy_label(state)!r} was "
-        f"rejected at evaluation (sharpe {sharpe}); rejection {state.rejection_count + 1}."
+def _validation_failure_lesson(final: TradingOSGraphState) -> tuple[str, dict[str, Any]] | None:
+    """The one thing this pipeline can truthfully teach: generated code that
+    failed validation (the lint is real, and independent of any market data).
+    Everything else a finished run says about itself -- the backtest, the
+    evaluation, the "deployment" -- comes from stand-in nodes, so there is
+    nothing to learn from it; see src/memory/lessons.py for the rule. None when
+    the run did not end on a validation failure."""
+    result = final.validation_result
+    if result is None or result.get("valid") or final.validation_attempts < MAX_VALIDATION_ATTEMPTS:
+        return None
+    detail = quote_errors(result.get("errors")) or "no detail"
+    text = (
+        f"Objective {quote(final.objective)!r}: the generated code failed validation after "
+        f"{final.validation_attempts} attempt(s): {detail}."
     )
-
-
-def _outcome_lesson(final: TradingOSGraphState) -> str:
-    """How the run actually ended -- a run that never reached evaluation (the
-    generated code failed validation, compliance blocked it) is a different
-    lesson from one that was evaluated, and must not read as 'evaluated none'."""
-    head = f"Objective {_preview(final.objective)!r}: strategy {_strategy_label(final)!r}"
-    if (final.compliance_verdict or {}).get("blocked"):
-        return f"{head} was blocked by compliance."
-    if final.evaluation_verdict is None:
-        return (
-            f"{head} stopped before evaluation: the generated code failed validation "
-            f"after {final.validation_attempts} attempt(s)."
-        )
-    verdict = final.evaluation_verdict.get("verdict", "none")
-    sharpe = final.evaluation_verdict.get("sharpe")
-    outcome = "deployed to paper" if final.deployment_result else "not deployed"
-    return (
-        f"{head} evaluated {verdict} (sharpe {sharpe}) after {final.rejection_count} "
-        f"rejection(s); {outcome}."
-    )
+    return text, {"event": "validation_failed", "source": "pipeline", "run_id": final.run_id}
 
 
 NODE_FUNCTIONS: dict[str, NodeFn] = {
@@ -390,35 +388,11 @@ def _make_skip_node(
     return node
 
 
-def _remembering_ingest(fn: NodeFn, memory: AgentMemory) -> NodeFn:
-    """The `memory_ingest` node's real job: besides counting the rejection,
-    write what was rejected and why into agent long-term memory, so a later
-    run on a similar objective starts knowing it."""
-
-    async def ingest(state: TradingOSGraphState, router: LlmRouter) -> dict[str, Any]:
-        await _safe_remember(
-            memory,
-            _rejection_lesson(state),
-            {"event": "rejection", "run_id": state.run_id, "strategy": _strategy_label(state)},
-        )
-        return await fn(state, router)
-
-    return ingest
-
-
-async def _safe_remember(memory: AgentMemory, text: str, metadata: dict[str, Any]) -> None:
-    try:
-        await memory.remember(text, metadata)
-    except Exception:  # noqa: BLE001 - memory must never break the run it serves
-        logger.warning("agents.graph.memory_remember_failed")
-
-
 def build_graph(
     enabled_agents: frozenset[str] | None = None,
     *,
     router: LlmRouter | None = None,
     event_sink: PipelineEventSink | None = None,
-    memory: AgentMemory | None = None,
     cancel_signal: CancelSignal | None = None,
 ) -> CompiledStateGraph[TradingOSGraphState, None, TradingOSGraphState, TradingOSGraphState]:
     """Compiles the 13-node pipeline. enabled_agents defaults to "every
@@ -437,8 +411,6 @@ def build_graph(
         node: Callable[[TradingOSGraphState], Awaitable[dict[str, Any]]]
         if agent_id in enabled_agents:
             real_fn = NODE_FUNCTIONS[node_name]
-            if node_name == "memory_ingest" and memory is not None:
-                real_fn = _remembering_ingest(real_fn, memory)
 
             async def timed_node(
                 state: TradingOSGraphState,
@@ -555,15 +527,9 @@ async def run_pipeline(
         enabled_agents,
         router=router,
         event_sink=event_sink,
-        memory=memory,
         cancel_signal=cancel_signal,
     )
-    lessons: list[str] = []
-    if memory is not None:
-        try:
-            lessons = await memory.recall(objective)
-        except Exception:  # noqa: BLE001 - memory must never break the run it serves
-            logger.warning("agents.graph.memory_recall_failed")
+    lessons = await recall_lessons(memory, objective)
     initial = TradingOSGraphState(
         objective=objective,
         run_id=run_id,
@@ -596,18 +562,9 @@ async def run_pipeline(
         )
         raise
     final = TradingOSGraphState.model_validate(dict(result))
-    if memory is not None:
-        await _safe_remember(
-            memory,
-            _outcome_lesson(final),
-            {
-                "event": "outcome",
-                "run_id": final.run_id,
-                "strategy": _strategy_label(final),
-                "verdict": (final.evaluation_verdict or {}).get("verdict"),
-                "rejections": final.rejection_count,
-            },
-        )
+    lesson = _validation_failure_lesson(final)
+    if lesson is not None:
+        await record_lesson(memory, *lesson)
     await _safe_emit(
         event_sink,
         "pipeline.completed",
@@ -615,7 +572,11 @@ async def run_pipeline(
             "steps": len(final.node_log),
             "rejection_count": final.rejection_count,
             "evaluation_verdict": (final.evaluation_verdict or {}).get("verdict"),
-            "deployed": bool(final.deployment_result),
+            # Only a deployment a real node performed counts -- the stand-in
+            # reports `deployed: True` and deploys nothing. `simulated` is true
+            # when the run's evaluation was a stand-in's (or never happened).
+            "deployed": bool(final.deployment_result) and not is_simulated(final.deployment_result),
+            "simulated": is_simulated(final.evaluation_verdict),
         },
     )
     return final

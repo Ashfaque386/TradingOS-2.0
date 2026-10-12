@@ -37,10 +37,10 @@ flows named in that pass and has grown since:
 - `agent-memory.spec.ts` -- the Agent memory panel. With no Qdrant server or
   embedding provider (CI's situation) it reports itself unavailable with the
   backend's own reason; an admin can save, reload and reset the embedding
-  choice, which is stored in the database; only an admin sees that form. Two
-  further tests -- add/search/delete a memory, and the role limits -- run only
-  when memory is actually online and are skipped otherwise (see "Memory-online
-  tests" below).
+  choice, which is stored in the database; only an admin sees that form. Three
+  further tests -- add/search/delete a memory, the role limits, and a normal
+  pipeline run leaving memory exactly as it found it -- run only when memory is
+  actually online and are skipped otherwise (see "Memory-online tests" below).
 - `run-cancel.spec.ts` -- cancelling a paused organization run through the
   confirm step and checking each task's resulting status server-side, backing
   out with "Keep it", and a cancel that lost a race being reported rather
@@ -118,8 +118,9 @@ the spec can be re-run against the same database.
 
 ## Memory-online tests
 
-Two tests in `agent-memory.spec.ts` -- add/search/delete a memory, and the role
-limits -- run only when memory is actually online, and skip otherwise. CI's
+Three tests in `agent-memory.spec.ts` -- add/search/delete a memory, the role
+limits, and a normal pipeline run recording nothing -- run only when memory is
+actually online, and skip otherwise. CI's
 stack has no Qdrant server and no embedding provider, so CI never runs them;
 run them by hand. Start a Qdrant server, make an embedding provider reachable,
 and add these to the backend's environment (step 3 above):
@@ -132,8 +133,10 @@ OLLAMA_BASE_URL=http://localhost:11434       # wherever that Ollama is reachable
 ```
 
 e.g. `docker run -d -p 6333:6333 qdrant/qdrant:v1.19.1`. Use a **throwaway**
-Qdrant: with memory online, the pipeline specs also run real pipelines, and
-those record real outcome lessons into whatever Qdrant the backend points at.
+Qdrant: `agent-memory.spec.ts` writes (and deletes) test memories in whatever
+Qdrant the backend points at. With memory online the pipeline specs also read
+from it (they recall lessons) but a normal run records nothing -- only generated
+code that fails validation is ever remembered -- so they leave it as they found it.
 (An embedding choice saved from the panel overrides these two variables --
 `agent-memory.spec.ts` saves and resets one -- so run against a database that
 has none saved if you want the environment values to be what's tested.)

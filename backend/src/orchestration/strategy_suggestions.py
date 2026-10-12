@@ -15,12 +15,17 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.llm_router import LlmRouter, LlmRouterExhaustedError, get_llm_router
+from src.memory.lessons import AgentMemory
 from src.models.strategy import Strategy
 from src.models.strategy_suggestion import StrategySuggestion, SuggestionStatus
 from src.models.strategy_version import StrategyVersion
 from src.orchestration.post_trade_review import latest_finding_for_strategy
 from src.orchestration.prompt_versions import get_active_prompt_content
-from src.orchestration.strategies import create_version_with_validation, generate_strategy_code
+from src.orchestration.strategies import (
+    create_version_with_validation,
+    generate_strategy_code,
+    remember_code_failure,
+)
 
 
 class NoSuchSuggestionError(Exception):
@@ -120,6 +125,7 @@ async def regenerate_from_suggestion(
     *,
     router: LlmRouter | None = None,
     created_by: str | None = None,
+    memory: AgentMemory | None = None,
 ) -> StrategyVersion | None:
     """Only proceeds for a suggestion whose AI verdict isn't a flat
     "reject" -- a rejected suggestion never produces a new version.
@@ -142,11 +148,10 @@ async def regenerate_from_suggestion(
     assert strategy is not None
     assert base_version is not None
 
-    new_code = await generate_strategy_code(
-        f"{strategy.objective}\n\nIncorporate this suggested change: {suggestion.suggestion_text}",
-        router=router,
-        db=db,
+    objective = (
+        f"{strategy.objective}\n\nIncorporate this suggested change: {suggestion.suggestion_text}"
     )
+    new_code = await generate_strategy_code(objective, router=router, db=db, memory=memory)
     diff_text = "".join(
         difflib.unified_diff(
             base_version.code.splitlines(keepends=True),
@@ -159,6 +164,7 @@ async def regenerate_from_suggestion(
     new_version = await create_version_with_validation(
         db, strategy, new_code, created_by=created_by
     )
+    await remember_code_failure(memory, objective, new_version)
 
     suggestion.regenerated_version_id = new_version.id
     suggestion.regeneration_diff = diff_text or None

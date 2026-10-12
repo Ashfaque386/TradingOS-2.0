@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.routes.memory import memory_service_dependency
 from src.api.schemas import (
     ApprovalRequestResponse,
     CreateStrategyRequest,
@@ -23,6 +24,7 @@ from src.api.schemas import (
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.engine.risk.go_live_gate import GoLiveReadinessInput
+from src.memory.service import MemoryService, get_pipeline_memory
 from src.models.strategy import Strategy
 from src.models.strategy_suggestion import StrategySuggestion
 from src.models.strategy_version import StrategyVersion
@@ -97,6 +99,7 @@ async def create_strategy_endpoint(
     body: CreateStrategyRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
+    memory_service: MemoryService = Depends(memory_service_dependency),
 ) -> StrategyResponse:
     strategy, _version = await strategies_orch.run_strategy_pipeline(
         db,
@@ -104,6 +107,7 @@ async def create_strategy_endpoint(
         objective=body.objective,
         instrument_class=body.instrument_class,
         created_by=str(current_user.id),
+        memory=get_pipeline_memory(memory_service),
     )
     return await _load_strategy_response(db, strategy.id)
 
@@ -162,9 +166,13 @@ async def regenerate_suggestion_endpoint(
     suggestion_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
+    memory_service: MemoryService = Depends(memory_service_dependency),
 ) -> SuggestionResponse:
     await suggestions_orch.regenerate_from_suggestion(
-        db, suggestion_id, created_by=str(current_user.id)
+        db,
+        suggestion_id,
+        created_by=str(current_user.id),
+        memory=get_pipeline_memory(memory_service),
     )
     suggestion = await db.get(StrategySuggestion, suggestion_id)
     if suggestion is None:

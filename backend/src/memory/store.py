@@ -50,8 +50,19 @@ def collection_name(kind: str) -> str:
     return f"{_COLLECTION_PREFIX}{kind}"
 
 
-def new_memory_id() -> str:
-    return str(uuid.uuid4())
+# Fixed and arbitrary: it only has to never change, or every stored memory's id
+# would stop matching the id its own text hashes to.
+_ID_NAMESPACE = uuid.UUID("5b0f8c1e-7a53-4a0e-9f3c-2d8e1a64b7c9")
+
+
+def memory_id_for(kind: str, text: str) -> str:
+    """The id a memory is stored under: derived from what it says, so saying the
+    same thing twice is one memory, not two. (Random ids let every repeat of a
+    run pile up another identical copy, and recall's top few hits became several
+    copies of one past event instead of several different lessons.) Whitespace
+    and letter case do not make a different lesson."""
+    normalized = " ".join(text.split()).casefold()
+    return str(uuid.uuid5(_ID_NAMESPACE, f"{kind}\n{normalized}"))
 
 
 class QdrantMemoryStore:

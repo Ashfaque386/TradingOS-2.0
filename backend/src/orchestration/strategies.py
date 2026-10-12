@@ -73,6 +73,14 @@ from src.engine.risk.go_live_gate import GoLiveReadinessInput, evaluate_go_live_
 from src.engine.sandbox.factory import SandboxRuntime, get_default_sandbox_runtime
 from src.engine.sandbox.types import SandboxLimits
 from src.engine.validation import validate_strategy_code
+from src.memory.lessons import (
+    AgentMemory,
+    format_lessons_block,
+    quote,
+    quote_errors,
+    recall_lessons,
+    record_lesson,
+)
 from src.models.backtest_run import BacktestRun, BacktestStatus
 from src.models.strategy import InstrumentClass, Strategy, StrategyStatus
 from src.models.strategy_version import StrategyVersion
@@ -142,7 +150,11 @@ def _fallback_code(objective: str) -> str:
 
 
 async def generate_strategy_code(
-    objective: str, *, router: LlmRouter | None = None, db: AsyncSession | None = None
+    objective: str,
+    *,
+    router: LlmRouter | None = None,
+    db: AsyncSession | None = None,
+    memory: AgentMemory | None = None,
 ) -> str:
     task_prompt = f"Write a run_backtest(data, config) -> dict implementation for: {objective}"
     # Phase 19 (docs/phase19-audit.md Part 2.2): the real effect of
@@ -153,6 +165,10 @@ async def generate_strategy_code(
         active_prompt = await get_active_prompt_content(db, "python-code-generator")
         if active_prompt:
             task_prompt = f"{active_prompt}\n\n{task_prompt}"
+    # Agent long-term memory: how earlier code for similar objectives failed,
+    # after the task so its framing still leads (nothing is added -- the prompt
+    # is byte-for-byte what it was -- when memory is off or has nothing to say).
+    task_prompt += format_lessons_block(await recall_lessons(memory, objective))
 
     router = router or get_llm_router()
     try:
@@ -309,6 +325,54 @@ async def run_version_in_sandbox(
     return version
 
 
+async def remember_code_failure(
+    memory: AgentMemory | None, objective: str, version: StrategyVersion
+) -> None:
+    """Record how a generated version failed, if it did -- the one thing this
+    pipeline can truthfully teach (see src/memory/lessons.py). Whether code
+    passes static validation, and whether its smoke run completes in the
+    sandbox, depend on the code alone, so those are facts the system can vouch
+    for. Nothing about how a version *performs* is recorded: no backtest or
+    paper result carries a record of whether its data was real.
+
+    Deliberately not lessons: the naked-options scan blocking a version (the
+    legs are fixed by `_default_option_legs`, not written by the model, so there
+    is nothing for it to learn), and an infrastructure fault in the sandbox
+    (those raise out of `run_version_in_sandbox`; they say nothing about the
+    code). At most one lesson per call: a version that failed static validation
+    never reached the sandbox."""
+    if memory is None:
+        return
+    head = f"Objective {quote(objective)!r}: the generated code"
+    if not version.static_validation_passed:
+        text = (
+            f"{head} failed static validation: "
+            f"{quote_errors(version.static_validation_errors) or 'no detail'}."
+        )
+        event = "static_validation_failed"
+    else:
+        # `sandbox_result['success']` is the code's own run; `sandbox_passed`
+        # is also cleared by the naked-options scan, which is not a code failure.
+        sandbox = version.sandbox_result or {}
+        if sandbox.get("success") is not False:
+            return
+        text = (
+            f"{head} failed its sandbox smoke run (called with empty data): "
+            f"{quote(str(sandbox.get('error') or 'no detail'))}."
+        )
+        event = "sandbox_failed"
+    await record_lesson(
+        memory,
+        text,
+        {
+            "event": event,
+            "source": "strategy_pipeline",
+            "strategy_id": str(version.strategy_id),
+            "version": version.version_number,
+        },
+    )
+
+
 def _leg_to_dict(leg: GroundedLeg) -> dict[str, Any]:
     return {
         "option_type": leg.option_type,
@@ -330,6 +394,7 @@ async def run_strategy_pipeline(
     created_by: str | None = None,
     router: LlmRouter | None = None,
     sandbox_runtime: SandboxRuntime | None = None,
+    memory: AgentMemory | None = None,
 ) -> tuple[Strategy, StrategyVersion]:
     """The synchronous, one-shot "submit an objective, get a strategy back"
     entrypoint (mirrors Phase 2/3's own "create and drive to completion"
@@ -338,11 +403,15 @@ async def run_strategy_pipeline(
     that fails validation or the sandbox -- that's a normal, inspectable
     outcome (version.static_validation_passed / .sandbox_passed), not an
     exception; it only raises for a genuine infra failure.
+
+    With `memory`, the objective's earlier lessons go into the code-generation
+    prompt and a failure of the generated code is remembered
+    (`remember_code_failure`); without it, nothing changes.
     """
     strategy = await create_strategy(
         db, name=name, objective=objective, instrument_class=instrument_class, created_by=created_by
     )
-    code = await generate_strategy_code(objective, router=router, db=db)
+    code = await generate_strategy_code(objective, router=router, db=db, memory=memory)
     version = await create_version_with_validation(db, strategy, code, created_by=created_by)
 
     if version.static_validation_passed:
@@ -350,6 +419,7 @@ async def run_strategy_pipeline(
             db, strategy, version, sandbox_runtime=sandbox_runtime
         )
 
+    await remember_code_failure(memory, objective, version)
     return strategy, version
 
 

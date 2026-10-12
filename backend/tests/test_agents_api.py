@@ -96,7 +96,7 @@ async def test_run_pipeline_endpoint_reaches_deployment(client, make_user):
     body = resp.json()
     assert body["node_log"][0] == "ceo_kickoff"
     assert body["node_log"][-1] == "deployment"
-    assert body["deployment_result"] == {"deployed": True, "target": "paper"}
+    assert body["deployment_result"] == {"simulated": True, "deployed": True, "target": "paper"}
 
 
 async def test_set_identity_updates_only_given_fields(client, make_user):

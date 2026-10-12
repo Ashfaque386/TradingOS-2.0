@@ -11,7 +11,11 @@ import { E2E_USERS, login } from './utils'
 
 const API_BASE_URL = 'http://localhost:8000'
 
-type MemoryStatus = { available: boolean; reason: string | null }
+type MemoryStatus = {
+  available: boolean
+  reason: string | null
+  collections: { kind: string; exists: boolean; count: number }[]
+}
 
 async function tokenFor(user: { email: string; password: string }): Promise<string> {
   const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
@@ -111,4 +115,28 @@ test('with memory online: a read-only role can search but not add or delete', as
 
   await expect(panel(page).getByLabel('Memory search')).toBeVisible()
   await expect(panel(page).getByLabel('New memory', { exact: true })).toHaveCount(0)
+})
+
+test('with memory online: running the pipeline records nothing in memory', async () => {
+  // The first version of memory wrote down every run's backtest, evaluation and
+  // deployment as lessons -- all placeholders (the feed marks them "simulated"),
+  // so each run taught later ones a fabricated outcome. A normal run now leaves
+  // memory exactly as it found it; only a failed code generation is ever recorded.
+  test.skip(!(await memoryStatus()).available, 'no Qdrant + embedding provider in this environment')
+
+  const lessons = async () =>
+    (await memoryStatus()).collections.find((c) => c.kind === 'strategy')?.count ?? 0
+  const before = await lessons()
+
+  const token = await tokenFor(E2E_USERS.admin)
+  const res = await fetch(`${API_BASE_URL}/api/v1/agents/pipeline/run`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ objective: 'E2E memory: a normal run must not teach memory anything' }),
+  })
+  expect(res.ok).toBe(true)
+  const run = (await res.json()) as { deployment_result: { simulated?: boolean } | null }
+  expect(run.deployment_result?.simulated).toBe(true)
+
+  expect(await lessons()).toBe(before)
 })

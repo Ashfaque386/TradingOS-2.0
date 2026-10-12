@@ -51,7 +51,7 @@ async def test_full_happy_path_reaches_deployment():
 
     assert state.node_log[0] == "ceo_kickoff"
     assert state.node_log[-1] == "deployment"
-    assert state.deployment_result == {"deployed": True, "target": "paper"}
+    assert state.deployment_result == {"simulated": True, "deployed": True, "target": "paper"}
     assert state.rejection_count == 0
 
 

@@ -13,6 +13,7 @@ as "unavailable", asserted below).
 
 import hashlib
 import json
+import uuid
 from typing import Any
 
 import httpx
@@ -20,7 +21,6 @@ import pytest
 from httpx import AsyncClient
 from qdrant_client import AsyncQdrantClient
 
-from src.agents import graph as graph_module
 from src.agents.graph import _with_active_prompt, run_pipeline
 from src.agents.state import TradingOSGraphState
 from src.core.config import Settings
@@ -42,7 +42,7 @@ from src.memory.service import (
     PipelineMemory,
     get_memory_service,
 )
-from src.memory.store import DimensionMismatchError, QdrantMemoryStore
+from src.memory.store import DimensionMismatchError, QdrantMemoryStore, memory_id_for
 from src.security.llm_provider_store import LlmProviderCredentials
 
 _DIM = 64
@@ -312,6 +312,30 @@ async def test_metadata_round_trips_and_text_is_not_duplicated_into_it():
     assert "text" not in hit.payload and "created_at" in hit.payload
 
 
+def test_a_memory_id_is_derived_from_what_it_says():
+    said = memory_id_for("strategy", "Momentum failed in sideways markets")
+
+    assert uuid.UUID(said)  # Qdrant point ids must be valid UUIDs
+    # Pinned: if the namespace ever changes, every stored memory's id stops matching
+    # the id its own text hashes to, and repeats start piling up again.
+    assert said == "2f641873-5ffd-5efe-91cb-43072537e6d0"
+    assert memory_id_for("strategy", "  MOMENTUM  failed in\nsideways   markets ") == said
+    assert memory_id_for("news", "Momentum failed in sideways markets") != said
+    assert memory_id_for("strategy", "Momentum failed in trending markets") != said
+
+
+async def test_remembering_the_same_thing_twice_updates_one_memory_instead_of_adding_a_copy():
+    svc = _service()
+    first = await svc.remember("strategy", "Momentum failed  in sideways markets", {"run": "a"})
+    second = await svc.remember("strategy", "momentum failed in sideways markets", {"run": "b"})
+    other_kind = await svc.remember("news", "momentum failed in sideways markets")
+
+    assert first == second and other_kind != first
+    hits = await svc.query("momentum sideways", kind="strategy", limit=10)
+    assert len(hits) == 1
+    assert hits[0][1].payload["run"] == "b"  # the newer observation replaced the older one
+
+
 async def test_querying_a_never_written_kind_is_empty_not_an_error():
     assert await _service().query("anything", kind="news") == []
 
@@ -489,55 +513,16 @@ def test_prompts_are_unchanged_without_recalled_lessons():
     assert _with_active_prompt(state, "ceo-agent", "Do the task") == "Do the task"
 
 
-async def test_run_pipeline_recalls_up_front_and_records_the_outcome():
+async def test_run_pipeline_recalls_up_front_and_hands_the_lessons_to_the_run():
     memory = _RecordingMemory(["earlier lesson"])
 
     state = await run_pipeline("Build a momentum strategy", run_id="run-1", memory=memory)
 
     assert memory.recalled == ["Build a momentum strategy"]
     assert state.memory_context == ["earlier lesson"]
-    ((text, metadata),) = memory.remembered
-    assert "Build a momentum strategy" in text and "deployed to paper" in text
-    assert metadata["event"] == "outcome" and metadata["run_id"] == "run-1"
-    assert metadata["verdict"] == "pass" and metadata["rejections"] == 0
-
-
-async def test_an_outcome_that_never_reached_evaluation_says_why(monkeypatch: pytest.MonkeyPatch):
-    async def _bad_code(state: TradingOSGraphState, router: Any) -> dict[str, Any]:
-        return {"generated_code": "def broken(:", "node_log": [*state.node_log, "code_generation"]}
-
-    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "code_generation", _bad_code)
-    memory = _RecordingMemory()
-
-    state = await run_pipeline("obj", memory=memory)
-
-    assert state.evaluation_verdict is None
-    ((text, metadata),) = memory.remembered
-    assert "stopped before evaluation" in text and "failed validation" in text
-    assert "evaluated none" not in text and metadata["verdict"] is None
-
-
-async def test_each_rejection_is_remembered_by_the_memory_ingest_node(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    calls = {"n": 0}
-
-    async def _backtest(state: TradingOSGraphState, router: Any) -> dict[str, Any]:
-        calls["n"] += 1
-        return {
-            "backtest_metrics": {"sharpe": 0.0 if calls["n"] <= 2 else 1.0},
-            "node_log": [*state.node_log, "backtesting"],
-        }
-
-    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "backtesting", _backtest)
-    memory = _RecordingMemory()
-
-    state = await run_pipeline("obj", memory=memory)
-
-    assert state.rejection_count == 2
-    events = [meta["event"] for _, meta in memory.remembered]
-    assert events == ["rejection", "rejection", "outcome"]
-    assert "rejected at evaluation" in memory.remembered[0][0]
+    # What a run may *record* is a separate question with its own rule (only
+    # facts the system can vouch for -- never a stand-in node's result); it is
+    # pinned in tests/test_memory_lessons.py.
 
 
 async def test_a_raising_memory_never_breaks_the_run():

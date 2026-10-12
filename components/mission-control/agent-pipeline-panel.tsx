@@ -58,11 +58,15 @@ function summarizeOutput(output: unknown): string {
       } else if ('chars' in v) {
         parts.push(`${key}: ${String(v.chars)} chars`)
       } else {
-        const inner = Object.entries(v)
+        // A stand-in node (backtesting, evaluation, deployment, ...) marks its own
+        // output `simulated`. Say so in words rather than as a bare `simulated=true`,
+        // so a placeholder is never read as a measured result.
+        const { simulated, ...rest } = v
+        const inner = Object.entries(rest)
           .slice(0, 3)
           .map(([k, x]) => `${k}=${String(x)}`)
           .join(' ')
-        parts.push(inner ? `${key}: ${inner}` : key)
+        parts.push(`${inner ? `${key}: ${inner}` : key}${simulated === true ? ' (simulated)' : ''}`)
       }
     } else {
       parts.push(`${key}: ${String(value)}`)
