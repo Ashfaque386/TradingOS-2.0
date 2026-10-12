@@ -92,7 +92,9 @@ jobs:
 
       - name: "Install backend (+ dev extras: pytest, ruff, bandit, mypy, pip-audit)"
         working-directory: backend
-        run: pip install ".[dev]"
+        # pip itself is audited below, and the runner's pip lags behind its
+        # own fixed versions -- bring it current before installing anything.
+        run: python -m pip install --upgrade pip && pip install ".[dev]"
 
       # config/tradingos.config.json and config/nse_holidays.json live at
       # the repo root and reach the backend container at runtime via
@@ -144,27 +146,25 @@ jobs:
         working-directory: backend
         run: bandit -c pyproject.toml -r src -q
 
-      # Still advisory, not gating, even though the original 428-error
-      # backlog (see [tool.mypy] in pyproject.toml) is now fully closed: a
-      # clean run today doesn't by itself make this project's stated policy
-      # "mypy failures block merges" -- kept `continue-on-error` so a
-      # regression here is loud in the Actions log on every build without
-      # silently blocking a PR whose author hasn't opted into that gate.
-      - name: mypy --strict (advisory)
+      # Blocking. The original 428-error backlog (see [tool.mypy] in
+      # pyproject.toml) is closed and `mypy src` is at zero, so a type error
+      # now fails the build instead of scrolling past in a log nobody reads.
+      - name: mypy --strict
         working-directory: backend
         run: mypy src
-        continue-on-error: true
 
-      # Advisory only, deliberately not gating: a real pip-audit run found
-      # CVEs across ~9 packages, several only fixable with a major version
-      # bump (langgraph 0.2.76->1.x touches every agent call site in this
-      # codebase) -- real regression risk that deserves its own reviewed,
-      # tested change, not a rushed bump under CI pressure. Reports on
-      # every build so the real list stays visible.
-      - name: pip-audit (advisory)
+      # Blocking. The findings that used to keep this advisory are gone:
+      # python-jose (and its unfixable `ecdsa`) was replaced by PyJWT, the
+      # langgraph bump landed in Phase 26, `pytest` is on a fixed 9.x (its pin
+      # was lifted for exactly this) and `pip` is upgraded above. What this
+      # means in practice: a CVE published against any dependency fails the
+      # next build -- including an unrelated one -- until the dependency is
+      # bumped, or the finding is acknowledged with an explicit
+      # `--ignore-vuln <ID>` here, with the reason beside it. It also blocks
+      # the image jobs, which `need` this one.
+      - name: pip-audit
         working-directory: backend
         run: pip-audit
-        continue-on-error: true
 
       - name: pytest (with coverage)
         working-directory: backend
