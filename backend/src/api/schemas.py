@@ -157,15 +157,17 @@ class RunPipelineResponse(BaseModel):
     # and published under -- feed it to GET /agents/pipeline/events or the
     # /ws/agent-pipeline-events `run_id` filter to follow or replay the run.
     run_id: str
-    # True when the run was cancelled at a step boundary: `node_log` and the
-    # other fields then describe only the steps that finished before it
-    # stopped, and nothing was recorded to agent memory for it.
+    # True when the run was cancelled (at a step boundary or while a step was
+    # running -- that step is abandoned): `node_log` and the other fields then
+    # describe only the steps that finished before it stopped, and nothing was
+    # recorded to agent memory for it.
     cancelled: bool = False
 
 
 class CancelPipelineRunResponse(BaseModel):
-    """Cancelling a pipeline run is cooperative -- the run stops at its next
-    step boundary, not instantly -- so the answer is 'accepted', not 'done'.
+    """Cancelling a pipeline run is a request the run notices within a moment
+    (it abandons the step in progress), not an instant stop -- so the answer is
+    'accepted', not 'done'.
     The run's own terminal event (`pipeline.cancelled`, or `pipeline.completed`
     if it finished first) says what actually happened."""
 

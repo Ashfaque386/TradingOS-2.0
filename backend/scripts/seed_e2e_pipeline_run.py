@@ -10,7 +10,7 @@ run writes up to the point it "died":
     pipeline.started -> step.started/step.completed (ceo_kickoff) -> step.started
     (market_analysis_step) -> ...nothing.
 
-Two modes:
+Three modes:
 
 - default: the run just stops, its last event ten minutes old. Seeded *before* the
   backend starts (see the e2e job in ci.yml), so the backend's startup sweep is
@@ -18,12 +18,16 @@ Two modes:
 - `--abandoned`: the same run plus the `pipeline.abandoned` event the sweep would
   have written, stamped now. Seeded at test time, so the Mission Control panel has
   an interrupted run as its most recent one to render.
+- `--cancelled`: the same run, cancelled by the operator while its second step was
+  executing: `step.cancelled` then `pipeline.cancelled`, stamped now. A real one
+  needs an LLM call slow enough to cancel, which CI's stack does not have.
 
 Re-seeding the same --run-id replaces it, so the suite can be re-run against one
 database.
 
 Usage:
-    python scripts/seed_e2e_pipeline_run.py --run-id <uuid> --objective "..." [--abandoned]
+    python scripts/seed_e2e_pipeline_run.py --run-id <uuid> --objective "..."
+        [--abandoned | --cancelled]
 """
 
 import argparse
@@ -42,7 +46,7 @@ _DEAD_FOR = timedelta(minutes=10)
 _Event = tuple[str, str | None, dict]
 
 
-def _events(objective: str, *, abandoned: bool, now: datetime) -> list[_Event]:
+def _events(objective: str, *, abandoned: bool, cancelled: bool, now: datetime) -> list[_Event]:
     events: list[_Event] = [
         ("pipeline.started", None, {"objective": objective}),
         ("step.started", "ceo_kickoff", {"step_index": 0}),
@@ -66,19 +70,33 @@ def _events(objective: str, *, abandoned: bool, now: datetime) -> list[_Event]:
                 },
             )
         )
+    if cancelled:
+        events.append(
+            ("step.cancelled", "market_analysis_step", {"step_index": 1, "duration_ms": 1500.0})
+        )
+        events.append(
+            (
+                "pipeline.cancelled",
+                "market_analysis_step",
+                {"step_index": 1, "steps_completed": 1, "in_flight": True},
+            )
+        )
     return events
 
 
-async def seed(run_id: uuid.UUID, objective: str, *, abandoned: bool) -> None:
+_ENDINGS_STAMPED_NOW = {"pipeline.abandoned", "step.cancelled", "pipeline.cancelled"}
+
+
+async def seed(run_id: uuid.UUID, objective: str, *, abandoned: bool, cancelled: bool) -> None:
     now = datetime.now(UTC)
-    events = _events(objective, abandoned=abandoned, now=now)
-    # The run's own events end ten minutes ago; the reaper's ending, if present, is now.
-    last_of_run = len(events) - 1 if not abandoned else len(events) - 2
+    events = _events(objective, abandoned=abandoned, cancelled=cancelled, now=now)
+    # The run's own events end ten minutes ago; its ending, if present, is now.
+    last_of_run = max(i for i, (t, _, _) in enumerate(events) if t not in _ENDINGS_STAMPED_NOW)
 
     async with get_session_factory()() as db:
         await db.execute(delete(AgentPipelineEvent).where(AgentPipelineEvent.run_id == run_id))
         for i, (event_type, node, payload) in enumerate(events):
-            if event_type == "pipeline.abandoned":
+            if event_type in _ENDINGS_STAMPED_NOW:
                 created_at = now
             else:
                 created_at = now - _DEAD_FOR - timedelta(seconds=last_of_run - i)
@@ -101,6 +119,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--run-id", type=uuid.UUID, required=True)
     parser.add_argument("--objective", default="E2E interrupted pipeline run")
-    parser.add_argument("--abandoned", action="store_true")
+    ending = parser.add_mutually_exclusive_group()
+    ending.add_argument("--abandoned", action="store_true")
+    ending.add_argument("--cancelled", action="store_true")
     args = parser.parse_args()
-    asyncio.run(seed(args.run_id, args.objective, abandoned=args.abandoned))
+    asyncio.run(
+        seed(args.run_id, args.objective, abandoned=args.abandoned, cancelled=args.cancelled)
+    )

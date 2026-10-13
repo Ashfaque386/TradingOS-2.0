@@ -529,9 +529,9 @@ export const runAgentPipeline = (objective: string) =>
   apiPost<RunPipelineResult>('/api/v1/agents/pipeline/run', { objective })
 
 /** Asks a running pipeline to stop. Cooperative: 202 means "requested" -- the
- * run ends at its next step boundary (the step in progress finishes first),
- * and its own `pipeline.cancelled` event says it really stopped. 409 if it
- * had already finished. */
+ * run notices within a moment and abandons the step in progress (its result
+ * is discarded), and its own `pipeline.cancelled` event says it really
+ * stopped. 409 if it had already finished. */
 export const cancelAgentPipelineRun = (runId: string) =>
   apiPost<{ run_id: string; status: 'cancel_requested' }>(
     `/api/v1/agents/pipeline/runs/${runId}/cancel`,

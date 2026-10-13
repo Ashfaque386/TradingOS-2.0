@@ -24,7 +24,7 @@ import { useWebSocketChannel } from '@/lib/ws'
 
 const MAX_EVENTS = 400
 
-type StepStatus = 'running' | 'done' | 'failed' | 'skipped'
+type StepStatus = 'running' | 'done' | 'failed' | 'skipped' | 'cancelled'
 
 type StepRow = {
   key: string
@@ -76,8 +76,8 @@ function summarizeOutput(output: unknown): string {
 }
 
 /** Folds one run's raw, ordered events into the rows a person reads: a
- * `step.started` followed by its `step.completed`/`step.failed` becomes a
- * single row, matched on (node, step_index) -- the same node can run several
+ * `step.started` followed by its `step.completed`/`step.failed`/`step.cancelled`
+ * becomes a single row, matched on (node, step_index) -- the same node can run several
  * times in one run (validation retries, evaluation rejections). */
 export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunView {
   const ordered = [...events].sort((a, b) => a.sequence - b.sequence)
@@ -151,6 +151,18 @@ export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunVi
         }
         break
       }
+      case 'step.cancelled': {
+        // The operator cancelled while this step ran: it was abandoned, its
+        // result discarded -- it did not finish, and it did not fail.
+        const row = findStep(event.node, stepIndex)
+        if (row) {
+          row.status = 'cancelled'
+          row.durationMs = duration
+          row.error = null
+          row.summary = 'cancelled: stopped before it finished'
+        }
+        break
+      }
       case 'step.skipped':
         steps.push({
           key: `${event.run_id}:${event.sequence}`,
@@ -172,6 +184,7 @@ function StatusIcon({ status }: { status: StepStatus }) {
   if (status === 'running') return <Loader2 className="size-3.5 shrink-0 animate-spin text-cyan-300" />
   if (status === 'done') return <CheckCircle2 className="size-3.5 shrink-0 text-emerald-300/80" />
   if (status === 'failed') return <AlertCircle className="size-3.5 shrink-0 text-rose-300" />
+  if (status === 'cancelled') return <Ban className="size-3.5 shrink-0 text-amber-300/80" />
   return <MinusCircle className="size-3.5 shrink-0 text-muted-foreground" />
 }
 
@@ -180,8 +193,8 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
   const [objective, setObjective] = useState('')
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // The run a cancel has been requested for. Cancelling is cooperative -- the
-  // step in progress finishes first -- so the panel says so until the run's
+  // The run a cancel has been requested for. The request is only a flag the
+  // run notices within a moment, so the panel says "stopping" until the run's
   // own `pipeline.cancelled` event arrives, rather than claiming it stopped.
   const [cancelRequestedFor, setCancelRequestedFor] = useState<string | null>(null)
 
@@ -293,7 +306,7 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
         {canRun && view?.status === 'running' && (
           <div className="flex items-center gap-2">
             {cancelPending && (
-              <span className="text-[10px] text-muted-foreground">Stops when the current step finishes</span>
+              <span className="text-[10px] text-muted-foreground">Stopping the step in progress</span>
             )}
             <button
               type="button"

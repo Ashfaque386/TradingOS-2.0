@@ -73,3 +73,25 @@ test('the panel shows an interrupted run as interrupted: stuck step marked, no c
   await expect(panel.locator('[data-step-status="running"]')).toHaveCount(0)
   await expect(panel.getByRole('button', { name: 'Cancel pipeline run' })).toHaveCount(0)
 })
+
+test('the panel shows a step cancelled mid-flight as cancelled, not as done or failed', async ({ page }) => {
+  // A real mid-step cancel needs an LLM call slow enough to interrupt, which CI's stack does not
+  // have (the backend tests hold a node open for this); so the events it writes are planted.
+  const objective = `E2E cancelled mid-step ${Date.now()}`
+  runSeedScript('seed_e2e_pipeline_run.py', ['--run-id', randomUUID(), '--objective', objective, '--cancelled'])
+
+  await login(page, E2E_USERS.admin)
+  await page.goto('/mission-control')
+  const panel = page.getByLabel('Agent pipeline steps')
+
+  await expect(panel.getByText(`Objective: ${objective}`)).toBeVisible()
+  await expect(panel.getByText('CANCELLED', { exact: true })).toBeVisible()
+  const aborted = panel.locator('[data-step-status="cancelled"]')
+  await expect(aborted).toHaveCount(1)
+  await expect(aborted).toContainText('market_analysis_step')
+  await expect(aborted).toContainText('stopped before it finished')
+  // The step that finished before the cancel is still done; nothing is left spinning.
+  await expect(panel.locator('[data-step-status="done"]')).toHaveCount(1)
+  await expect(panel.locator('[data-step-status="running"]')).toHaveCount(0)
+  await expect(panel.getByRole('button', { name: 'Cancel pipeline run' })).toHaveCount(0)
+})

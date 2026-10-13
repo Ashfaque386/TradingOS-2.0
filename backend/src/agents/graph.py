@@ -21,6 +21,7 @@ cheap/small dev model wired up locally via Ollama), the same code path
 serves the real completion instead.
 """
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
@@ -74,23 +75,33 @@ class CancelSignal(Protocol):
     """Where a pipeline run learns the operator has cancelled it. A Protocol
     for the same reason as `PipelineEventSink`: this module stays free of
     Redis/DB -- `src.orchestration.pipeline_events.PipelineEventRecorder`
-    answers from a Redis flag. Checked at every step boundary."""
+    answers from a Redis flag. Checked at every step boundary, and polled
+    while a step is executing (see `_run_step`)."""
 
     async def is_cancelled(self) -> bool: ...
 
 
 class PipelineCancelledError(Exception):
-    """Raised at a step boundary when the run was cancelled. Cooperative: a
-    step that is already executing is never interrupted (an LLM call that
-    has started finishes first), so `state` is the pipeline's state as of
-    the last *completed* step -- exactly what the caller can truthfully
-    report as done."""
+    """Raised when the run was cancelled, either at a step boundary or while
+    a step was executing (`in_flight`: the step was abandoned mid-call and its
+    result, if any, discarded). Either way `state` is the pipeline's state as
+    of the last *completed* step -- exactly what the caller can truthfully
+    report as done; an abandoned step is never part of it."""
 
-    def __init__(self, state: TradingOSGraphState, *, node: str, step_index: int) -> None:
-        super().__init__(f"pipeline cancelled before step {step_index} ({node})")
+    def __init__(
+        self,
+        state: TradingOSGraphState,
+        *,
+        node: str,
+        step_index: int,
+        in_flight: bool = False,
+    ) -> None:
+        where = "during" if in_flight else "before"
+        super().__init__(f"pipeline cancelled {where} step {step_index} ({node})")
         self.state = state
         self.node = node
         self.step_index = step_index
+        self.in_flight = in_flight
 
 
 async def _cancel_requested(signal: CancelSignal | None) -> bool:
@@ -105,6 +116,57 @@ async def _cancel_requested(signal: CancelSignal | None) -> bool:
     except Exception:  # noqa: BLE001 - see docstring
         logger.warning("agents.graph.cancel_signal_unreadable")
         return False
+
+
+# How often a running step is checked for a cancel. A Redis GET is cheap; this
+# bounds how long a cancel waits behind an in-flight call.
+CANCEL_POLL_SECONDS = 0.25
+
+
+class _StepAbandoned(Exception):
+    """A step was cancelled while executing; internal to `_run_step`."""
+
+
+async def _run_step(
+    fn: NodeFn,
+    state: TradingOSGraphState,
+    router: LlmRouter,
+    cancel_signal: CancelSignal | None,
+) -> dict[str, Any]:
+    """Runs one node, abandoning it if the operator cancels while it runs.
+
+    The node runs as its own task and the signal is polled until it is done;
+    on a cancel the task is cancelled (an in-flight LLM call is dropped) and
+    `_StepAbandoned` raised. A node that finishes in the same instant the
+    cancel is seen is kept: `task.cancelled()` tells the two apart, so a
+    completed result is never thrown away and an aborted one never applied.
+    Safe because pipeline nodes only read state and call the LLM router --
+    they hold no side effect to leave half-done; a node that ever gains one
+    needs its own answer to 'what does cancel mean here'.
+
+    With no signal there is nothing to poll, so the node is simply awaited.
+    """
+    if cancel_signal is None:
+        return await fn(state, router)
+    task = asyncio.ensure_future(fn(state, router))
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=CANCEL_POLL_SECONDS)
+            if done:
+                return task.result()
+            if await _cancel_requested(cancel_signal):
+                task.cancel()
+                await asyncio.wait({task})
+                if task.cancelled():
+                    raise _StepAbandoned
+                # It finished (or failed) before the cancel landed: honour
+                # what it did rather than discard it.
+                return task.result()
+    finally:
+        # The caller itself being cancelled (shutdown, client disconnect)
+        # must not leak a still-running LLM call.
+        if not task.done():
+            task.cancel()
 
 
 async def _safe_emit(
@@ -419,8 +481,9 @@ def build_graph(
                 _agent: str = agent_id,
             ) -> dict[str, Any]:
                 step_index = len(state.node_log)
-                # Cancellation is honoured here, between steps, never inside
-                # one -- before this step starts anything it cannot take back.
+                # A cancel that arrived between steps stops the run before this
+                # one starts; one that arrives during it is handled in
+                # `_run_step`.
                 if await _cancel_requested(cancel_signal):
                     raise PipelineCancelledError(state, node=_name, step_index=step_index)
                 await _safe_emit(
@@ -432,7 +495,21 @@ def build_graph(
                 )
                 started = time.perf_counter()
                 try:
-                    update = await _fn(state, bound_router)
+                    update = await _run_step(_fn, state, bound_router, cancel_signal)
+                except _StepAbandoned:
+                    await _safe_emit(
+                        event_sink,
+                        "step.cancelled",
+                        node=_name,
+                        agent_id=_agent,
+                        payload={
+                            "step_index": step_index,
+                            "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                        },
+                    )
+                    raise PipelineCancelledError(
+                        state, node=_name, step_index=step_index, in_flight=True
+                    ) from None
                 except Exception as exc:
                     await _safe_emit(
                         event_sink,
@@ -521,8 +598,8 @@ async def run_pipeline(
 ) -> TradingOSGraphState:
     """Runs the pipeline to completion. Raises `PipelineCancelledError`
     (carrying the state as of the last completed step) if `cancel_signal`
-    reports a cancel at a step boundary -- a cancelled run is not a result,
-    so nothing is recorded to agent memory for it."""
+    reports a cancel at a step boundary or while a step runs -- a cancelled
+    run is not a result, so nothing is recorded to agent memory for it."""
     compiled = build_graph(
         enabled_agents,
         router=router,
@@ -551,7 +628,11 @@ async def run_pipeline(
             event_sink,
             "pipeline.cancelled",
             node=exc.node,
-            payload={"step_index": exc.step_index, "steps_completed": len(exc.state.node_log)},
+            payload={
+                "step_index": exc.step_index,
+                "steps_completed": len(exc.state.node_log),
+                "in_flight": exc.in_flight,
+            },
         )
         raise
     except Exception as exc:

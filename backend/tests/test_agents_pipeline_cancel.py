@@ -1,9 +1,10 @@
 """Cancelling a LangGraph pipeline run (backlog item 21's companion: the
 pipeline is where runs actually take long enough to cancel).
 
-Cancellation is cooperative and checked only at step boundaries -- a step that
-has started always finishes -- so these tests pin exactly that: where the run
-stops, what it reports, what it refuses to record, and that a flaky cancel
+A cancel is honoured at a step boundary and also *during* a step: the running
+node (an in-flight LLM call, say) is abandoned and its result discarded. These
+tests pin where the run stops, what it reports, what it refuses to record, that
+a step which finishes despite the cancel is kept, and that a flaky cancel
 channel can never take a healthy run down with it.
 """
 
@@ -108,10 +109,10 @@ async def test_a_cancel_mid_run_stops_at_the_next_boundary_and_keeps_finished_wo
     assert "pipeline.completed" not in sink.types()
     cancelled = sink.events[-1]
     assert cancelled[1] == "options_strategy"
-    assert cancelled[2] == {"step_index": 3, "steps_completed": 3}
+    assert cancelled[2] == {"step_index": 3, "steps_completed": 3, "in_flight": False}
 
 
-async def test_the_step_that_is_running_when_the_cancel_arrives_finishes(
+async def test_a_step_that_finishes_before_the_cancel_is_seen_is_kept(
     monkeypatch: pytest.MonkeyPatch,
 ):
     signal = _Signal()
@@ -131,6 +132,146 @@ async def test_the_step_that_is_running_when_the_cancel_arrives_finishes(
     assert finished == ["market_analysis_step"]
     assert caught.value.state.node_log[-1] == "mine"  # its result was kept...
     assert caught.value.node == "strategy_generation"  # ...and the *next* step never started
+    assert caught.value.in_flight is False
+
+
+class _Hung:
+    """A node that never returns on its own, like an LLM call that has stalled."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.interrupted = False
+        self.completed = False
+
+    async def __call__(self, state: TradingOSGraphState, router: Any) -> dict[str, Any]:
+        self.started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            self.interrupted = True
+            raise
+        self.completed = True
+        return {"market_analysis": {"trend": "never"}, "node_log": [*state.node_log, "never"]}
+
+
+class _CancelWhenStarted:
+    """Cancelled as soon as `hung` has begun executing."""
+
+    def __init__(self, hung: _Hung) -> None:
+        self.hung = hung
+
+    async def is_cancelled(self) -> bool:
+        return self.hung.started.is_set()
+
+
+async def test_a_cancel_aborts_the_step_that_is_running(monkeypatch: pytest.MonkeyPatch):
+    hung = _Hung()
+    sink = _Sink()
+    monkeypatch.setattr(graph_module, "CANCEL_POLL_SECONDS", 0.01)
+    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "market_analysis_step", hung)
+
+    with pytest.raises(PipelineCancelledError) as caught:
+        await asyncio.wait_for(
+            run_pipeline("obj", event_sink=sink, cancel_signal=_CancelWhenStarted(hung)),
+            timeout=10,
+        )
+
+    assert hung.interrupted and not hung.completed  # the call was dropped, not waited for
+    assert caught.value.in_flight is True
+    assert caught.value.node == "market_analysis_step" and caught.value.step_index == 1
+    assert caught.value.state.node_log == ["ceo_kickoff"]  # the aborted step is not "done"
+    assert sink.types() == [
+        "pipeline.started",
+        "step.started",
+        "step.completed",
+        "step.started",
+        "step.cancelled",
+        "pipeline.cancelled",
+    ]
+    step_cancelled, ended = sink.events[-2], sink.events[-1]
+    assert step_cancelled[1] == "market_analysis_step"
+    assert step_cancelled[2] is not None and step_cancelled[2]["step_index"] == 1
+    assert ended[2] == {"step_index": 1, "steps_completed": 1, "in_flight": True}
+    assert "step.failed" not in sink.types()
+
+
+async def test_an_aborted_step_is_not_recorded_to_memory(monkeypatch: pytest.MonkeyPatch):
+    hung = _Hung()
+    memory = _Memory()
+    monkeypatch.setattr(graph_module, "CANCEL_POLL_SECONDS", 0.01)
+    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "market_analysis_step", hung)
+
+    with pytest.raises(PipelineCancelledError):
+        await asyncio.wait_for(
+            run_pipeline("obj", memory=memory, cancel_signal=_CancelWhenStarted(hung)), timeout=10
+        )
+
+    assert memory.remembered == []
+
+
+async def test_a_step_that_ignores_the_abort_and_finishes_keeps_its_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The step is not actually stopped by the cancel (it finishes anyway): its
+    finished work is kept, not thrown away. Pinned on `_run_step` directly, since
+    this is the race a real cancel can lose by a hair."""
+    monkeypatch.setattr(graph_module, "CANCEL_POLL_SECONDS", 0.01)
+    started = asyncio.Event()
+
+    async def _stubborn(state: TradingOSGraphState, router: Any) -> dict[str, Any]:
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass  # swallows the abort and returns normally
+        return {"node_log": ["finished anyway"]}
+
+    class _Signal2:
+        async def is_cancelled(self) -> bool:
+            return started.is_set()
+
+    result = await asyncio.wait_for(
+        graph_module._run_step(_stubborn, TradingOSGraphState(objective="o"), None, _Signal2()),  # type: ignore[arg-type]
+        timeout=10,
+    )
+
+    assert result == {"node_log": ["finished anyway"]}
+
+
+async def test_a_step_that_fails_with_a_cancel_pending_but_unseen_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A genuine error is a failure, not a cancel: the polling must not mask it."""
+    sink = _Sink()
+
+    async def _boom(state: TradingOSGraphState, router: Any) -> dict[str, Any]:
+        raise ValueError("node exploded")
+
+    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "market_analysis_step", _boom)
+
+    with pytest.raises(ValueError, match="node exploded"):
+        await run_pipeline("obj", event_sink=sink, cancel_signal=_Signal())
+
+    assert "step.failed" in sink.types() and "step.cancelled" not in sink.types()
+    assert sink.types()[-1] == "pipeline.failed"
+
+
+async def test_a_run_cancelled_from_outside_does_not_leak_its_step(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Shutdown or a dropped client cancels the run's own task; the node it was
+    running must not keep going (an orphaned LLM call) afterwards."""
+    hung = _Hung()
+    monkeypatch.setitem(graph_module.NODE_FUNCTIONS, "market_analysis_step", hung)
+
+    runner = asyncio.create_task(run_pipeline("obj", cancel_signal=_Signal()))
+    await asyncio.wait_for(hung.started.wait(), timeout=10)
+    runner.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await runner
+    await asyncio.sleep(0.05)
+
+    assert hung.interrupted
 
 
 async def test_a_disabled_agents_skipped_step_is_also_a_checkpoint():
@@ -296,7 +437,7 @@ def in_flight(client: AsyncClient, monkeypatch: pytest.MonkeyPatch):
             run.task.cancel()
 
 
-async def test_cancelling_a_running_pipeline_stops_it_at_the_next_step(
+async def test_cancelling_a_running_pipeline_aborts_the_step_in_progress(
     client, make_user, in_flight, redis_client
 ):
     headers = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-pc1@example.com")
@@ -307,20 +448,23 @@ async def test_cancelling_a_running_pipeline_stops_it_at_the_next_step(
     assert cancel.status_code == 202
     assert cancel.json() == {"run_id": run.run_id, "status": "cancel_requested"}
 
-    response = await run.finish()  # the in-progress step finishes, then the run stops
+    # Not released: the step is stuck on its gate, and the cancel gets through anyway.
+    assert run.task is not None
+    response = await asyncio.wait_for(run.task, timeout=15)
     assert response.status_code == 200
     body = response.json()
     assert body["cancelled"] is True and body["run_id"] == run.run_id
-    assert body["node_log"] == ["ceo_kickoff", "market_analysis"]
+    assert body["node_log"] == ["ceo_kickoff"]  # the aborted step is not counted as done
     assert body["deployment_result"] is None
 
     events = (
         await client.get(f"/api/v1/agents/pipeline/events?run_id={run.run_id}", headers=headers)
     ).json()
     types = [e["event_type"] for e in events]
-    assert types[-1] == "pipeline.cancelled" and "pipeline.completed" not in types
-    assert events[-1]["node"] == "strategy_generation"
-    assert events[-1]["payload"] == {"step_index": 2, "steps_completed": 2}
+    assert types[-2:] == ["step.cancelled", "pipeline.cancelled"]
+    assert "pipeline.completed" not in types
+    assert events[-2]["node"] == events[-1]["node"] == "market_analysis_step"
+    assert events[-1]["payload"] == {"step_index": 1, "steps_completed": 1, "in_flight": True}
     assert await redis_client.exists(cancel_key_for(run.run_id)) == 0  # flag cleaned up
 
 
