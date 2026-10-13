@@ -49,6 +49,10 @@ __pycache__/
 .mypy_cache/
 .coverage
 .coverage.*
+# Written by `pytest --cov-report=json` (CI's per-module coverage gate reads it) and by
+# mutmut -- generated, never committed.
+coverage.json
+.mutmut-cache
 htmlcov/
 # mutmut (Build Spec §21-22 mutation testing, see backend/pyproject.toml's
 # [tool.mutmut]) working copy + cache -- local run artifacts, not project
