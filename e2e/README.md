@@ -41,6 +41,13 @@ flows named in that pass and has grown since:
   further tests -- add/search/delete a memory, the role limits, and a normal
   pipeline run leaving memory exactly as it found it -- run only when memory is
   actually online and are skipped otherwise (see "Memory-online tests" below).
+- `pipeline-abandoned.spec.ts` -- a LangGraph pipeline run whose process died
+  (the run lives inside one HTTP request, so a crash or redeploy leaves no
+  ending). One run is planted *before the backend starts*, so the startup sweep
+  is what ends it: the spec checks, through the API, that it now ends with a
+  `pipeline.abandoned` event and that cancelling it is refused. A second,
+  already-ended run is planted at test time so the Mission Control panel has an
+  interrupted run to render: INTERRUPTED, the stuck step marked, no Cancel.
 - `run-cancel.spec.ts` -- cancelling a paused organization run through the
   confirm step and checking each task's resulting status server-side, backing
   out with "Keep it", and a cancel that lost a race being reported rather
@@ -106,6 +113,13 @@ itself (via `e2e/utils.ts`'s `runSeedScript`), not something you run by
 hand -- it seeds a fresh LiveEligible strategy per test; the spec itself
 enrolls it into live trading, flips its autonomy switch, and saves its own
 fixture Zerodha credentials through the real API.
+
+`backend/scripts/seed_e2e_pipeline_run.py` plants the dead pipeline run for
+`pipeline-abandoned.spec.ts`. Its default mode must run **before the backend
+starts** (the e2e job in `ci.yml` does, with a fixed run id the spec knows --
+add the same line before step 3 when running by hand), because the backend's
+startup sweep is what the first test exercises; the spec itself calls it with
+`--abandoned` for the panel test.
 
 `backend/scripts/seed_e2e_paused_run.py` is called the same way by
 `run-cancel.spec.ts`. It plants a PAUSED organization run (with a finished, a

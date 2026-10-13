@@ -460,15 +460,18 @@ async def run_pipeline_endpoint(
     recorder = PipelineEventRecorder(session_factory, redis, run_id)
     cancelled = False
     try:
-        state = await run_pipeline(
-            body.objective,
-            enabled_agents=enabled_agents,
-            active_prompts=active_prompts,
-            run_id=str(run_id),
-            event_sink=recorder,
-            memory=get_pipeline_memory(memory_service),
-            cancel_signal=recorder,
-        )
+        # The heartbeat is what tells a later reader this run is alive rather
+        # than abandoned by a process that died mid-run.
+        async with recorder.heartbeat():
+            state = await run_pipeline(
+                body.objective,
+                enabled_agents=enabled_agents,
+                active_prompts=active_prompts,
+                run_id=str(run_id),
+                event_sink=recorder,
+                memory=get_pipeline_memory(memory_service),
+                cancel_signal=recorder,
+            )
     except PipelineCancelledError as exc:
         # Not an error: the operator asked for this. Report what finished
         # before it stopped.
@@ -502,13 +505,21 @@ async def cancel_pipeline_run_endpoint(
     boundary (a step already in progress -- an LLM call -- finishes first) and
     ends with a `pipeline.cancelled` event. 202, because nothing has stopped
     yet. 404 for an id no event was ever recorded under; 409 for a run that
-    already ended (nothing left to stop -- and no audit row for a cancel that
-    did nothing, since the audit trail records only 2xx responses)."""
-    state = await pipeline_run_state(db, run_id)
+    already ended, or whose process died (nothing left to stop -- and no audit
+    row for a cancel that did nothing, since the audit trail records only 2xx
+    responses)."""
+    state = await pipeline_run_state(db, run_id, redis)
     if state == "unknown":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such pipeline run")
     if state == "finished":
         raise HTTPException(status.HTTP_409_CONFLICT, "This pipeline run has already finished")
+    if state == "abandoned":
+        # Its process died: there is nothing running to read the flag, so
+        # accepting the cancel (a 202, an audit row) would be a lie.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This pipeline run is no longer running -- the process executing it ended",
+        )
     try:
         await request_cancel(redis, run_id)
     except Exception as exc:  # noqa: BLE001 - surfaced as a 503, not swallowed

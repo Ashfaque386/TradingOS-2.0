@@ -337,6 +337,20 @@ jobs:
           JWT_SECRET_KEY: dev-only-secret-do-not-use-in-production
         run: .venv/bin/python scripts/seed_e2e_users.py
 
+      # A pipeline run whose process "died": events that just stop, ten minutes
+      # old. It is planted before the backend starts on purpose, so that the
+      # backend's startup sweep is what ends it -- e2e/pipeline-abandoned.spec.ts
+      # checks the `pipeline.abandoned` event is there. The id must match the spec.
+      - name: Seed a pipeline run left behind by a dead process
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos
+          JWT_SECRET_KEY: dev-only-secret-do-not-use-in-production
+        run: >-
+          .venv/bin/python scripts/seed_e2e_pipeline_run.py
+          --run-id 00000000-0000-4000-8000-0000000000e2
+          --objective "E2E run left behind by a dead process"
+
       - name: Generate a fresh secrets-encryption key for this run
         working-directory: backend
         run: |

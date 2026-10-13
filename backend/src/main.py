@@ -38,6 +38,10 @@ from src.orchestration.live_trading_scheduler import start_live_trading_schedule
 from src.orchestration.market_data_scheduler import start_market_data_scheduler
 from src.orchestration.notification_scheduler import start_notification_scheduler
 from src.orchestration.paper_trading_scheduler import start_paper_trading_scheduler
+from src.orchestration.pipeline_events import (
+    reap_abandoned_runs,
+    start_abandoned_run_reaper_loop,
+)
 from src.orchestration.post_trade_review_scheduler import start_post_trade_review_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
 from src.orchestration.screener_scheduler import start_screener_scheduler
@@ -94,6 +98,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             asyncio.create_task(drive_run_to_quiescence(AsyncSessionLocal, redis, run_id))
             for run_id in reaped
         ]
+
+    # A LangGraph pipeline run lives inside one HTTP request, so a restart or a
+    # crash leaves it with no ending: end those runs now, then keep sweeping.
+    try:
+        await reap_abandoned_runs(AsyncSessionLocal, redis)
+    except Exception:  # noqa: BLE001 - never stop the app starting over a tidy-up
+        logger.warning("pipeline_events.startup_reap_failed")
+    pipeline_reaper_task = start_abandoned_run_reaper_loop(AsyncSessionLocal, redis)
 
     stall_sweep_task = start_stall_sweep_loop(AsyncSessionLocal, redis)
     heartbeat_task = start_heartbeat_loop(AsyncSessionLocal)
@@ -202,6 +214,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    pipeline_reaper_task.cancel()
     stall_sweep_task.cancel()
     heartbeat_task.cancel()
     trading_holiday_task.cancel()

@@ -40,7 +40,7 @@ type StepRow = {
 type RunView = {
   runId: string
   objective: string | null
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
   steps: StepRow[]
   startedAt: string
   /** Lessons recalled from agent memory before the run; null if memory wasn't consulted. */
@@ -109,6 +109,17 @@ export function buildRunView(runId: string, events: AgentPipelineEvent[]): RunVi
         break
       case 'pipeline.cancelled':
         status = 'cancelled'
+        break
+      case 'pipeline.abandoned':
+        // The process running this pipeline died, so no step will ever finish:
+        // a step still showing as running is not running -- say what happened to it.
+        status = 'interrupted'
+        for (const row of steps) {
+          if (row.status === 'running') {
+            row.status = 'failed'
+            row.error = 'interrupted: the process ended before this step finished'
+          }
+        }
         break
       case 'step.started':
         steps.push({
@@ -260,7 +271,9 @@ export function AgentPipelinePanel({ canRun }: { canRun: boolean }) {
           ? 'FAILED'
           : view?.status === 'cancelled'
             ? 'CANCELLED'
-            : ''
+            : view?.status === 'interrupted'
+              ? 'INTERRUPTED'
+              : ''
   const cancelPending = view !== null && cancelRequestedFor === view.runId
 
   return (
