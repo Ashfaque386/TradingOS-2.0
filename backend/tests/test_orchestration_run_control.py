@@ -2,7 +2,9 @@ import asyncio
 import uuid
 
 import pytest
+from sqlalchemy import select
 
+from src.models.audit_log import AuditLog
 from src.models.organization_run import FailureClass, OrganizationRun, RunSource, RunStatus, RunType
 from src.orchestration import run_control
 from src.orchestration.run_control import PermanentFailureRetryError
@@ -150,17 +152,66 @@ async def test_pause_then_continue_over_http(client, make_user, db_session_facto
     assert resumed.status_code == 200 and resumed.json()["status"] == "completed"
 
 
-async def test_pause_on_a_run_that_is_not_running_is_a_no_op_not_an_error(
-    client, make_user, db_session_factory
+@pytest.mark.parametrize(
+    ("action", "status", "failure_class", "needs"),
+    [
+        ("pause", RunStatus.COMPLETED, None, "a running run can be paused"),
+        ("pause", RunStatus.PAUSED, None, "a running run can be paused"),
+        ("continue", RunStatus.RUNNING, None, "a paused run can be continued"),
+        ("continue", RunStatus.COMPLETED, None, "a paused run can be continued"),
+        ("retry", RunStatus.COMPLETED, None, "a failed run can be retried"),
+        ("retry", RunStatus.RUNNING, None, "a failed run can be retried"),
+    ],
+)
+async def test_a_control_that_would_change_nothing_is_refused_not_answered_200(
+    client, make_user, db_session_factory, action, status, failure_class, needs
 ):
+    """A 200 no-op would be audited (the middleware writes a row for every 2xx):
+    a "paused" entry in the permanent trail for a pause that never happened."""
     from src.core.roles import Role
 
-    headers = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-rc2@example.com")
-    run_id = await _make_run(db_session_factory, status=RunStatus.COMPLETED)
+    email = f"admin-noop-{action}-{status.value}@example.com"
+    headers = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, email)
+    run_id = await _make_run(db_session_factory, status=status, failure_class=failure_class)
 
-    resp = await client.post(f"/api/v1/orchestration/runs/{run_id}/pause", headers=headers)
+    resp = await client.post(f"/api/v1/orchestration/runs/{run_id}/{action}", headers=headers)
 
-    assert resp.status_code == 200 and resp.json()["status"] == "completed"
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == f"This run is {status.value}; only {needs}"
+    async with db_session_factory() as db:
+        assert (await db.get(OrganizationRun, run_id)).status == status  # untouched
+
+
+async def test_only_controls_that_took_effect_are_audited(client, make_user, db_session_factory):
+    from src.core.roles import Role
+
+    email = "admin-audit-rc@example.com"
+    headers = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, email)
+    running = await _make_run(db_session_factory, status=RunStatus.RUNNING)
+    failed = await _make_run(
+        db_session_factory, status=RunStatus.FAILED, failure_class=FailureClass.TRANSIENT
+    )
+    base = "/api/v1/orchestration/runs"
+
+    # Each action once where it applies, then again where it no longer does.
+    assert (await client.post(f"{base}/{running}/pause", headers=headers)).status_code == 200
+    assert (await client.post(f"{base}/{running}/pause", headers=headers)).status_code == 409
+    assert (await client.post(f"{base}/{running}/continue", headers=headers)).status_code == 200
+    assert (await client.post(f"{base}/{running}/continue", headers=headers)).status_code == 409
+    assert (await client.post(f"{base}/{failed}/retry", headers=headers)).status_code == 200
+    assert (await client.post(f"{base}/{failed}/retry", headers=headers)).status_code == 409
+
+    async with db_session_factory() as db:
+        rows = (await db.execute(select(AuditLog))).scalars().all()
+    trail = sorted(
+        (r.action.removeprefix("POST /api/v1/orchestration/runs/{run_id}/"), r.entity_id)
+        for r in rows
+        if r.action.startswith("POST /api/v1/orchestration/runs/{run_id}/")
+        and r.entity_id in {str(running), str(failed)}
+    )
+    assert trail == sorted(
+        [("pause", str(running)), ("continue", str(running)), ("retry", str(failed))]
+    )
 
 
 async def test_retry_endpoint_retries_a_transient_failure_and_refuses_a_permanent_one(
@@ -209,3 +260,4 @@ async def test_run_controls_404_for_an_unknown_run(client, make_user):
     for action in ("pause", "continue", "retry"):
         resp = await client.post(f"/api/v1/orchestration/runs/{unknown}/{action}", headers=headers)
         assert resp.status_code == 404, action
+        assert resp.json()["detail"] == "Run not found", action

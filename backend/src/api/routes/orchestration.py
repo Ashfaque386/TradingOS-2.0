@@ -62,6 +62,21 @@ async def _load_run_response(db: AsyncSession, run_id: uuid.UUID) -> RunResponse
     )
 
 
+def _no_op_refusal(run: OrganizationRun | None, *, verb: str, applies_to: str) -> HTTPException:
+    """The refusal for a pause/continue/retry that changed nothing. It is not
+    answered 200: the audit middleware writes a row for every 2xx, so a 200
+    no-op would put a "paused"/"continued"/"retried" entry in the permanent
+    trail for something that never happened (cancel is refused for the same
+    reason). 404 for a run that does not exist, otherwise 409 naming the run's
+    real status."""
+    if run is None:
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"This run is {run.status.value}; only {applies_to} can be {verb}",
+    )
+
+
 @router.post("/runs", status_code=status.HTTP_201_CREATED)
 async def create_run_endpoint(
     body: CreateRunRequest,
@@ -105,7 +120,10 @@ async def pause_run_endpoint(
     redis: Redis = Depends(get_redis),
     _current_user: User = Depends(require_role),
 ) -> RunResponse:
-    await run_control.pause_run(db, redis, run_id)
+    if not await run_control.pause_run(db, redis, run_id):
+        raise _no_op_refusal(
+            await db.get(OrganizationRun, run_id), verb="paused", applies_to="a running run"
+        )
     return await _load_run_response(db, run_id)
 
 
@@ -143,8 +161,12 @@ async def continue_run_endpoint(
     redis: Redis = Depends(get_redis),
     _current_user: User = Depends(require_role),
 ) -> RunResponse:
-    await run_control.continue_run(session_factory, redis, run_id)
+    applied = await run_control.continue_run(session_factory, redis, run_id)
     async with session_factory() as db:
+        if not applied:
+            raise _no_op_refusal(
+                await db.get(OrganizationRun, run_id), verb="continued", applies_to="a paused run"
+            )
         return await _load_run_response(db, run_id)
 
 
@@ -156,10 +178,16 @@ async def retry_run_endpoint(
     _current_user: User = Depends(require_role),
 ) -> RunResponse:
     try:
-        await run_control.retry_run(session_factory, redis, run_id)
+        applied = await run_control.retry_run(session_factory, redis, run_id)
     except PermanentFailureRetryError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     async with session_factory() as db:
+        if not applied:
+            raise _no_op_refusal(
+                await db.get(OrganizationRun, run_id),
+                verb="retried",
+                applies_to="a failed run",
+            )
         return await _load_run_response(db, run_id)
 
 
