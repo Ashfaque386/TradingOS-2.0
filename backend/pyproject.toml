@@ -210,8 +210,10 @@ critical_files = [
 # tests did not kill, measured 2026-10-13 with mutmut 2.5.1 and then reviewed
 # one by one. What is left is deliberately cosmetic: dataclass `frozen`/`slots`
 # flags, error and notification message text, the `KillSwitchMode` type alias,
-# and the fake benchmark generator's default seed/drift. Anything that changed
-# behaviour was killed with a test (see the "Found by mutation testing" tests).
+# and the fake benchmark generator's default seed/drift; for risk_gate and
+# go_live_gate, the `slots` flag on a dataclass and a type annotation (`|` to `&`).
+# Anything that changed behaviour was killed with a test (see the "Found by
+# mutation testing" tests); risk_limits, the two-person approval workflow, has none left.
 # A ratchet: lower a number when real survivors are killed, never raise one
 # without saying why beside it. Keep these entries and the matrix in ci.yml in
 # step -- tests/test_mutation_gate.py checks they match.
@@ -236,6 +238,21 @@ path = "src/orchestration/kill_switch.py"
 tests = ["tests/test_orchestration_kill_switch.py"]
 max_survivors = 6
 
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/risk_gate.py"
+tests = ["tests/test_orchestration_risk_gate.py"]
+max_survivors = 2
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/risk_limits.py"
+tests = ["tests/test_orchestration_risk_limits.py"]
+max_survivors = 0
+
+[[tool.tradingos.mutation.module]]
+path = "src/engine/risk/go_live_gate.py"
+tests = ["tests/test_engine_go_live_gate.py"]
+max_survivors = 2
+
 [tool.mutmut]
 # Build Spec §21-22 hardening pass: scoped to the pure, deterministic
 # risk-critical logic named in that pass (Kill Switch, Compliance
@@ -255,11 +272,11 @@ max_survivors = 6
 # package (literally named `src`, as in every `from src.x import y`) --
 # confirmed live, not assumed. mutmut 2.x's simpler mutate-in-place/rerun
 # model has no such assertion.
-paths_to_mutate = "src/engine/risk/kill_switch.py,src/engine/risk/compliance.py,src/engine/risk/correlation_constraint.py,src/orchestration/kill_switch.py"
+paths_to_mutate = "src/engine/risk/kill_switch.py,src/engine/risk/compliance.py,src/engine/risk/correlation_constraint.py,src/orchestration/kill_switch.py,src/orchestration/risk_gate.py,src/orchestration/risk_limits.py,src/engine/risk/go_live_gate.py"
 # Only the tests that actually exercise these modules -- the full suite
 # (~700 tests, ~2.5 minutes) re-run per surviving mutant would make a
 # routine mutation-testing run impractically slow.
-runner = ".venv/bin/python -m pytest -x tests/test_engine_kill_switch.py tests/test_engine_compliance.py tests/test_engine_correlation_constraint.py tests/test_orchestration_kill_switch.py"
+runner = ".venv/bin/python -m pytest -x tests/test_engine_kill_switch.py tests/test_engine_compliance.py tests/test_engine_correlation_constraint.py tests/test_orchestration_kill_switch.py tests/test_orchestration_risk_gate.py tests/test_orchestration_risk_limits.py tests/test_engine_go_live_gate.py"
 
 [tool.ruff]
 target-version = "py312"

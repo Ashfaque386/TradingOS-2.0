@@ -202,6 +202,9 @@ jobs:
           - src/engine/risk/compliance.py
           - src/engine/risk/correlation_constraint.py
           - src/orchestration/kill_switch.py
+          - src/orchestration/risk_gate.py
+          - src/orchestration/risk_limits.py
+          - src/engine/risk/go_live_gate.py
 
     services:
       postgres:

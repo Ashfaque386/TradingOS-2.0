@@ -5,6 +5,8 @@ independent. Also proves the naked-options scan and correlation
 constraint are wired into this per-tick gate, not only pre-deployment.
 """
 
+from dataclasses import FrozenInstanceError
+
 import pandas as pd
 import pytest
 
@@ -115,3 +117,95 @@ async def test_per_tick_correlation_breach_rejects_the_intent(db_session_factory
             )
 
     assert any("correlation" in reason for reason in exc_info.value.reasons)
+
+
+# ---- Found by mutation testing (2026-10-13) -------------------------------------
+# mutmut changed `and` to `or` in the "is there a correlation to evaluate" guard,
+# the correlation's starting value from None to "", and the wording of the
+# rejection reasons; no test noticed any of them.
+
+
+def _uncorrelated_pair():
+    idx = pd.bdate_range("2024-01-01", periods=60)
+    bench = make_fake_nifty_benchmark(idx, seed=0)
+    unrelated = make_fake_nifty_benchmark(idx, seed=12345).returns
+    return unrelated, bench
+
+
+async def test_without_a_correlation_input_none_is_evaluated_and_none_is_recorded(
+    db_session_factory,
+):
+    returns, bench = _uncorrelated_pair()
+
+    async with db_session_factory() as db:
+        neither = await create_order_intent(db, **_kwargs())
+        only_returns = await create_order_intent(db, **_kwargs(recent_returns=returns))
+        only_benchmark = await create_order_intent(db, **_kwargs(benchmark_provider=bench))
+
+    # Half the inputs is not enough to evaluate anything: no crash, and the
+    # intent says "not evaluated" (None), not some placeholder.
+    assert neither.correlation is None
+    assert only_returns.correlation is None
+    assert only_benchmark.correlation is None
+
+
+async def test_an_evaluated_but_unbreached_correlation_is_recorded_on_the_intent(
+    db_session_factory,
+):
+    returns, bench = _uncorrelated_pair()
+
+    async with db_session_factory() as db:
+        intent = await create_order_intent(
+            db, **_kwargs(recent_returns=returns, benchmark_provider=bench)
+        )
+
+    assert intent.correlation is not None and intent.correlation.breached is False
+
+
+async def test_the_correlation_rejection_reason_names_the_symbol_value_and_limit(
+    db_session_factory,
+):
+    idx = pd.bdate_range("2024-01-01", periods=30)
+    bench = make_fake_nifty_benchmark(idx, seed=0)
+
+    async with db_session_factory() as db:
+        with pytest.raises(OrderIntentRejectedError) as exc_info:
+            await create_order_intent(
+                db,
+                **_kwargs(
+                    recent_returns=bench.returns * 0.95 + 0.0001,
+                    benchmark_provider=bench,
+                    correlation_threshold=0.5,
+                ),
+            )
+
+    (reason,) = exc_info.value.reasons
+    assert reason == (
+        "RELIANCE: recent returns correlation 1.0000 with Nifty 50 exceeds constraint 0.5000"
+    )
+
+
+async def test_every_rejection_reason_reaches_the_error_message(db_session_factory):
+    async with db_session_factory() as db:
+        with pytest.raises(OrderIntentRejectedError) as exc_info:
+            # A position-limit breach and a circuit-band breach together.
+            await create_order_intent(
+                db, **_kwargs(proposed_position_value=900_000, proposed_price=3_000)
+            )
+
+    reasons = exc_info.value.reasons
+    assert len(reasons) >= 2
+    assert str(exc_info.value) == "; ".join(reasons)
+
+
+async def test_an_approved_intent_cannot_be_altered_after_the_gate_approved_it(
+    db_session_factory,
+):
+    async with db_session_factory() as db:
+        intent = await create_order_intent(db, **_kwargs())
+
+    # What was checked is what is submitted: quantity and price are frozen.
+    with pytest.raises(FrozenInstanceError):
+        intent.quantity = 10_000_000  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        intent.price = 1.0  # type: ignore[misc]
