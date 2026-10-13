@@ -1,0 +1,31 @@
+# Keeps the GitHub Actions in .github/workflows/ci.yml current.
+#
+# Why this exists: an action's declared runtime (Node 16, then 20) is deprecated
+# on GitHub's schedule, and until now that arrived only as a warning in each run's
+# annotations that nobody acted on -- the Node 20 -> 24 move (2026-10-13) was the
+# first time anyone did, and it touched ten actions by hand. A pull request per
+# week is the cheaper version of that.
+#
+# Scope: Actions only. Python (pip), the frontend (pnpm) and the Docker base
+# images are deliberately not here -- those are version decisions with real
+# regression risk (pytest, langgraph and the lockfiles have each needed their own
+# reviewed change), and a stream of automatic bump PRs for them would be noise.
+#
+# All of a week's updates arrive as ONE pull request, so CI runs once; if a bump
+# breaks the build, the failing job names the action. Dependabot opens it against
+# main, where CI runs on pull_request. The first one will move the actions from
+# the lowest Node-24 major each is pinned to up to the newest.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
