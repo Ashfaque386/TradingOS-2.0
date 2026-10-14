@@ -131,8 +131,9 @@ function StatusStrip({ onNavigate, refreshKey }: { onNavigate: (s: SectionId) =>
         next.push({
           key: `broker-${b.broker}`,
           label: b.broker,
-          detail: b.token_status === 'valid' ? 'connected' : b.token_status === 'expired' ? 'expired' : 'not connected',
-          color: b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray',
+          // The broker's own word beats the clock: a token that "should" be valid but is being refused is not connected.
+          detail: b.feed_rejected_at ? 'token rejected' : b.token_status === 'valid' ? 'connected' : b.token_status === 'expired' ? 'expired' : 'not connected',
+          color: b.feed_rejected_at ? 'red' : b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray',
           section: 'broker',
         })
       }
@@ -731,17 +732,28 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
     }
   }
 
+  const rejected = Boolean(status.feed_rejected_at)
   const tokenLabel =
-    status.token_status === 'valid' && status.token_expires_at
+    rejected
+      ? 'Rejected by the broker — reconnect'
+      : status.token_status === 'valid' && status.token_expires_at
       ? `Connected — expires ${formatIstTime(status.token_expires_at)}`
       : status.token_status === 'expired'
         ? 'Expired — click to reconnect'
         : 'Not connected'
 
   return (
-    <div className={`set-broker-card ${status.token_status === 'valid' ? 'connected' : ''}`}>
+    <div className={`set-broker-card ${status.token_status === 'valid' && !rejected ? 'connected' : ''}`}>
       <div className="set-broker-head"><strong className="capitalize">{status.broker}</strong></div>
-      <div className={`set-token-strip ${status.token_status}`}><Timer className="size-3.5" />{tokenLabel}</div>
+      <div className={`set-token-strip ${rejected ? 'rejected' : status.token_status}`}><Timer className="size-3.5" />{tokenLabel}</div>
+      {rejected && status.feed_rejected_at && (
+        <div className="set-reminder" role="alert">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span>
+            {status.broker} refused the stored token (HTTP {status.feed_rejection_status}) at {formatIstTime(status.feed_rejected_at)}, so live quotes are not flowing. The expiry shown elsewhere is only an estimate. Reconnect to fix it.
+          </span>
+        </div>
+      )}
       {error && <p className="text-xs text-rose-300">{error}</p>}
 
       {status.broker === 'zerodha' && (
@@ -1018,11 +1030,18 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [prefs, setPrefs] = useState<Record<string, boolean>>(() => Object.fromEntries(ALERT_LEVELS.map((l) => [l, status.alert_levels.includes(l)])))
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   async function handleDisconnect() {
     setBusy(true)
+    setError(null)
     try {
       await deleteNotificationChannel(channel)
+      onChanged()
+    } catch (err) {
+      // 404 means it was already disconnected (another tab, a double click):
+      // say so, and refresh so the card shows the real state.
+      setError(err instanceof ApiError ? err.message : 'Disconnect failed')
       onChanged()
     } finally {
       setBusy(false)
@@ -1030,12 +1049,17 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
   }
 
   async function toggleAlertLevel(level: AlertLevel) {
+    const previous = prefs
     const next = { ...prefs, [level]: !prefs[level] }
     setPrefs(next)
     setBusy(true)
+    setError(null)
     try {
       await writeNotificationChannel(channel, { enabled: status.enabled, alert_levels: ALERT_LEVELS.filter((l) => next[l]) })
       onChanged()
+    } catch (err) {
+      setPrefs(previous) // the change was not saved: do not leave the toggle showing it
+      setError(err instanceof ApiError ? err.message : 'Could not save the alert levels')
     } finally {
       setBusy(false)
     }
@@ -1047,6 +1071,7 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
         <div><strong className="capitalize">{channel}</strong><small>{status.configured ? (status.enabled ? 'active' : 'saved, disabled') : 'not configured'}</small></div>
         {canEdit && status.configured && <button className="set-btn set-btn-danger" disabled={busy} onClick={handleDisconnect}><Plug className="size-3.5" /> Disconnect</button>}
       </div>
+      {error && <p className="text-xs text-rose-300" role="alert">{error}</p>}
 
       <div className="px-0 pb-1">
         {channel === 'telegram' && <TelegramWizard status={status} canEdit={canEdit} onChanged={onChanged} />}

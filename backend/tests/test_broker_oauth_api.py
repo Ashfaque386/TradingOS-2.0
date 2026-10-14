@@ -257,3 +257,33 @@ async def test_upstox_callback_error_param_redirects_without_calling_upstox(clie
         assert "oauth=error" in resp.headers["location"]
     finally:
         _clear_overrides()
+
+
+async def test_a_successful_oauth_exchange_clears_the_brokers_recorded_rejection(client, tmp_path):
+    """A fresh token replaces the one the broker was refusing: Settings must stop
+    saying "rejected" the moment the new one is stored, not at the next market-hours
+    poll."""
+    from src.brokers import feed_health
+
+    store = _override_store(tmp_path)
+    store.set_credentials("zerodha", BrokerCredentials(api_key="k", api_secret="s"))
+    feed_health.record_rejection("zerodha", status_code=403, detail="old token")
+    feed_health.record_rejection("upstox", status_code=401, detail="unrelated")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"status": "success", "data": {"access_token": "fresh", "user_id": "AB1"}}
+        )
+
+    _override_http_client(handler)
+    try:
+        resp = await client.get(
+            "/api/v1/broker-credentials/zerodha/callback?request_token=RT&status=success",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302 and "oauth=success" in resp.headers["location"]
+
+        assert feed_health.get_rejection("zerodha") is None
+        assert feed_health.get_rejection("upstox") is not None  # only this broker's
+    finally:
+        _clear_overrides()

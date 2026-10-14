@@ -709,6 +709,13 @@ class BrokerCredentialStatusResponse(BaseModel):
     default_redirect_uri: str | None = None
     redirect_uri_is_custom: bool = False
     token_duration: str | None = None
+    # What the broker itself last said about these credentials, which the clock-derived
+    # `token_status` cannot know: set while its quote feed is being refused (HTTP 401/403),
+    # cleared when a call succeeds or the credentials are replaced. Null means "no
+    # rejection known", not "accepted".
+    feed_rejection_status: int | None = None
+    feed_rejection_detail: str | None = None
+    feed_rejected_at: str | None = None
 
 
 class BrokerCircuitBreakerStatusResponse(BaseModel):

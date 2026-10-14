@@ -92,6 +92,18 @@ def _reset_jwt_signing_key_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_broker_feed_health():
+    """`src.brokers.feed_health` is a process-global registry of what a broker last
+    said about its credentials; a rejection recorded by one test must not show up
+    in another's `GET /broker-credentials`."""
+    from src.brokers import feed_health
+
+    feed_health.clear()
+    yield
+    feed_health.clear()
+
+
+@pytest.fixture(autouse=True)
 def _disable_ambient_rate_limit():
     """`RateLimitMiddleware` (src.observability.rate_limit_middleware) is
     IP-keyed, and every test in this suite shares one fixed client IP via

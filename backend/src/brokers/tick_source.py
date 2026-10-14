@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from src.brokers import feed_health
 from src.brokers.base import BrokerAdapter, BrokerAuthError, BrokerCredentials
 from src.brokers.factory import KNOWN_BROKERS, build_configured_adapter
 from src.engine.paper_trading.tick_feed import (
@@ -85,6 +86,9 @@ class BrokerQuoteTickSource:
                 f"(HTTP {exc.status_code})"
             )
             self._suspended_until = now + self.retry_after_seconds
+            feed_health.record_rejection(
+                self.adapter.broker_name, status_code=exc.status_code, detail=str(exc)
+            )
             logger.warning(
                 "tick_source.broker_credentials_rejected",
                 broker=self.adapter.broker_name,
@@ -96,6 +100,7 @@ class BrokerQuoteTickSource:
             raise TickSourceUnavailableError(self._rejection) from exc
         if self._suspended_until is not None:
             self._suspended_until = None
+            feed_health.clear(self.adapter.broker_name)
             logger.info(
                 "tick_source.broker_credentials_accepted_again", broker=self.adapter.broker_name
             )
@@ -135,6 +140,9 @@ class _RefreshingTickSource:
     def __call__(self) -> TickSource:
         fingerprint = _configured_broker_fingerprint()
         if self._tick_source is None or fingerprint != self._fingerprint:
+            # New credentials (or none): whatever the broker said about the old ones
+            # no longer applies.
+            feed_health.clear()
             self._fingerprint = fingerprint
             self._tick_source = build_tick_source()
         return self._tick_source

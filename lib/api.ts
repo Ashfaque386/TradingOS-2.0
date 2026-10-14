@@ -1085,6 +1085,12 @@ export type BrokerCredentialStatus = {
   default_redirect_uri?: string | null
   redirect_uri_is_custom?: boolean
   token_duration: string | null
+  // What the broker itself last said about these credentials -- which the clock-derived
+  // `token_status` cannot know. Set while its quote feed is being refused (HTTP 401/403);
+  // null means "no rejection known", not "accepted".
+  feed_rejection_status?: number | null
+  feed_rejection_detail?: string | null
+  feed_rejected_at?: string | null
 }
 export const KNOWN_BROKERS = ['zerodha', 'upstox'] as const
 export const listBrokerCredentialStatus = () => apiGet<BrokerCredentialStatus[]>('/api/v1/broker-credentials')

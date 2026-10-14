@@ -60,6 +60,7 @@ from src.api.routes.broker_credentials import (
 )
 from src.api.schemas import BrokerOAuthLoginUrlResponse
 from src.audit.service import write_audit_entry
+from src.brokers import feed_health
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
@@ -211,6 +212,7 @@ async def zerodha_callback_endpoint(
         details={"token_expires_at": token_expires_at},
     )
     await db.commit()
+    feed_health.clear("zerodha")  # a fresh token: forget the old rejection
     logger.info("broker_oauth.zerodha_connected", token_expires_at=token_expires_at)
     return _settings_redirect(request, broker="zerodha", result="success")
 
@@ -337,5 +339,6 @@ async def upstox_callback_endpoint(
         details={"token_expires_at": token_expires_at, "duration": creds.token_duration},
     )
     await db.commit()
+    feed_health.clear("upstox")  # a fresh token: forget the old rejection
     logger.info("broker_oauth.upstox_connected", token_expires_at=token_expires_at)
     return _settings_redirect(request, broker="upstox", result="success")

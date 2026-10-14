@@ -22,6 +22,7 @@ from src.api.schemas import (
     WriteBrokerCredentialsRequest,
     WriteBrokerRedirectUriRequest,
 )
+from src.brokers import feed_health
 from src.brokers.base import BrokerCredentials
 from src.brokers.breaker_registry import get_all_broker_circuit_breakers
 from src.brokers.factory import KNOWN_BROKERS
@@ -121,6 +122,7 @@ async def list_broker_credential_status_endpoint(
     responses = []
     for broker in KNOWN_BROKERS:
         creds = store.get_credentials(broker)
+        rejection = feed_health.get_rejection(broker) if creds is not None else None
         responses.append(
             BrokerCredentialStatusResponse(
                 broker=broker,
@@ -131,6 +133,9 @@ async def list_broker_credential_status_endpoint(
                 default_redirect_uri=default_redirect_uri(request, broker),
                 redirect_uri_is_custom=bool(creds and creds.redirect_uri_override),
                 token_duration=creds.token_duration if creds else None,
+                feed_rejection_status=rejection.status_code if rejection else None,
+                feed_rejection_detail=rejection.detail if rejection else None,
+                feed_rejected_at=rejection.at.isoformat() if rejection else None,
             )
         )
     return responses
@@ -202,6 +207,7 @@ async def write_broker_credentials_endpoint(
             redirect_uri_override=override,
         ),
     )
+    feed_health.clear(broker)  # new credentials: what the broker said about the old ones is moot
     logger.info("broker_credentials.updated", broker=broker, updated_by=str(current_user.id))
 
 
@@ -214,6 +220,7 @@ async def delete_broker_credentials_endpoint(
     _require_known_broker(broker)
     if not store.delete_credentials(broker):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no {broker} credentials are stored")
+    feed_health.clear(broker)
     logger.info("broker_credentials.deleted", broker=broker, deleted_by=str(current_user.id))
 
 
