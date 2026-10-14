@@ -215,7 +215,12 @@ critical_files = [
 # one by one. What is left is deliberately cosmetic: dataclass `frozen`/`slots`
 # flags, error and notification message text, the `KillSwitchMode` type alias,
 # and the fake benchmark generator's default seed/drift; for risk_gate and
-# go_live_gate, the `slots` flag on a dataclass and a type annotation (`|` to `&`).
+# go_live_gate, the `slots` flag on a dataclass and a type annotation (`|` to `&`);
+# for circuit_breaker, the `TypeVar` name and two mutants that make the module fail to import
+# (a `StrEnum` member set to `None`: crashes at import, which mutmut calls "suspicious"
+# rather than killed); for options_grounding, mutants that cannot change behaviour (negating
+# the loop variable over a symmetric range, rounding prices that are multiples of 0.1 to 3
+# places). live_intent_expiry has none left.
 # Anything that changed behaviour was killed with a test (see the "Found by
 # mutation testing" tests); risk_limits, the two-person approval workflow, has none left.
 # A ratchet: lower a number when real survivors are killed, never raise one
@@ -257,6 +262,21 @@ path = "src/engine/risk/go_live_gate.py"
 tests = ["tests/test_engine_go_live_gate.py"]
 max_survivors = 2
 
+[[tool.tradingos.mutation.module]]
+path = "src/engine/risk/circuit_breaker.py"
+tests = ["tests/test_engine_circuit_breaker.py"]
+max_survivors = 6
+
+[[tool.tradingos.mutation.module]]
+path = "src/engine/options_grounding.py"
+tests = ["tests/test_engine_options_grounding.py"]
+max_survivors = 5
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/live_intent_expiry.py"
+tests = ["tests/test_orchestration_live_intent_expiry.py"]
+max_survivors = 0
+
 [tool.mutmut]
 # Build Spec §21-22 hardening pass: scoped to the pure, deterministic
 # risk-critical logic named in that pass (Kill Switch, Compliance
@@ -276,11 +296,11 @@ max_survivors = 2
 # package (literally named `src`, as in every `from src.x import y`) --
 # confirmed live, not assumed. mutmut 2.x's simpler mutate-in-place/rerun
 # model has no such assertion.
-paths_to_mutate = "src/engine/risk/kill_switch.py,src/engine/risk/compliance.py,src/engine/risk/correlation_constraint.py,src/orchestration/kill_switch.py,src/orchestration/risk_gate.py,src/orchestration/risk_limits.py,src/engine/risk/go_live_gate.py"
+paths_to_mutate = "src/engine/risk/kill_switch.py,src/engine/risk/compliance.py,src/engine/risk/correlation_constraint.py,src/orchestration/kill_switch.py,src/orchestration/risk_gate.py,src/orchestration/risk_limits.py,src/engine/risk/go_live_gate.py,src/engine/risk/circuit_breaker.py,src/engine/options_grounding.py,src/orchestration/live_intent_expiry.py"
 # Only the tests that actually exercise these modules -- the full suite
 # (~700 tests, ~2.5 minutes) re-run per surviving mutant would make a
 # routine mutation-testing run impractically slow.
-runner = ".venv/bin/python -m pytest -x tests/test_engine_kill_switch.py tests/test_engine_compliance.py tests/test_engine_correlation_constraint.py tests/test_orchestration_kill_switch.py tests/test_orchestration_risk_gate.py tests/test_orchestration_risk_limits.py tests/test_engine_go_live_gate.py"
+runner = ".venv/bin/python -m pytest -x tests/test_engine_kill_switch.py tests/test_engine_compliance.py tests/test_engine_correlation_constraint.py tests/test_orchestration_kill_switch.py tests/test_orchestration_risk_gate.py tests/test_orchestration_risk_limits.py tests/test_engine_go_live_gate.py tests/test_engine_circuit_breaker.py tests/test_engine_options_grounding.py tests/test_orchestration_live_intent_expiry.py"
 
 [tool.ruff]
 target-version = "py312"

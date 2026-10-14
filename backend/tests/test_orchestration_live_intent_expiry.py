@@ -134,3 +134,40 @@ async def test_the_result_is_committed_not_just_flushed(db_session_factory):
     async with db_session_factory() as other:  # a different session sees it
         rows = (await other.execute(select(LiveOrderIntent.status))).scalars().all()
     assert rows == ["expired"] and await _status(db_session_factory, intent_id) == "expired"
+
+
+async def test_an_intent_that_expires_at_exactly_the_sweep_instant_is_swept(
+    db_session_factory, monkeypatch
+):
+    """`expires_at <= now`, not `<`: the boundary cannot be hit with the real clock, so freeze it."""
+    from src.orchestration import live_intent_expiry as expiry_module
+
+    instant = datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC)
+
+    class _FrozenDatetime:
+        @staticmethod
+        def now(tz=None):
+            return instant
+
+    monkeypatch.setattr(expiry_module, "datetime", _FrozenDatetime)
+    strategy_id = await _strategy_id(db_session_factory)
+    async with db_session_factory() as db:
+        intent = LiveOrderIntent(
+            strategy_id=strategy_id,
+            symbol="DEMOSTOCK",
+            side="buy",
+            quantity=10,
+            intent_type="entry",
+            expires_at=instant,
+            status="generated",
+        )
+        db.add(intent)
+        await db.commit()
+        await db.refresh(intent)
+        intent_id = intent.id
+
+    async with db_session_factory() as db:
+        count = await expire_stale_intents(db)
+
+    assert count == 1
+    assert await _status(db_session_factory, intent_id) == "expired"

@@ -205,6 +205,9 @@ jobs:
           - src/orchestration/risk_gate.py
           - src/orchestration/risk_limits.py
           - src/engine/risk/go_live_gate.py
+          - src/engine/risk/circuit_breaker.py
+          - src/engine/options_grounding.py
+          - src/orchestration/live_intent_expiry.py
 
     services:
       postgres:
