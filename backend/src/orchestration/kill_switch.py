@@ -26,12 +26,23 @@ from src.notifications.dispatch import notify
 from src.notifications.types import AlertLevel
 
 __all__ = [
+    "KillSwitchNotTrippedError",
     "KillSwitchTrippedError",
     "assert_not_tripped",
     "check_drawdown",
     "get_kill_switch_state",
     "reset_kill_switch",
 ]
+
+
+class KillSwitchNotTrippedError(Exception):
+    """A reset was asked for a switch that is not tripped. Refused rather than
+    "applied": it would overwrite `reset_by`/`reset_at` -- the record of who last
+    genuinely reset the switch, and when -- with a reset that cleared nothing."""
+
+    def __init__(self, mode: KillSwitchMode):
+        self.mode = mode
+        super().__init__(f"the {mode} kill switch is not tripped; there is nothing to reset")
 
 
 async def _get_or_create(db: AsyncSession, mode: KillSwitchMode) -> KillSwitchState:
@@ -107,6 +118,8 @@ async def reset_kill_switch(
         raise ValueError("reset_kill_switch requires an explicit reset_by actor")
 
     state = await _get_or_create(db, mode)
+    if not state.tripped:
+        raise KillSwitchNotTrippedError(mode)
     state.tripped = False
     state.trip_reason = None
     state.tripped_at = None

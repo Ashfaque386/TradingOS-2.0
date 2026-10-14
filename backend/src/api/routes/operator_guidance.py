@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.models.operator_guidance import OperatorGuidance
 from src.models.user import User
+from src.observability.audit_middleware import skip_audit_entry
 from src.orchestration.operator_guidance import (
     NoSuchGuidanceError,
     create_guidance,
@@ -71,12 +72,19 @@ async def create_guidance_endpoint(
 
 @router.post("/{guidance_id}/deactivate")
 async def deactivate_guidance_endpoint(
+    request: Request,
     guidance_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> GuidanceResponse:
+    existing = await db.get(OperatorGuidance, guidance_id)
+    already_inactive = existing is not None and not existing.is_active
     try:
         guidance = await deactivate_guidance(db, guidance_id, actor=current_user.email)
     except NoSuchGuidanceError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if already_inactive:
+        # Idempotent by design (the domain function writes no audit row for a
+        # repeat): keep the 200, skip the generic row that would say otherwise.
+        skip_audit_entry(request, because="guidance was already inactive")
     return _response(guidance)

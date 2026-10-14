@@ -4,7 +4,7 @@ periodically), and the one and only way to clear a tripped switch: an
 explicit, RBAC-gated human reset.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import CheckDrawdownRequest, KillSwitchStateResponse, ResetKillSwitchRequest
@@ -13,7 +13,12 @@ from src.core.rbac import Role, register_policy, require_role
 from src.engine.risk.kill_switch import KillSwitchMode
 from src.models.kill_switch_state import KillSwitchState
 from src.models.user import User
-from src.orchestration.kill_switch import check_drawdown, get_kill_switch_state, reset_kill_switch
+from src.orchestration.kill_switch import (
+    KillSwitchNotTrippedError,
+    check_drawdown,
+    get_kill_switch_state,
+    reset_kill_switch,
+)
 
 router = APIRouter(prefix="/kill-switch", tags=["kill-switch"])
 
@@ -68,5 +73,11 @@ async def reset_kill_switch_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> KillSwitchStateResponse:
-    state = await reset_kill_switch(db, mode, reset_by=str(current_user.id))
+    try:
+        state = await reset_kill_switch(db, mode, reset_by=str(current_user.id))
+    except KillSwitchNotTrippedError as exc:
+        # 409, not a 200 no-op: the audit middleware writes a row for every 2xx,
+        # and a "reset" row for a switch that was not tripped would put a reset
+        # in the permanent trail that never happened.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc).capitalize()) from exc
     return _to_response(state)

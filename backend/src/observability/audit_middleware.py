@@ -33,6 +33,19 @@ logger = structlog.get_logger(__name__)
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Set on `request.state` by a handler that answered 2xx but changed nothing.
+_AUDIT_SKIP_KEY = "audit_skipped_because"
+
+
+def skip_audit_entry(request: Request, *, because: str) -> None:
+    """For an endpoint that is idempotent *by design* (answers 200 with the
+    current state when asked to do what is already true): the middleware writes
+    a row for every 2xx, which would put "autonomy enabled" in the permanent
+    trail for a request that changed nothing. Call this when nothing changed.
+    Endpoints with no such documented behaviour should refuse (404/409) instead
+    -- a refusal is never audited."""
+    setattr(request.state, _AUDIT_SKIP_KEY, because)
+
 
 class AuditLoggingMiddleware:
     def __init__(self, app: ASGIApp, *, session_factory_attr: str = "db_session_factory") -> None:
@@ -60,6 +73,10 @@ class AuditLoggingMiddleware:
 
         status_code = status_holder.get("status_code", 500)
         if not (200 <= status_code < 300):
+            return
+        skipped = scope.get("state", {}).get(_AUDIT_SKIP_KEY)
+        if skipped:
+            logger.debug("audit_middleware.skipped_no_change", because=skipped)
             return
 
         route = scope.get("route")

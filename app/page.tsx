@@ -21,6 +21,7 @@ import {
   type SystemVitals,
   type TodaysPaperPnl,
   type UnrealizedPaperPnl,
+  ApiError,
   getAgents,
   getKillSwitch,
   getMarketHours,
@@ -222,8 +223,13 @@ export default function Home() {
     try {
       await resetKillSwitch(mode, `Reset via Overview console by ${role}`)
       await load()
-    } catch {
-      setResetError(`Failed to reset the ${mode} kill switch. Try again.`)
+    } catch (err) {
+      // e.g. 409 when someone else already reset it: say so, and refresh so the
+      // console shows the switch's real state instead of a stale "tripped".
+      setResetError(
+        err instanceof ApiError ? err.message : `Failed to reset the ${mode} kill switch. Try again.`,
+      )
+      await load()
     } finally {
       setResettingMode(null)
     }

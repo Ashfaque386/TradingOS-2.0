@@ -791,3 +791,28 @@ async def test_deleting_settings_reverts_to_the_environment_defaults(
     assert reset.status_code == 200 and reset.json()["source"] == "unset"
     # Idempotent.
     assert (await client.delete("/api/v1/memory/settings", headers=admin)).status_code == 200
+
+
+async def test_resetting_settings_that_were_never_saved_is_a_200_that_is_not_audited(
+    client, make_user, memory_service, db_session_factory
+):
+    """Idempotent by design (a repeat reset answers 200) -- but only a reset that
+    actually dropped a saved choice may leave a row in the audit trail."""
+    from sqlalchemy import select
+
+    from src.models.audit_log import AuditLog
+
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-set-noop@example.com")
+    action = "DELETE /api/v1/memory/settings"
+
+    nothing_saved = await client.delete("/api/v1/memory/settings", headers=admin)
+    await client.put(
+        "/api/v1/memory/settings", json={"provider": "ollama", "model": "m"}, headers=admin
+    )
+    real = await client.delete("/api/v1/memory/settings", headers=admin)
+    repeat = await client.delete("/api/v1/memory/settings", headers=admin)
+
+    assert nothing_saved.status_code == real.status_code == repeat.status_code == 200
+    async with db_session_factory() as db:
+        rows = (await db.execute(select(AuditLog).where(AuditLog.action == action))).scalars().all()
+    assert len(rows) == 1  # only the reset that dropped a saved choice

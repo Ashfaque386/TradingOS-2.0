@@ -165,7 +165,10 @@ async def delete_llm_provider_credentials_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     _require_known_provider(provider)
-    store.delete_credentials(provider)
+    if not store.delete_credentials(provider):
+        # Refused before the audit write below: a "credentials deleted" row for
+        # credentials that were never there would be a false entry.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no {provider} credentials are stored")
     await write_audit_entry(
         db,
         actor=current_user.email,

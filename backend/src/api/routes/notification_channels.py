@@ -144,7 +144,8 @@ async def delete_notification_channel_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     parsed_channel = _require_known_channel(channel)
-    store.delete_config(parsed_channel)
+    if not store.delete_config(parsed_channel):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"the {channel} channel is not configured")
     await write_audit_entry(
         db,
         actor=current_user.email,

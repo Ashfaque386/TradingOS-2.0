@@ -17,7 +17,7 @@ enrolled.
 import uuid
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,7 @@ from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.order import Order
 from src.models.trade import Trade
 from src.models.user import User
+from src.observability.audit_middleware import skip_audit_entry
 from src.orchestration.live_trading import (
     StrategyNotLiveEligibleError,
     SubscriptionNotFoundError,
@@ -201,6 +202,7 @@ async def list_subscriptions_endpoint(
 
 @router.post("/subscriptions/{subscription_id}/autonomy")
 async def set_autonomy_endpoint(
+    request: Request,
     subscription_id: uuid.UUID,
     body: SetAutonomousTradingRequest,
     db: AsyncSession = Depends(get_db),
@@ -210,12 +212,19 @@ async def set_autonomy_endpoint(
     autonomous. RBAC-restricted to `_LIVE_SIGNOFF_ROLES` (same tier as
     kill-switch reset); the frontend's own confirmation step is what
     makes this hard to flip by accident, not this endpoint's shape."""
+    existing = await db.get(LiveTradingSubscription, subscription_id)
+    already = existing is not None and existing.autonomous_trading_enabled == body.enabled
     try:
         subscription = await set_autonomous_trading(
             db, subscription_id, enabled=body.enabled, actor=str(current_user.id)
         )
     except SubscriptionNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if already:
+        # Idempotent by design (the domain function writes no audit row for a
+        # repeat either): keep the 200, but do not let the generic audit row
+        # claim the switch was flipped.
+        skip_audit_entry(request, because="autonomy already in the requested state")
     return _subscription_response(subscription)
 
 

@@ -212,7 +212,8 @@ async def delete_broker_credentials_endpoint(
     store: SecretsStore = Depends(get_broker_credentials_store),
 ) -> None:
     _require_known_broker(broker)
-    store.delete_credentials(broker)
+    if not store.delete_credentials(broker):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no {broker} credentials are stored")
     logger.info("broker_credentials.deleted", broker=broker, deleted_by=str(current_user.id))
 
 

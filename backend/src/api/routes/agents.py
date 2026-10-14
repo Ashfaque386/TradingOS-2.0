@@ -67,6 +67,7 @@ from src.orchestration.pipeline_events import (
 )
 from src.orchestration.prompt_versions import (
     NoSuchPromptVersionError,
+    PromptVersionAlreadyActiveError,
     activate_prompt_version,
     create_prompt_version,
     get_active_prompts,
@@ -401,6 +402,8 @@ async def activate_prompt_version_endpoint(
         )
     except NoSuchPromptVersionError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except PromptVersionAlreadyActiveError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return _prompt_version_response(version)
 
 

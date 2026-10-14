@@ -110,6 +110,8 @@ async def change_user_role_endpoint(
     _current_user: User = Depends(require_role),
 ) -> UserResponse:
     user = await _get_user_or_404(db, user_id)
+    if user.role == body.role:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"This user already has the role {user.role}")
 
     if _would_remove_last_admin(user) and body.role != Role.SYSTEM_ADMINISTRATOR:
         if await _active_admin_count(db, excluding=user.id) == 0:
@@ -132,6 +134,8 @@ async def deactivate_user_endpoint(
     _current_user: User = Depends(require_role),
 ) -> UserResponse:
     user = await _get_user_or_404(db, user_id)
+    if not user.is_active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This user is already deactivated")
 
     if _would_remove_last_admin(user) and await _active_admin_count(db, excluding=user.id) == 0:
         raise HTTPException(
@@ -153,6 +157,8 @@ async def reactivate_user_endpoint(
     _current_user: User = Depends(require_role),
 ) -> UserResponse:
     user = await _get_user_or_404(db, user_id)
+    if user.is_active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This user is already active")
     user.is_active = True
     await db.commit()
     await db.refresh(user)

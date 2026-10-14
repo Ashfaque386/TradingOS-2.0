@@ -29,6 +29,7 @@ from src.memory.service import (
 from src.memory.settings_store import clear_choice, save_choice, source_from_factory
 from src.memory.store import MEMORY_KINDS, MemoryStoreError
 from src.models.user import User
+from src.observability.audit_middleware import skip_audit_entry
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
@@ -185,13 +186,17 @@ async def put_memory_settings(
 
 @router.delete("/settings")
 async def reset_memory_settings(
+    request: Request,
     service: MemoryDep,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> MemorySettingsResponse:
     """Drop the saved choice; the MEMORY_EMBEDDING_* environment defaults (if
     any) apply again."""
-    await clear_choice(db)
+    if not await clear_choice(db):
+        # Idempotent by design (a repeat reset is a 200): but nothing was reset,
+        # so the generic audit row must not say it was.
+        skip_audit_entry(request, because="no saved embedding choice to reset")
     return await _settings_response(service)
 
 

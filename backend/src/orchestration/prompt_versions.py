@@ -31,6 +31,13 @@ class NoSuchPromptVersionError(Exception):
     pass
 
 
+class PromptVersionAlreadyActiveError(Exception):
+    """Re-activating the active version is refused: it would re-stamp its
+    `activated_at`, wipe its `diff_from_previous` (the diff against the version
+    it replaced) and write a second "activated" audit row for a change that
+    never happened."""
+
+
 async def create_prompt_version(
     db: AsyncSession, *, agent_id: str, content: str, created_by: str | None = None
 ) -> PromptVersion:
@@ -125,6 +132,10 @@ async def activate_prompt_version(
         raise NoSuchPromptVersionError(f"no prompt version {version_id} for agent {agent_id!r}")
 
     current_active = await _get_active(db, agent_id)
+    if current_active is not None and current_active.id == target.id:
+        raise PromptVersionAlreadyActiveError(
+            f"prompt version {version_id} is already the active version for agent {agent_id!r}"
+        )
     diff_text = ""
     if current_active is not None and current_active.id != target.id:
         diff_text = _unified_diff(current_active, target)
