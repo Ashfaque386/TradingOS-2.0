@@ -2,9 +2,12 @@ import logging
 
 import structlog
 
+from src.observability.log_throttle import install_scheduler_log_throttle
+
 
 def configure_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(format="%(message)s", level=level)
+    install_scheduler_log_throttle()
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,

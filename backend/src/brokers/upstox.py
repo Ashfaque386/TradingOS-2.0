@@ -40,12 +40,12 @@ from src.brokers.base import (
     BrokerOrderResult,
     BrokerPosition,
     BrokerQuote,
-    BrokerRequestError,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
     OrderSide,
     OrderType,
+    broker_request_error,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -86,7 +86,9 @@ class UpstoxAdapter:
         if resp.status_code >= 500:
             raise BrokerServerError(resp.status_code, f"upstox {method} {path}: {resp.text[:200]}")
         if resp.status_code >= 400:
-            raise BrokerRequestError(resp.status_code, f"upstox {method} {path}: {resp.text[:200]}")
+            raise broker_request_error(
+                resp.status_code, f"upstox {method} {path}: {resp.text[:200]}"
+            )
         # httpx's own Response.json() return type is untyped (Any).
         return cast(dict[str, Any], resp.json())
 

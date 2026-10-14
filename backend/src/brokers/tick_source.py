@@ -34,24 +34,71 @@ job's very next firing, not only after a backend restart.
 """
 
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import structlog
 
-from src.brokers.base import BrokerAdapter, BrokerCredentials
+from src.brokers.base import BrokerAdapter, BrokerAuthError, BrokerCredentials
 from src.brokers.factory import KNOWN_BROKERS, build_configured_adapter
-from src.engine.paper_trading.tick_feed import MockTickSource, Tick, TickSource
+from src.engine.paper_trading.tick_feed import (
+    MockTickSource,
+    Tick,
+    TickSource,
+    TickSourceUnavailableError,
+)
 from src.security.secrets_store import SecretsStoreError, get_secrets_store
 
 logger = structlog.get_logger(__name__)
 
 
+# How long a source stays quiet after its broker rejected the credentials
+# before it risks one probe call. A reconnect in Settings is picked up at once
+# (`get_tick_source` builds a fresh source when the credentials change); this
+# only covers a fix made on the broker's side with the stored credentials
+# unchanged, at the price of a handful of calls an hour instead of one every
+# 3 seconds.
+AUTH_REJECTED_RETRY_SECONDS = 600.0
+
+
 @dataclass
 class BrokerQuoteTickSource:
     adapter: BrokerAdapter
+    retry_after_seconds: float = AUTH_REJECTED_RETRY_SECONDS
+    clock: Callable[[], float] = time.monotonic
+    _suspended_until: float | None = field(default=None, init=False, repr=False)
+    _rejection: str = field(default="", init=False, repr=False)
 
     async def next_tick(self, symbol: str) -> Tick:
-        quote = await self.adapter.get_quote(symbol)
+        now = self.clock()
+        if self._suspended_until is not None and now < self._suspended_until:
+            raise TickSourceUnavailableError(
+                f"{self._rejection}; not polling quotes until the credentials change "
+                f"(next probe in {self._suspended_until - now:.0f}s)"
+            )
+        try:
+            quote = await self.adapter.get_quote(symbol)
+        except BrokerAuthError as exc:
+            # Said once, here, at the moment it happens -- not on every firing.
+            self._rejection = (
+                f"{self.adapter.broker_name} rejected the stored credentials "
+                f"(HTTP {exc.status_code})"
+            )
+            self._suspended_until = now + self.retry_after_seconds
+            logger.warning(
+                "tick_source.broker_credentials_rejected",
+                broker=self.adapter.broker_name,
+                status=exc.status_code,
+                action="reconnect the broker in Settings > Broker",
+                retry_after_seconds=self.retry_after_seconds,
+                detail=str(exc),
+            )
+            raise TickSourceUnavailableError(self._rejection) from exc
+        if self._suspended_until is not None:
+            self._suspended_until = None
+            logger.info(
+                "tick_source.broker_credentials_accepted_again", broker=self.adapter.broker_name
+            )
         return Tick(symbol=symbol, price=quote.last_price, timestamp_ms=int(time.time() * 1000))
 
 

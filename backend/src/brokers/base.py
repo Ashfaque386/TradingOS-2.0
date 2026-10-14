@@ -47,6 +47,25 @@ class BrokerRequestError(Exception):
         super().__init__(message or f"broker returned {status_code}")
 
 
+class BrokerAuthError(BrokerRequestError):
+    """A broker 401/403: the stored credentials were not accepted (an expired
+    daily access token, a revoked key). A `BrokerRequestError` still -- callers
+    that catch that keep working -- but a distinct type because, unlike a bad
+    symbol or parameter, it fails *every* call until the credentials change,
+    so retrying it every few seconds only hammers the broker with a token it
+    has already refused."""
+
+
+_AUTH_REJECTED_STATUSES = frozenset({401, 403})
+
+
+def broker_request_error(status_code: int, message: str) -> BrokerRequestError:
+    """The right exception for a broker 4xx: `BrokerAuthError` for 401/403,
+    a plain `BrokerRequestError` for everything else."""
+    cls = BrokerAuthError if status_code in _AUTH_REJECTED_STATUSES else BrokerRequestError
+    return cls(status_code, message)
+
+
 @dataclass(frozen=True, slots=True)
 class BrokerCredentials:
     """Decrypted broker API credentials, held in memory only as long as a

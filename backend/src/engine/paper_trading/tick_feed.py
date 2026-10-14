@@ -127,6 +127,14 @@ class MockTickSource:
         return Tick(symbol=symbol, price=new_price, timestamp_ms=int(time.time() * 1000))
 
 
+class TickSourceUnavailableError(Exception):
+    """Raised by a `TickSource` that cannot produce a tick *and knows it will
+    keep failing until something changes* (a broker that rejected the stored
+    credentials). Distinct from an ordinary failure so a source can stop
+    calling a service that has already said no, instead of retrying on every
+    firing of the job that drives it."""
+
+
 async def publish_ticks_once(redis: Redis, source: TickSource, symbols: list[str]) -> list[Tick]:
     """Publishes one tick per symbol -- the body of the APScheduler
     interval job driving whichever `TickSource` it was constructed with

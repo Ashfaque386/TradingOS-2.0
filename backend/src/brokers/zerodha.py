@@ -13,7 +13,8 @@ obtained through Kite's interactive login-redirect flow, which is outside
 this adapter's scope -- that is a human step, not an autonomous one. This
 adapter simply uses whatever `access_token` its `BrokerCredentials`
 carries at call time; a stale token surfaces as an ordinary
-`BrokerRequestError(401, ...)`, the same as any other 4xx.
+`BrokerAuthError` (a `BrokerRequestError`; Kite answers a bad token with a 403
+`TokenException`, others with a 401), the same family as any other 4xx.
 
 Kite Connect has no single "option chain" endpoint. `get_option_chain`/
 `get_expiries` build one the way Kite Connect's own real API actually
@@ -61,12 +62,12 @@ from src.brokers.base import (
     BrokerOrderResult,
     BrokerPosition,
     BrokerQuote,
-    BrokerRequestError,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
     OrderSide,
     OrderType,
+    broker_request_error,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -121,7 +122,7 @@ class ZerodhaKiteAdapter:
         if resp.status_code >= 500:
             raise BrokerServerError(resp.status_code, f"zerodha {method} {path}: {resp.text[:200]}")
         if resp.status_code >= 400:
-            raise BrokerRequestError(
+            raise broker_request_error(
                 resp.status_code, f"zerodha {method} {path}: {resp.text[:200]}"
             )
         # httpx's own Response.json() return type is untyped (Any).
@@ -234,7 +235,7 @@ class ZerodhaKiteAdapter:
                 resp.status_code, f"zerodha GET /instruments/NFO: {resp.text[:200]}"
             )
         if resp.status_code >= 400:
-            raise BrokerRequestError(
+            raise broker_request_error(
                 resp.status_code, f"zerodha GET /instruments/NFO: {resp.text[:200]}"
             )
 
