@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
+from src.models.data_source import CHECK_SQL, DataSource
 
 
 class TradeReviewFinding(Base):
@@ -47,6 +48,7 @@ class TradeReviewFinding(Base):
         CheckConstraint(
             "pnl_scope IN ('today','cumulative_to_date')", name="ck_trade_review_findings_pnl_scope"
         ),
+        CheckConstraint(CHECK_SQL, name="ck_trade_review_findings_data_source"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -65,6 +67,10 @@ class TradeReviewFinding(Base):
     pnl_scope: Mapped[str] = mapped_column(String(24), nullable=False)
 
     commentary: Mapped[str] = mapped_column(Text, nullable=False)
+    # What the reviewed fills/trades rested on; `commentary` says so in words too.
+    data_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DataSource.UNKNOWN, server_default=DataSource.UNKNOWN
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

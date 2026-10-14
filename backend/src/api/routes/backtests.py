@@ -30,6 +30,7 @@ from src.core.rbac import Role, register_policy, require_role
 from src.data.freshness_snapshot import DataLakeFreshnessSnapshot, load_freshness_snapshot
 from src.engine.backtest.signals import generate_builtin_signals
 from src.models.backtest_run import BacktestRun
+from src.models.data_source import DataSource
 from src.models.user import User
 from src.orchestration import backtests as backtests_orch
 from src.orchestration.backtests import BacktestRunNotCompletedError, NoSuchBacktestRunError
@@ -75,6 +76,7 @@ def _run_response(run: BacktestRun) -> BacktestRunResponse:
         trade_pnls=run.trade_pnls,
         walk_forward_result=run.walk_forward_result,
         monte_carlo_result=run.monte_carlo_result,
+        data_source=run.data_source,
         created_at=run.created_at,
     )
 
@@ -111,6 +113,7 @@ async def run_backtest_endpoint(
         is_delivery=body.is_delivery,
         initial_capital=body.initial_capital,
         created_by=str(current_user.id),
+        data_source=DataSource.SUPPLIED,  # the caller posted the bars
     )
     return _run_response(run)
 

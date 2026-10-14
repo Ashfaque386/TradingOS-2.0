@@ -23,6 +23,7 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.data_source import combine, provenance_note
 from src.models.live_position import LivePosition
 from src.models.order import Order
 from src.models.paper_fill import PaperFill
@@ -96,6 +97,33 @@ async def _review_paper_trades(db: AsyncSession, *, as_of: date) -> list[TradeRe
         losing = sum(1 for pnl in closing if pnl < 0)
         win_rate = winning / len(closing) if closing else None
 
+        # What these fills rested on. Their commentary is folded into an LLM prompt
+        # (`strategy_suggestions.review_suggestion`), and a win rate computed on a random-walk
+        # tick feed reads exactly like one computed on the market unless it says otherwise.
+        data_source = combine(
+            (
+                await db.execute(
+                    select(PaperFill.data_source)
+                    .join(
+                        PaperTradingSubscription,
+                        PaperFill.subscription_id == PaperTradingSubscription.id,
+                    )
+                    .join(
+                        StrategyVersion,
+                        PaperTradingSubscription.strategy_version_id == StrategyVersion.id,
+                    )
+                    .where(
+                        StrategyVersion.strategy_id == strategy_id,
+                        PaperFill.created_at >= start,
+                        PaperFill.created_at < end,
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+
         if closing:
             commentary = (
                 f"{trades_reviewed} paper fill(s) today, {len(closing)} closing "
@@ -107,6 +135,7 @@ async def _review_paper_trades(db: AsyncSession, *, as_of: date) -> list[TradeRe
                 f"{trades_reviewed} paper fill(s) today, none closed a position yet "
                 f"(all entries) -- no win/loss figure to report."
             )
+        commentary += provenance_note(data_source)
 
         findings.append(
             TradeReviewFinding(
@@ -120,6 +149,7 @@ async def _review_paper_trades(db: AsyncSession, *, as_of: date) -> list[TradeRe
                 realized_pnl=float(total_pnl or 0.0),
                 pnl_scope="today",
                 commentary=commentary,
+                data_source=data_source,
             )
         )
     return findings
@@ -145,6 +175,23 @@ async def _review_live_trades(db: AsyncSession, *, as_of: date) -> list[TradeRev
             .all()
         )
         cumulative_pnl = sum(p.realized_pnl for p in positions) if positions else None
+        data_source = combine(
+            (
+                await db.execute(
+                    select(Trade.data_source)
+                    .join(Order, Trade.order_id == Order.id)
+                    .where(
+                        Order.strategy_id == strategy_id,
+                        Trade.status == "filled",
+                        Trade.executed_at >= start,
+                        Trade.executed_at < end,
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
 
         commentary = (
             f"{trades_reviewed} live trade(s) filled today. No per-trade realized "
@@ -168,7 +215,8 @@ async def _review_live_trades(db: AsyncSession, *, as_of: date) -> list[TradeRev
                 win_rate=None,
                 realized_pnl=cumulative_pnl,
                 pnl_scope="cumulative_to_date",
-                commentary=commentary,
+                commentary=commentary + provenance_note(data_source),
+                data_source=data_source,
             )
         )
     return findings

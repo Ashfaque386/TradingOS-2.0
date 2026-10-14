@@ -45,6 +45,7 @@ from src.engine.paper_trading.stop_loss import check_universal_stop_loss
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.daily_signal import DailySignal
+from src.models.data_source import DataSource, combine
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
@@ -168,6 +169,7 @@ async def _persist_fill(
     fill: FillResult,
     order_group_id: uuid.UUID,
     leg_index: int = 0,
+    data_source: str = DataSource.UNKNOWN,
 ) -> PaperPosition:
     if fill.filled_quantity > 0:
         # FillResult.avg_fill_price is None only when nothing filled at all
@@ -199,6 +201,7 @@ async def _persist_fill(
             avg_fill_price=fill.avg_fill_price,
             fully_filled=fill.fully_filled,
             realized_pnl=realized,
+            data_source=data_source,
         )
     )
     await db.commit()
@@ -213,6 +216,7 @@ async def process_tick(
     tick_price: float,
     order_book_provider: OrderBookProvider,
     regulatory_provider: RegulatoryDataProvider,
+    tick_source: str = DataSource.UNKNOWN,
 ) -> PaperFill | None:
     """Returns the `PaperFill` this tick produced, or `None` if the tick
     triggered no action. Raises nothing on its own for a risk-gate
@@ -316,6 +320,10 @@ async def process_tick(
         side=side,
         fill=fill,
         order_group_id=uuid.uuid4(),
+        # The fill rests on the tick price AND the order book it was walked through.
+        data_source=combine(
+            [tick_source, getattr(order_book_provider, "data_source", DataSource.UNKNOWN)]
+        ),
     )
 
     result = await db.execute(

@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
+from src.models.data_source import CHECK_SQL, DataSource
 
 
 class PaperFill(Base):
@@ -20,7 +21,10 @@ class PaperFill(Base):
     """
 
     __tablename__ = "paper_fills"
-    __table_args__ = (CheckConstraint("side IN ('buy','sell')", name="ck_paper_fills_side"),)
+    __table_args__ = (
+        CheckConstraint("side IN ('buy','sell')", name="ck_paper_fills_side"),
+        CheckConstraint(CHECK_SQL, name="ck_paper_fills_data_source"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     subscription_id: Mapped[uuid.UUID] = mapped_column(
@@ -28,6 +32,11 @@ class PaperFill(Base):
     )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     side: Mapped[str] = mapped_column(String(8), nullable=False)
+    # What the fill rested on: the tick price's source combined with the order book's
+    # (always synthetic today), so a fill on real ticks is `mixed`, not `real`.
+    data_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DataSource.UNKNOWN, server_default=DataSource.UNKNOWN
+    )
 
     # Groups the legs of one multi-leg order; a single-leg order gets its
     # own fresh order_group_id too, so every fill always has one.

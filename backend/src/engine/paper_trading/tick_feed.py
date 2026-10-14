@@ -35,6 +35,8 @@ import numpy as np
 import structlog
 from redis.asyncio import Redis
 
+from src.models.data_source import DataSource
+
 logger = structlog.get_logger(__name__)
 
 
@@ -47,6 +49,9 @@ class Tick:
     symbol: str
     price: float
     timestamp_ms: int
+    # Where the price came from (a `src.models.data_source.DataSource`): the stream carries
+    # it, so whatever consumes the tick later can say what it rested on.
+    source: str = "unknown"
 
 
 async def publish_tick(redis: Redis, tick: Tick) -> str:
@@ -56,7 +61,11 @@ async def publish_tick(redis: Redis, tick: Tick) -> str:
         str,
         await redis.xadd(
             tick_stream_key(tick.symbol),
-            {"price": repr(tick.price), "timestamp_ms": str(tick.timestamp_ms)},
+            {
+                "price": repr(tick.price),
+                "timestamp_ms": str(tick.timestamp_ms),
+                "source": tick.source,
+            },
         ),
     )
 
@@ -79,6 +88,8 @@ async def read_new_ticks(
                 symbol=symbol,
                 price=float(fields["price"]),
                 timestamp_ms=int(fields["timestamp_ms"]),
+                # Entries written before this field existed carry no source.
+                source=fields.get("source", "unknown"),
             )
         )
         cursor = entry_id
@@ -95,7 +106,10 @@ async def get_latest_tick(redis: Redis, symbol: str) -> Tick | None:
         return None
     _entry_id, fields = entries[0]
     return Tick(
-        symbol=symbol, price=float(fields["price"]), timestamp_ms=int(fields["timestamp_ms"])
+        symbol=symbol,
+        price=float(fields["price"]),
+        timestamp_ms=int(fields["timestamp_ms"]),
+        source=fields.get("source", "unknown"),
     )
 
 
@@ -128,7 +142,12 @@ class MockTickSource:
         move = rng.normal(0, self.tick_vol)
         new_price = round(max(base * (1 + move), 0.01), 2)
         self._last_price_by_symbol[symbol] = new_price
-        return Tick(symbol=symbol, price=new_price, timestamp_ms=int(time.time() * 1000))
+        return Tick(
+            symbol=symbol,
+            price=new_price,
+            timestamp_ms=int(time.time() * 1000),
+            source=DataSource.SYNTHETIC,  # a seeded random walk, not the market
+        )
 
 
 class TickSourceUnavailableError(Exception):

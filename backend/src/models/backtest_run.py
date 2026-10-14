@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
+from src.models.data_source import CHECK_SQL, DataSource
 
 
 class BacktestStatus:
@@ -37,6 +38,7 @@ class BacktestRun(Base):
             "status IN ('pending','completed','refused_stale_data','failed')",
             name="ck_backtest_runs_status",
         ),
+        CheckConstraint(CHECK_SQL, name="ck_backtest_runs_data_source"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -48,6 +50,10 @@ class BacktestRun(Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=BacktestStatus.PENDING)
     refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Where the bars this run was computed from came from (see src.models.data_source).
+    data_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DataSource.UNKNOWN, server_default=DataSource.UNKNOWN
+    )
 
     friction_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

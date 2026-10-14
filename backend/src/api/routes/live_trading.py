@@ -306,6 +306,7 @@ async def list_trades_endpoint(
             quantity=t.quantity,
             price=t.price,
             status=t.status,
+            data_source=t.data_source,
             executed_at=t.executed_at.isoformat(),
         )
         for t in trades

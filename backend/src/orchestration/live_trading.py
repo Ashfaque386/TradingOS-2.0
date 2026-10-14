@@ -90,11 +90,11 @@ execution price.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import cast
 
 import pandas as pd
 import structlog
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
@@ -107,6 +107,7 @@ from src.engine.paper_trading.price_data import PriceDataProvider
 from src.engine.paper_trading.stop_loss import check_universal_stop_loss
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
+from src.models.data_source import DataSource
 from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
 from src.models.live_trading_subscription import LiveTradingSubscription
@@ -114,6 +115,7 @@ from src.models.order import Order
 from src.models.strategy import Strategy, StrategyStatus
 from src.models.trade import Trade
 from src.orchestration.kill_switch import assert_not_tripped
+from src.orchestration.live_intent_expiry import expire_stale_intents
 from src.orchestration.risk_gate import OrderIntentRejectedError, create_order_intent
 
 logger = structlog.get_logger(__name__)
@@ -626,6 +628,7 @@ async def _submit_intent_to_broker(
             quantity=intent.quantity,
             price=reference_price,
             status="pending_confirmation",
+            data_source=DataSource.REAL,  # a broker's own quote, via a real adapter
         )
     )
 
@@ -679,37 +682,6 @@ async def _get_live_subscription(
     if subscription is None:
         raise NoLiveSubscriptionError(strategy_id, symbol)
     return subscription
-
-
-async def expire_stale_intents(db: AsyncSession) -> int:
-    """The scheduled sweep (Build Spec §12.2): every unsubmitted intent
-    past its `expires_at` resolves to `expired` -- safely, with no order
-    ever submitted. Since Phase 18, the only new-vocabulary status this
-    can ever actually catch is `generated` (the rare "no broker adapter
-    configured at generation time" case -- see
-    `generate_live_order_intent`'s docstring); `pending_approval`/
-    `approved` stay in the filter only so a historical pre-Phase-18 row
-    stuck in either state still gets swept correctly, not because new
-    code ever produces them. This must be correct even if nobody is
-    watching the console at all, which is exactly why this is a DB-level
-    bulk UPDATE driven by `src.orchestration.live_trading_scheduler`'s
-    own timer, never a client-side countdown that silently does nothing
-    if the browser tab is closed."""
-    now = datetime.now(UTC)
-    stmt = (
-        update(LiveOrderIntent)
-        .where(
-            LiveOrderIntent.status.in_(("pending_approval", "approved", "generated")),
-            LiveOrderIntent.expires_at <= now,
-        )
-        .values(status="expired")
-    )
-    result = await db.execute(stmt)
-    await db.commit()
-    # An UPDATE statement's execute() always returns a real CursorResult at
-    # runtime (.rowcount is populated) -- Result[Any] is only the generic
-    # base type db.execute()'s signature can express statically.
-    return cast(CursorResult[Any], result).rowcount
 
 
 def _normalize_broker_order_status(raw_status: str) -> str | None:

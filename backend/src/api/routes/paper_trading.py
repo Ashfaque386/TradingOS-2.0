@@ -36,6 +36,7 @@ from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.paper_trading.tick_feed import get_latest_tick
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.models.daily_signal import DailySignal
+from src.models.data_source import DataSource
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
@@ -104,6 +105,7 @@ def _fill_response(fill: PaperFill) -> PaperFillResponse:
         avg_fill_price=fill.avg_fill_price,
         fully_filled=fill.fully_filled,
         realized_pnl=fill.realized_pnl,
+        data_source=fill.data_source,
         created_at=fill.created_at.isoformat(),
     )
 
@@ -304,6 +306,7 @@ async def process_tick_endpoint(
         db,
         subscription_id=subscription_id,
         tick_price=body.tick_price,
+        tick_source=DataSource.SUPPLIED,  # an operator typed the price
         order_book_provider=_ORDER_BOOK_PROVIDER,
         regulatory_provider=_REGULATORY_PROVIDER,
     )

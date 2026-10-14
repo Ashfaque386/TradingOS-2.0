@@ -37,6 +37,7 @@ from src.engine.optimization.hyperparameter_sweep import (
 from src.engine.optimization.monte_carlo import run_monte_carlo
 from src.engine.optimization.walk_forward import StrategyFn, run_walk_forward
 from src.models.backtest_run import BacktestRun, BacktestStatus
+from src.models.data_source import DataSource
 from src.models.optimization_run import OptimizationRun
 
 
@@ -64,6 +65,7 @@ async def run_backtest(
     initial_capital: float = 100_000.0,
     is_delivery: bool = True,
     created_by: str | None = None,
+    data_source: str = DataSource.UNKNOWN,
 ) -> BacktestRun:
     freshness = check_data_freshness(symbol=symbol, as_of=as_of, data_lake=data_lake)
     if not freshness.fresh:
@@ -75,6 +77,7 @@ async def run_backtest(
             status=BacktestStatus.REFUSED_STALE_DATA,
             refusal_reason=freshness.reason,
             created_by=created_by,
+            data_source=data_source,
         )
         db.add(run)
         await db.commit()
@@ -107,6 +110,7 @@ async def run_backtest(
         ],
         trade_pnls=[float(t.net_pnl) for t in result.trades],
         created_by=created_by,
+        data_source=data_source,
     )
     db.add(run)
     await db.commit()

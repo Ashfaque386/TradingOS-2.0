@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
+from src.models.data_source import CHECK_SQL, DataSource
 
 
 class Trade(Base):
@@ -35,6 +36,7 @@ class Trade(Base):
     __tablename__ = "trades"
     __table_args__ = (
         CheckConstraint("side IN ('buy','sell')", name="ck_trades_side"),
+        CheckConstraint(CHECK_SQL, name="ck_trades_data_source"),
         CheckConstraint(
             "status IN ('pending_confirmation','filled','rejected','cancelled','failed')",
             name="ck_trades_status",
@@ -50,6 +52,10 @@ class Trade(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending_confirmation")
+    # `real` for a trade placed through a broker adapter: its `price` is that broker's own quote.
+    data_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DataSource.UNKNOWN, server_default=DataSource.UNKNOWN
+    )
 
     fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

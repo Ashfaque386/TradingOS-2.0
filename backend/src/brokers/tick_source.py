@@ -48,6 +48,7 @@ from src.engine.paper_trading.tick_feed import (
     TickSource,
     TickSourceUnavailableError,
 )
+from src.models.data_source import DataSource
 from src.security.secrets_store import SecretsStoreError, get_secrets_store
 
 logger = structlog.get_logger(__name__)
@@ -104,7 +105,12 @@ class BrokerQuoteTickSource:
             logger.info(
                 "tick_source.broker_credentials_accepted_again", broker=self.adapter.broker_name
             )
-        return Tick(symbol=symbol, price=quote.last_price, timestamp_ms=int(time.time() * 1000))
+        return Tick(
+            symbol=symbol,
+            price=quote.last_price,
+            timestamp_ms=int(time.time() * 1000),
+            source=DataSource.REAL,  # a live quote from a real broker
+        )
 
 
 def build_tick_source() -> TickSource:

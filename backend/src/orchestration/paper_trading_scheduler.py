@@ -160,6 +160,7 @@ async def run_tick_drain_job(
                         db,
                         subscription_id=subscription.id,
                         tick_price=tick.price,
+                        tick_source=tick.source,
                         order_book_provider=order_book_provider,
                         regulatory_provider=regulatory_provider,
                     )

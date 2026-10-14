@@ -450,6 +450,9 @@ class BacktestRunResponse(BaseModel):
     trade_pnls: list[float] | None
     walk_forward_result: dict[str, Any] | None
     monte_carlo_result: dict[str, Any] | None
+    # Where the bars came from (see src.models.data_source): a run posted by a caller is
+    # `supplied` -- this system cannot say whether the bars were real.
+    data_source: str = "unknown"
     created_at: datetime_type
 
 
@@ -625,6 +628,9 @@ class PaperFillResponse(BaseModel):
     avg_fill_price: float | None
     fully_filled: bool
     realized_pnl: float
+    # What the fill rested on (see src.models.data_source): `mixed` for a fill on real ticks,
+    # because the order book it is walked through is synthetic.
+    data_source: str = "unknown"
     created_at: str
 
 
@@ -862,6 +868,7 @@ class TradeResponse(BaseModel):
     quantity: int
     price: float
     status: str
+    data_source: str = "unknown"
     executed_at: str
 
 

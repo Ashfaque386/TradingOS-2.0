@@ -14,7 +14,7 @@ L2 feed is a Phase 8 broker-adapter / Phase 10 data-ingestion concern.
 """
 
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import ClassVar, Literal, Protocol
 
 Side = Literal["buy", "sell"]
 
@@ -88,6 +88,8 @@ class MockOrderBookProvider:
     levels: int = 5
     tick_size: float = 0.05
     quantity_per_level: int = 100
+    # Read by the paper-trading orchestration to record what a fill rested on.
+    data_source: ClassVar[str] = "synthetic"
 
     def snapshot(self, symbol: str, *, mid_price: float) -> OrderBookSnapshot:
         bids = [

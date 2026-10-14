@@ -859,6 +859,9 @@ export type BacktestRun = {
   trade_pnls: number[] | null
   walk_forward_result: WalkForwardResult | null
   monte_carlo_result: MonteCarloResult | null
+  // Where the bars came from: 'supplied' means the caller posted them, so nobody here can
+  // vouch they are real market data. 'unknown' for runs from before this was recorded.
+  data_source?: 'real' | 'synthetic' | 'supplied' | 'mixed' | 'unknown'
   created_at: string
 }
 
