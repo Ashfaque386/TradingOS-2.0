@@ -7,6 +7,7 @@ import pytest
 
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.orchestration.kill_switch import (
+    KillSwitchNotTrippedError,
     assert_not_tripped,
     check_drawdown,
     get_kill_switch_state,
@@ -146,3 +147,42 @@ async def test_the_state_records_when_it_was_last_touched_and_a_reset_clears_the
     assert reset.updated_at is not None and reset.updated_at >= tripped.updated_at
     assert reset.trip_reason is None
     assert reset.tripped_at is None
+
+
+# ---- Found by the mutation gate (2026-10-14) ------------------------------------
+# Resetting a switch that is not tripped is refused. The HTTP route's own tests
+# covered it, but this module's mutation gate runs only this file, and the new
+# error's `mode` and message were unchecked here.
+
+
+async def test_resetting_a_switch_that_is_not_tripped_is_refused_with_a_clear_error(
+    db_session_factory,
+):
+    async with db_session_factory() as db:
+        with pytest.raises(KillSwitchNotTrippedError) as caught:
+            await reset_kill_switch(db, "live", reset_by="risk-manager-1")
+
+    assert caught.value.mode == "live"
+    assert str(caught.value) == "the live kill switch is not tripped; there is nothing to reset"
+    async with db_session_factory() as db:
+        state = await get_kill_switch_state(db, "live")
+    assert state.reset_by is None and state.reset_at is None  # no reset was recorded
+
+
+async def test_a_refused_second_reset_leaves_the_record_of_the_real_one_intact(
+    db_session_factory,
+):
+    async with db_session_factory() as db:
+        await check_drawdown(db, "paper", current_equity=50_000, peak_equity=100_000)
+    async with db_session_factory() as db:
+        genuine = await reset_kill_switch(db, "paper", reset_by="risk-manager-1")
+    who, when = genuine.reset_by, genuine.reset_at
+
+    async with db_session_factory() as db:
+        with pytest.raises(KillSwitchNotTrippedError) as caught:
+            await reset_kill_switch(db, "paper", reset_by="someone-else")
+
+    assert caught.value.mode == "paper"
+    async with db_session_factory() as db:
+        state = await get_kill_switch_state(db, "paper")
+    assert (state.reset_by, state.reset_at) == (who, when) == ("risk-manager-1", when)
