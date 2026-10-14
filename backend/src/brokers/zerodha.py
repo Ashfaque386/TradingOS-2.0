@@ -75,6 +75,9 @@ from src.engine.risk.circuit_breaker import BrokerServerError
 
 DEFAULT_BASE_URL = "https://api.kite.trade"
 DEFAULT_TIMEOUT_SECONDS = 10.0
+# Kite's /quote wants `exchange:tradingsymbol` ("NSE:INFY") and keys its response the
+# same way; a bare tradingsymbol is read as NSE, the exchange orders are placed on.
+DEFAULT_QUOTE_EXCHANGE = "NSE"
 
 # 15 minutes -- the NFO instrument dump (strikes/expiries/tradingsymbols)
 # doesn't change intraday, so re-downloading the full CSV on every single
@@ -209,8 +212,13 @@ class ZerodhaKiteAdapter:
         return positions
 
     async def get_quote(self, symbol: str) -> BrokerQuote:
-        data = await self._request("GET", "/quote", params={"i": symbol})
-        row = data.get("data", {}).get(symbol, {})
+        # Kite documents `exchange:tradingsymbol` for the request and keys the response by it;
+        # a symbol that already names its exchange is passed through untouched. (Tolerant on
+        # the way back: the bare symbol is also tried, and a missing key is simply "no data".)
+        instrument = symbol if ":" in symbol else f"{DEFAULT_QUOTE_EXCHANGE}:{symbol}"
+        data = await self._request("GET", "/quote", params={"i": instrument})
+        rows = data.get("data", {})
+        row = rows.get(instrument) or rows.get(symbol) or {}
         last_price = float(row.get("last_price") or 0.0)
         if last_price <= 0:
             raise BrokerQuoteUnavailableError("zerodha", symbol)

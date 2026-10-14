@@ -414,7 +414,7 @@ async def test_live_option_chain_returns_real_zerodha_ltp_and_oi_never_iv(
             data = {
                 "NFO:NIFTY25JAN24000CE": {"last_price": 120.5, "oi": 45000},
                 "NFO:NIFTY25JAN24000PE": {"last_price": 95.0, "oi": 38000},
-                "NIFTY": {"last_price": 24010.0, "depth": {}},
+                "NSE:NIFTY": {"last_price": 24010.0, "depth": {}},
             }
             return httpx.Response(
                 200,
@@ -527,7 +527,7 @@ async def test_live_option_chain_computes_zerodha_iv_from_ltp_via_black_scholes(
             data = {
                 f"NFO:{call_symbol}": {"last_price": call_price, "oi": 1000},
                 f"NFO:{put_symbol}": {"last_price": put_price, "oi": 900},
-                "TESTIDX": {"last_price": spot, "depth": {}},
+                "NSE:TESTIDX": {"last_price": spot, "depth": {}},
             }
             return httpx.Response(
                 200,
@@ -615,7 +615,7 @@ def _upstox_option_chain_response(request: httpx.Request) -> httpx.Response:
             },
         )
     if request.url.path == "/v2/market-quote/quotes":
-        underlying = request.url.params["symbol"]
+        underlying = request.url.params["instrument_key"]
         return httpx.Response(
             200, json={"data": {underlying: {"last_price": 24080.35, "depth": {}}}}
         )

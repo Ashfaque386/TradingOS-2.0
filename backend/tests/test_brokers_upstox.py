@@ -311,3 +311,62 @@ async def test_a_response_that_arrives_is_not_called_unreachable():
         await _adapter(handler).get_quote("INFY")
 
     assert "unreachable" not in str(caught.value)
+
+
+# ---- Upstox's quotes endpoint takes `instrument_key` ----
+# The adapter sent `symbol`, which the documented endpoint does not read; rows are matched
+# on the `instrument_token` each carries because the response object's own key format is
+# not documented.
+
+
+async def test_the_quote_request_uses_the_documented_instrument_key_parameter():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.url.params)
+        return httpx.Response(200, json={"data": {"NSE_EQ|INE848E01016": {"last_price": 55.5}}})
+
+    await _adapter(handler).get_quote("NSE_EQ|INE848E01016")
+
+    assert seen == {"instrument_key": "NSE_EQ|INE848E01016"}
+
+
+@pytest.mark.parametrize(
+    "key_in_response",
+    ["NSE_EQ|INE848E01016", "NSE_EQ:INE848E01016", "NSE_EQ:SOMETRADINGSYMBOL"],
+)
+async def test_a_row_is_found_whichever_way_the_response_keys_it(key_in_response):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    key_in_response: {
+                        "instrument_token": "NSE_EQ|INE848E01016",
+                        "last_price": 55.5,
+                    }
+                }
+            },
+        )
+
+    assert (await _adapter(handler).get_quote("NSE_EQ|INE848E01016")).last_price == 55.5
+
+
+async def test_a_row_for_a_different_instrument_is_not_taken():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {"NSE_EQ:OTHER": {"instrument_token": "NSE_EQ|OTHER", "last_price": 1.0}}
+            },
+        )
+
+    with pytest.raises(BrokerQuoteUnavailableError):
+        await _adapter(handler).get_quote("NSE_EQ|INE848E01016")
+
+
+async def test_a_colon_keyed_row_without_an_instrument_token_is_still_found():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"NSE_EQ:INE848E01016": {"last_price": 55.5}}})
+
+    assert (await _adapter(handler).get_quote("NSE_EQ|INE848E01016")).last_price == 55.5

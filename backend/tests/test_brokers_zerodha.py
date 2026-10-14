@@ -162,12 +162,12 @@ async def test_get_positions_parses_net_book():
 
 async def test_get_quote_parses_depth():
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["i"] == "INFY"
+        assert request.url.params["i"] == "NSE:INFY"
         return httpx.Response(
             200,
             json={
                 "data": {
-                    "INFY": {
+                    "NSE:INFY": {
                         "last_price": 1502.3,
                         "depth": {
                             "buy": [{"price": 1502.0, "quantity": 100}],
@@ -408,3 +408,48 @@ async def test_an_unreachable_instruments_download_is_an_outage_too():
 
     assert caught.value.status_code == 503
     assert str(caught.value).startswith("zerodha GET /instruments/NFO: unreachable (")
+
+
+# ---- Kite's quote endpoint speaks `exchange:tradingsymbol` ----
+# Kite's docs key the request and the response by "NSE:INFY"; the adapter sent and looked
+# up the bare symbol, so against the real API a plain symbol could only ever find nothing
+# (and used to be turned into a quote priced 0.0).
+
+
+@pytest.mark.parametrize(
+    ("symbol", "requested"),
+    [
+        ("INFY", "NSE:INFY"),
+        ("NSE:INFY", "NSE:INFY"),
+        ("BSE:INFY", "BSE:INFY"),
+        ("NIFTY 50", "NSE:NIFTY 50"),
+    ],
+)
+async def test_a_quote_is_requested_by_exchange_and_symbol(symbol, requested):
+    asked = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params["i"])
+        return httpx.Response(200, json={"data": {requested: {"last_price": 123.5}}})
+
+    quote = await _adapter(handler).get_quote(symbol)
+
+    assert asked == [requested]
+    assert quote.last_price == 123.5 and quote.symbol == symbol  # the caller's own symbol back
+
+
+async def test_a_response_keyed_by_the_bare_symbol_is_still_read():
+    """Tolerant on the way back: a mock or a proxy that answers by the bare symbol."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"INFY": {"last_price": 99.0}}})
+
+    assert (await _adapter(handler).get_quote("INFY")).last_price == 99.0
+
+
+async def test_an_entry_for_another_exchange_is_not_taken_for_this_one():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"BSE:INFY": {"last_price": 99.0}}})
+
+    with pytest.raises(BrokerQuoteUnavailableError):
+        await _adapter(handler).get_quote("INFY")  # asked for NSE:INFY

@@ -437,4 +437,4 @@ async def test_a_symbol_with_no_quote_gives_no_tick_and_does_not_suspend_polling
         with pytest.raises(BrokerQuoteUnavailableError):
             await source.next_tick("NOSUCHSYMBOL")
 
-    assert calls == ["NOSUCHSYMBOL"] * 3  # every firing really asked; nothing suspended
+    assert calls == ["NSE:NOSUCHSYMBOL"] * 3  # every firing really asked; nothing suspended

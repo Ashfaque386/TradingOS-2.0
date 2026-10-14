@@ -178,8 +178,24 @@ class UpstoxAdapter:
         return positions
 
     async def get_quote(self, symbol: str) -> BrokerQuote:
-        data = await self._request("GET", "/market-quote/quotes", params={"symbol": symbol})
-        row = data.get("data", {}).get(symbol, {})
+        # Upstox's quotes endpoint takes `instrument_key` (e.g. "NSE_EQ|INE848E01016"); this
+        # sent `symbol`. Each row of the response carries the `instrument_token` it answers
+        # for, which is what a row is matched on -- the key the response object itself uses is
+        # not documented, so a few forms are tried rather than one guessed.
+        data = await self._request("GET", "/market-quote/quotes", params={"instrument_key": symbol})
+        rows = data.get("data", {})
+        row = (
+            rows.get(symbol)
+            or rows.get(symbol.replace("|", ":"))
+            or next(
+                (
+                    r
+                    for r in rows.values()
+                    if isinstance(r, dict) and r.get("instrument_token") == symbol
+                ),
+                {},
+            )
+        )
         last_price = float(row.get("last_price") or 0.0)
         if last_price <= 0:
             raise BrokerQuoteUnavailableError("upstox", symbol)
