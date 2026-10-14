@@ -33,6 +33,7 @@ const MODEL_HINTS: Record<string, string> = {
   openai: 'text-embedding-3-small',
   gemini: 'text-embedding-004',
   custom: 'embedding model name',
+  'sentence-transformers': 'all-MiniLM-L6-v2',
 }
 
 export function AgentMemoryPanel({
@@ -228,7 +229,9 @@ export function AgentMemoryPanel({
               : settings.source === 'environment'
                 ? 'Using the MEMORY_EMBEDDING_* environment defaults — save to override. '
                 : 'Nothing chosen yet. '}
-            The provider&apos;s key or base URL comes from Settings → LLM providers.
+            {provider === 'sentence-transformers'
+              ? 'Runs inside the backend itself: needs the local-embeddings extra in the image, and the first use downloads the model.'
+              : 'The provider’s key or base URL comes from Settings → LLM providers.'}
           </p>
         </form>
       )}

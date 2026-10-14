@@ -13,15 +13,22 @@ instead of a provider whenever it cannot build a real one, and the memory
 service surfaces that reason verbatim.
 
 Providers: Ollama (a locally pulled embedding model, e.g. `nomic-embed-text`),
-OpenAI, Gemini, and Custom (any OpenAI-compatible `/v1/embeddings` server).
+OpenAI, Gemini, Custom (any OpenAI-compatible `/v1/embeddings` server) and
+sentence-transformers (a model run inside the backend process itself: no server, no
+API key, nothing leaves the machine -- but it needs the optional `local-embeddings`
+extra, which pulls in PyTorch, so it is not in the default image).
 Hugging Face is left out on purpose: the old app's own audit found its free
 tier rejects embedding models.
 """
 
 from __future__ import annotations
 
+import asyncio
+import importlib
+import importlib.util
+import threading
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 import structlog
@@ -31,7 +38,8 @@ from src.security.llm_provider_store import LlmProviderCredentials, get_llm_prov
 
 logger = structlog.get_logger(__name__)
 
-SUPPORTED_PROVIDERS = ("ollama", "openai", "gemini", "custom")
+SUPPORTED_PROVIDERS = ("ollama", "openai", "gemini", "custom", "sentence-transformers")
+SENTENCE_TRANSFORMERS_MODULE = "sentence_transformers"
 _TIMEOUT_SECONDS = 60.0
 
 
@@ -174,6 +182,46 @@ class GeminiEmbeddings:
         return _validate(self.name, texts, vectors)
 
 
+# Loaded models, by name: `MemoryService` rebuilds its provider on every call (so Settings
+# changes apply without a restart), and loading a model takes seconds and gigabytes.
+_LOADED_MODELS: dict[str, Any] = {}
+_LOAD_LOCK = threading.Lock()
+
+
+def _load_sentence_transformer(model: str) -> Any:
+    with _LOAD_LOCK:
+        loaded = _LOADED_MODELS.get(model)
+        if loaded is None:
+            module = importlib.import_module(SENTENCE_TRANSFORMERS_MODULE)
+            # trust_remote_code stays False: a model name is operator input, and a model repo
+            # must not be able to run its own Python in this process.
+            loaded = module.SentenceTransformer(model, trust_remote_code=False)
+            _LOADED_MODELS[model] = loaded
+        return loaded
+
+
+@dataclass
+class SentenceTransformersEmbeddings:
+    """A sentence-transformers model run in this process. The first use of a model loads it
+    (and downloads its weights from Hugging Face if they are not already cached), which takes
+    a while; after that it is cached for the life of the process. Encoding runs in a worker
+    thread so it never blocks the event loop."""
+
+    model: str
+    name: str = "sentence-transformers"
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
+        encoded = _load_sentence_transformer(self.model).encode(texts, convert_to_numpy=True)
+        return [[float(x) for x in row] for row in encoded]
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            vectors = await asyncio.to_thread(self._encode, texts)
+        except Exception as exc:  # noqa: BLE001 - a missing package, a bad model name, a download failure
+            raise EmbeddingError(f"{self.name}: {type(exc).__name__}: {exc}") from exc
+        return _validate(self.name, texts, vectors)
+
+
 def _stored_credentials(provider: str) -> LlmProviderCredentials | None:
     try:
         return get_llm_provider_store().get_credentials(provider)
@@ -202,6 +250,15 @@ def build_embedding_provider(
             None,
             f"MEMORY_EMBEDDING_MODEL is not set (the embedding model {provider} should use)",
         )
+
+    if provider == "sentence-transformers":
+        if importlib.util.find_spec(SENTENCE_TRANSFORMERS_MODULE) is None:
+            return None, (
+                "sentence-transformers is not installed in this backend image: install the "
+                "optional extra (pip install 'tradingos-backend[local-embeddings]'; it pulls in "
+                "PyTorch, several GB) or choose another provider"
+            )
+        return SentenceTransformersEmbeddings(model=model), None
 
     stored = _stored_credentials(provider)
 

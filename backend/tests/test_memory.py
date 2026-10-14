@@ -721,7 +721,13 @@ async def test_settings_unset_when_nothing_is_configured(client, make_user, memo
     admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-set0@example.com")
     body = (await client.get("/api/v1/memory/settings", headers=admin)).json()
     assert body["source"] == "unset" and body["provider"] == "" and body["model"] == ""
-    assert body["supported_providers"] == ["ollama", "openai", "gemini", "custom"]
+    assert body["supported_providers"] == [
+        "ollama",
+        "openai",
+        "gemini",
+        "custom",
+        "sentence-transformers",
+    ]
 
 
 async def test_admin_saves_settings_and_they_persist_across_service_instances(
@@ -929,3 +935,168 @@ async def test_the_query_endpoint_accepts_a_floor(client, make_user, memory_serv
     assert len(everything.json()) == 2
     assert [h["text"] for h in floored.json()] == ["momentum crossover lesson"]
     assert invalid.status_code == 422
+
+
+# ---- the sentence-transformers provider (a model run in this process) ---------
+# The real package pulls in PyTorch and is not installed in CI or the default image, so these
+# use a stub module with the same surface (`SentenceTransformer(name, trust_remote_code=...)`
+# whose `.encode(texts, convert_to_numpy=True)` returns rows of numbers).
+
+
+class _StubSentenceTransformer:
+    loads: list[tuple[str, bool]] = []
+    threads: list[int] = []
+
+    def __init__(self, name: str, trust_remote_code: bool = True) -> None:
+        type(self).loads.append((name, trust_remote_code))
+        self.name = name
+
+    def encode(self, texts: list[str], convert_to_numpy: bool = False) -> list[list[float]]:
+        import threading
+
+        type(self).threads.append(threading.get_ident())
+        assert convert_to_numpy is True
+        return [[float(len(t)), 1.0, 0.5] for t in texts]
+
+
+@pytest.fixture
+def stub_sentence_transformers(monkeypatch: pytest.MonkeyPatch):
+    import importlib.util
+    import sys
+    import types
+
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = _StubSentenceTransformer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: object())
+    _StubSentenceTransformer.loads = []
+    _StubSentenceTransformer.threads = []
+    embeddings_module._LOADED_MODELS.clear()
+    yield _StubSentenceTransformer
+    embeddings_module._LOADED_MODELS.clear()
+
+
+def test_sentence_transformers_is_a_supported_provider():
+    assert "sentence-transformers" in embeddings_module.SUPPORTED_PROVIDERS
+
+
+def test_without_the_package_the_reason_names_the_extra_to_install(monkeypatch):
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None)
+
+    provider, reason = build_embedding_provider(
+        _settings(memory_embedding_provider="sentence-transformers", memory_embedding_model="m")
+    )
+
+    assert provider is None
+    assert reason is not None
+    assert "not installed" in reason and "local-embeddings" in reason
+
+
+def test_it_needs_a_model_name_like_every_other_provider():
+    provider, reason = build_embedding_provider(
+        _settings(memory_embedding_provider="sentence-transformers", memory_embedding_model="")
+    )
+
+    assert provider is None and reason is not None and "MEMORY_EMBEDDING_MODEL" in reason
+
+
+async def test_it_embeds_through_the_loaded_model(stub_sentence_transformers):
+    provider, reason = build_embedding_provider(
+        _settings(
+            memory_embedding_provider="sentence-transformers",
+            memory_embedding_model="all-MiniLM-L6-v2",
+        )
+    )
+    assert reason is None and provider is not None
+    assert (provider.name, provider.model) == ("sentence-transformers", "all-MiniLM-L6-v2")
+
+    vectors = await provider.embed(["abc", "de"])
+
+    assert vectors == [[3.0, 1.0, 0.5], [2.0, 1.0, 0.5]]
+    # A model name is operator input: a model repo must not get to run its own code here.
+    assert stub_sentence_transformers.loads == [("all-MiniLM-L6-v2", False)]
+
+
+async def test_the_model_is_loaded_once_however_often_the_provider_is_rebuilt(
+    stub_sentence_transformers,
+):
+    """`MemoryService` rebuilds its provider on every call, so a per-provider load would
+    reload a multi-gigabyte model on every memory operation."""
+    settings = _settings(
+        memory_embedding_provider="sentence-transformers", memory_embedding_model="m1"
+    )
+
+    for _ in range(3):
+        provider, _reason = build_embedding_provider(settings)
+        assert provider is not None
+        await provider.embed(["x"])
+    other, _ = build_embedding_provider(
+        settings.model_copy(update={"memory_embedding_model": "m2"})
+    )
+    await other.embed(["x"])
+
+    assert stub_sentence_transformers.loads == [("m1", False), ("m2", False)]
+
+
+async def test_encoding_runs_off_the_event_loop_thread(stub_sentence_transformers):
+    import threading
+
+    provider, _ = build_embedding_provider(
+        _settings(memory_embedding_provider="sentence-transformers", memory_embedding_model="m")
+    )
+
+    await provider.embed(["x"])
+
+    assert stub_sentence_transformers.threads
+    assert threading.get_ident() not in stub_sentence_transformers.threads
+
+
+async def test_a_failure_inside_the_model_is_an_embedding_error_that_names_it(
+    stub_sentence_transformers, monkeypatch
+):
+    def boom(self, texts, convert_to_numpy=False):
+        raise OSError("model repo not found")
+
+    monkeypatch.setattr(stub_sentence_transformers, "encode", boom)
+    provider, _ = build_embedding_provider(
+        _settings(memory_embedding_provider="sentence-transformers", memory_embedding_model="nope")
+    )
+
+    with pytest.raises(
+        EmbeddingError, match="sentence-transformers: OSError: model repo not found"
+    ):
+        await provider.embed(["x"])
+
+
+async def test_its_output_is_validated_like_any_other_providers(
+    stub_sentence_transformers, monkeypatch
+):
+    monkeypatch.setattr(
+        stub_sentence_transformers,
+        "encode",
+        lambda self, texts, convert_to_numpy=False: [[1.0, 2.0], [1.0]],
+    )
+    provider, _ = build_embedding_provider(
+        _settings(memory_embedding_provider="sentence-transformers", memory_embedding_model="m")
+    )
+
+    with pytest.raises(EmbeddingError, match="inconsistent dimensions"):
+        await provider.embed(["a", "b"])
+
+
+async def test_the_settings_endpoint_offers_and_accepts_the_provider(
+    client, make_user, memory_service
+):
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-st@example.com")
+
+    offered = await client.get("/api/v1/memory/settings", headers=admin)
+    saved = await client.put(
+        "/api/v1/memory/settings",
+        json={"provider": "sentence-transformers", "model": "all-MiniLM-L6-v2"},
+        headers=admin,
+    )
+
+    assert "sentence-transformers" in offered.json()["supported_providers"]
+    assert saved.status_code == 200
