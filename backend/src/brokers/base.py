@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from src.engine.risk.circuit_breaker import BrokerServerError
+
 
 class OrderSide(StrEnum):
     BUY = "buy"
@@ -70,6 +72,17 @@ class BrokerQuoteUnavailableError(BrokerRequestError):
         self.broker = broker
         self.symbol = symbol
         super().__init__(404, f"{broker} returned no usable quote for {symbol}")
+
+
+def broker_unreachable(broker: str, method: str, path: str, exc: Exception) -> BrokerServerError:
+    """The broker could not be reached at all (connect or read timeout, DNS
+    failure, connection reset). A `BrokerServerError`, like a 5xx, because it is
+    an *outage* and the circuit breaker only counts that family: before this, a
+    network failure surfaced as a bare httpx exception, never counted, so an
+    unreachable broker would be called on every firing for ever. The message
+    names the broker and the call -- a raw `ConnectTimeout` names neither."""
+    detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+    return BrokerServerError(503, f"{broker} {method} {path}: unreachable ({detail})"[:300])
 
 
 _AUTH_REJECTED_STATUSES = frozenset({401, 403})

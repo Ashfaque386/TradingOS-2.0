@@ -14,6 +14,7 @@ from src.brokers.resilient import ResilientBrokerAdapter
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.engine.risk.circuit_breaker import (
     BrokerCircuitBreaker,
+    BrokerServerError,
     CircuitOpenError,
     CircuitState,
 )
@@ -163,3 +164,26 @@ async def test_place_order_increments_budget_breach_counter_when_over_budget(mon
     # get_settings itself is untouched -- only this module's imported
     # reference was monkeypatched.
     assert get_settings().order_dispatch_latency_budget_ms > 0
+
+
+async def test_repeated_network_failures_open_the_circuit_so_the_broker_stops_being_called():
+    """End to end through the real adapter and breaker: three timeouts in a row
+    open the circuit, and the next call is refused without touching the network."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        raise httpx.ConnectTimeout("timed out")
+
+    adapter = ZerodhaKiteAdapter(
+        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+    )
+    resilient = ResilientBrokerAdapter(adapter)
+
+    for _ in range(3):
+        with pytest.raises(BrokerServerError):
+            await resilient.get_quote("INFY")
+    with pytest.raises(CircuitOpenError):
+        await resilient.get_quote("INFY")
+
+    assert len(calls) == 3  # the fourth never reached the network

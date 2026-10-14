@@ -354,3 +354,57 @@ async def test_a_missing_or_zero_quote_is_an_error_not_a_zero_price(body):
     assert "no usable quote for INFY" in str(caught.value)
     assert isinstance(caught.value, BrokerRequestError)  # an ordinary 4xx: never trips the breaker
     assert not isinstance(caught.value, BrokerAuthError)
+
+
+# ---- An unreachable broker is an outage, not a bare httpx error -------------------
+# A connect/read timeout used to escape as a raw httpx exception: not a
+# `BrokerServerError`, so the circuit breaker never counted it and an unreachable
+# broker was called on every firing for ever -- and the log line named neither the
+# broker nor the call.
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectTimeout("timed out"),
+        httpx.ReadTimeout("slow"),
+        httpx.ConnectError("name resolution failed"),
+        httpx.RemoteProtocolError("connection reset"),
+    ],
+)
+async def test_a_network_failure_is_a_server_side_outage_that_names_the_broker_and_call(error):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    with pytest.raises(BrokerServerError) as caught:
+        await _adapter(handler).get_quote("INFY")
+
+    assert caught.value.status_code == 503
+    message = str(caught.value)
+    assert message.startswith("zerodha GET /quote: unreachable (")
+    assert type(error).__name__ in message
+    assert isinstance(caught.value.__cause__, httpx.TransportError)
+
+
+async def test_a_response_that_arrives_is_not_called_unreachable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={})
+
+    with pytest.raises(BrokerRequestError) as caught:
+        await _adapter(handler).get_quote("INFY")
+
+    assert "unreachable" not in str(caught.value)
+
+
+async def test_an_unreachable_instruments_download_is_an_outage_too():
+    """The NFO instruments dump has its own request path (the option chain depends
+    on it); it must map a network failure the same way `_request` does."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out")
+
+    with pytest.raises(BrokerServerError) as caught:
+        await _adapter(handler).get_expiries("NIFTY")
+
+    assert caught.value.status_code == 503
+    assert str(caught.value).startswith("zerodha GET /instruments/NFO: unreachable (")

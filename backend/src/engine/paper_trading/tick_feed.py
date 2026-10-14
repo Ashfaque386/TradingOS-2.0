@@ -27,11 +27,15 @@ shape.
 
 import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 import numpy as np
+import structlog
 from redis.asyncio import Redis
+
+logger = structlog.get_logger(__name__)
 
 
 def tick_stream_key(symbol: str) -> str:
@@ -138,6 +142,78 @@ class TickSourceUnavailableError(Exception):
 _MAX_SYMBOLS_IN_ERROR = 5
 _MAX_REASON_CHARS = 120
 
+SYMBOL_BACKOFF_INITIAL_SECONDS = 30.0
+SYMBOL_BACKOFF_MAX_SECONDS = 600.0
+
+
+class SymbolBackedOffError(Exception):
+    """Stands in for a symbol that was not asked about this round because it
+    failed recently. Carried in `TickPublishError.failures`, so the job still
+    reports the symbol every firing (it is still not getting ticks) without
+    calling the broker for it."""
+
+    def __init__(self, symbol: str, retry_in: float, last_error: str):
+        self.symbol = symbol
+        self.retry_in = retry_in
+        super().__init__(f"backing off for {retry_in:.0f}s after: {last_error}")
+
+
+class SymbolBackoff:
+    """Per-symbol back-off for the tick publisher: a symbol that failed is not
+    asked about again for `initial_seconds`, then twice that, and so on up to
+    `max_seconds`; one success clears it. Without it a symbol the broker cannot
+    quote (unknown, expired, delisted) costs one broker call every firing -- 1,200
+    an hour at the 3-second cadence -- for as long as its subscription exists.
+
+    Held by whoever owns the job, and tied to the `TickSource` it was learned
+    against: a new source (the broker credentials changed, so
+    `get_tick_source` built a fresh one) clears everything, because the cause
+    may be gone.
+    """
+
+    def __init__(
+        self,
+        *,
+        initial_seconds: float = SYMBOL_BACKOFF_INITIAL_SECONDS,
+        max_seconds: float = SYMBOL_BACKOFF_MAX_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._initial = initial_seconds
+        self._max = max_seconds
+        self._clock = clock
+        self._until: dict[str, float] = {}
+        self._delay: dict[str, float] = {}
+        self._last_error: dict[str, str] = {}
+        self._source: object | None = None
+
+    def for_source(self, source: object) -> None:
+        if self._source is not None and self._source is not source:
+            self._until.clear()
+            self._delay.clear()
+            self._last_error.clear()
+        self._source = source
+
+    def remaining(self, symbol: str) -> float:
+        return max(0.0, self._until.get(symbol, 0.0) - self._clock())
+
+    def last_error(self, symbol: str) -> str:
+        return self._last_error.get(symbol, "")
+
+    def failed(self, symbol: str, exc: Exception) -> float:
+        delay = min(self._delay.get(symbol, self._initial / 2) * 2, self._max)
+        self._delay[symbol] = delay
+        self._until[symbol] = self._clock() + delay
+        self._last_error[symbol] = f"{type(exc).__name__}: {str(exc)[:_MAX_REASON_CHARS]}"
+        return delay
+
+    def succeeded(self, symbol: str) -> bool:
+        """True if the symbol had been failing (so the caller can say it recovered)."""
+        was_failing = symbol in self._delay
+        self._until.pop(symbol, None)
+        self._delay.pop(symbol, None)
+        self._last_error.pop(symbol, None)
+        return was_failing
+
 
 class TickPublishError(Exception):
     """Some symbols' ticks could not be published this round; the rest were.
@@ -161,7 +237,13 @@ class TickPublishError(Exception):
         super().__init__(f"tick publish failed for {len(failures)} of {total} symbols: {detail}")
 
 
-async def publish_ticks_once(redis: Redis, source: TickSource, symbols: list[str]) -> list[Tick]:
+async def publish_ticks_once(
+    redis: Redis,
+    source: TickSource,
+    symbols: list[str],
+    *,
+    backoff: SymbolBackoff | None = None,
+) -> list[Tick]:
     """Publishes one tick per symbol -- the body of the APScheduler
     interval job driving whichever `TickSource` it was constructed with
     (real broker-quote polling or this module's mock fallback).
@@ -171,10 +253,19 @@ async def publish_ticks_once(redis: Redis, source: TickSource, symbols: list[str
     the first failure aborted the loop). If any failed, `TickPublishError` is
     raised once all have been tried. `TickSourceUnavailableError` is different:
     the whole source is down and says so, so it is re-raised at once, unwrapped.
+
+    With a `backoff`, a symbol that failed is skipped (and reported, as a
+    `SymbolBackedOffError`) until its back-off expires, instead of being asked
+    about on every round.
     """
+    if backoff is not None:
+        backoff.for_source(source)
     ticks: list[Tick] = []
     failures: dict[str, Exception] = {}
     for symbol in symbols:
+        if backoff is not None and (retry_in := backoff.remaining(symbol)) > 0:
+            failures[symbol] = SymbolBackedOffError(symbol, retry_in, backoff.last_error(symbol))
+            continue
         try:
             tick = await source.next_tick(symbol)
             await publish_tick(redis, tick)
@@ -182,7 +273,17 @@ async def publish_ticks_once(redis: Redis, source: TickSource, symbols: list[str
             raise
         except Exception as exc:  # noqa: BLE001 - isolating one symbol's failure from the rest
             failures[symbol] = exc
+            if backoff is not None:
+                delay = backoff.failed(symbol, exc)
+                logger.warning(
+                    "tick_feed.symbol_failed",
+                    symbol=symbol,
+                    error=backoff.last_error(symbol),
+                    next_attempt_in_seconds=delay,
+                )
             continue
+        if backoff is not None and backoff.succeeded(symbol):
+            logger.info("tick_feed.symbol_recovered", symbol=symbol)
         ticks.append(tick)
     if failures:
         raise TickPublishError(failures, ticks, len(symbols)) from next(iter(failures.values()))

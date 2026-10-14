@@ -47,6 +47,7 @@ from src.brokers.base import (
     OrderSide,
     OrderType,
     broker_request_error,
+    broker_unreachable,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -80,10 +81,13 @@ class UpstoxAdapter:
         }
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        async with httpx.AsyncClient(
-            base_url=self._base_url, transport=self._transport, timeout=self._timeout
-        ) as client:
-            resp = await client.request(method, path, headers=self._headers(), **kwargs)
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, transport=self._transport, timeout=self._timeout
+            ) as client:
+                resp = await client.request(method, path, headers=self._headers(), **kwargs)
+        except httpx.TransportError as exc:
+            raise broker_unreachable("upstox", method, path, exc) from exc
         if resp.status_code >= 500:
             raise BrokerServerError(resp.status_code, f"upstox {method} {path}: {resp.text[:200]}")
         if resp.status_code >= 400:

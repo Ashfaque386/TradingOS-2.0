@@ -69,6 +69,7 @@ from src.brokers.base import (
     OrderSide,
     OrderType,
     broker_request_error,
+    broker_unreachable,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -116,10 +117,13 @@ class ZerodhaKiteAdapter:
         }
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        async with httpx.AsyncClient(
-            base_url=self._base_url, transport=self._transport, timeout=self._timeout
-        ) as client:
-            resp = await client.request(method, path, headers=self._headers(), **kwargs)
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, transport=self._transport, timeout=self._timeout
+            ) as client:
+                resp = await client.request(method, path, headers=self._headers(), **kwargs)
+        except httpx.TransportError as exc:
+            raise broker_unreachable("zerodha", method, path, exc) from exc
         if resp.status_code >= 500:
             raise BrokerServerError(resp.status_code, f"zerodha {method} {path}: {resp.text[:200]}")
         if resp.status_code >= 400:
@@ -230,10 +234,13 @@ class ZerodhaKiteAdapter:
         ):
             return _nfo_instruments_cache
 
-        async with httpx.AsyncClient(
-            base_url=self._base_url, transport=self._transport, timeout=self._timeout
-        ) as client:
-            resp = await client.get("/instruments/NFO", headers=self._headers())
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, transport=self._transport, timeout=self._timeout
+            ) as client:
+                resp = await client.get("/instruments/NFO", headers=self._headers())
+        except httpx.TransportError as exc:
+            raise broker_unreachable("zerodha", "GET", "/instruments/NFO", exc) from exc
         if resp.status_code >= 500:
             raise BrokerServerError(
                 resp.status_code, f"zerodha GET /instruments/NFO: {resp.text[:200]}"

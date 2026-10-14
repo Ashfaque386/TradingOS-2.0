@@ -51,7 +51,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.engine.paper_trading.order_book import OrderBookProvider
 from src.engine.paper_trading.price_data import PriceDataProvider
-from src.engine.paper_trading.tick_feed import TickSource, publish_ticks_once, read_new_ticks
+from src.engine.paper_trading.tick_feed import (
+    SymbolBackoff,
+    TickSource,
+    publish_ticks_once,
+    read_new_ticks,
+)
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.latency_guard import WebSocketLatencyGuard
 from src.models.paper_trading_subscription import PaperTradingSubscription
@@ -66,6 +71,10 @@ logger = structlog.get_logger(__name__)
 # per-symbol one -- Phase 6 built this class but never actually wired it
 # to a real tick stream; this is that wiring, finally landing.
 _latency_guard = WebSocketLatencyGuard()
+
+# One back-off table for the one tick-publish job: a symbol the broker cannot quote
+# is not asked about every 3 seconds (see `SymbolBackoff`).
+_symbol_backoff = SymbolBackoff()
 
 DAILY_SIGNAL_HOUR_IST = 8  # before the 09:15 IST market open
 DAILY_SIGNAL_MINUTE_IST = 0
@@ -110,7 +119,7 @@ async def run_tick_publish_job(
         return
     symbols = await _active_symbols(session_factory)
     if symbols:
-        await publish_ticks_once(redis, tick_source_factory(), symbols)
+        await publish_ticks_once(redis, tick_source_factory(), symbols, backoff=_symbol_backoff)
 
 
 async def run_tick_drain_job(
