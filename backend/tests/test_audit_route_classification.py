@@ -284,7 +284,8 @@ def test_every_mutating_route_is_classified():
     unclassified = sorted(_served_routes() - set(CLASSIFICATION))
 
     assert not unclassified, (
-        "These mutating routes are not in CLASSIFICATION (tests/test_audit_route_classification.py):\n"
+        "These mutating routes are not in CLASSIFICATION "
+        "(tests/test_audit_route_classification.py):\n"
         + "\n".join(f"  {m} {p}" for m, p in unclassified)
         + "\nThe audit middleware writes a row for every 2xx. Decide what each does when asked to"
         " do what is already true, and classify it -- see this module's docstring."
