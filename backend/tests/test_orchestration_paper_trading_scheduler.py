@@ -7,6 +7,7 @@ paper order" means at the infrastructure level.
 import asyncio
 
 import pandas as pd
+import pytest
 
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
@@ -197,3 +198,42 @@ async def test_tick_drain_job_observes_ws_latency_metric_and_feeds_the_latency_g
     assert scheduler_module._latency_guard.last_latency_ms is not None
 
     await redis_client.delete(tick_stream_key("SCHEDSTOCK"))
+
+
+async def test_tick_publish_job_still_publishes_the_other_symbols_when_one_cannot_be_quoted(
+    db_session_factory, redis_client, monkeypatch
+):
+    from src.engine.paper_trading.tick_feed import Tick, TickPublishError
+
+    async with db_session_factory() as db:
+        for name, symbol in (("SchedGoodIso", "SCHEDISOGOOD"), ("SchedBadIso", "SCHEDISOBAD")):
+            strategy = await create_strategy(db, name=name, objective="obj")
+            version = await create_version_with_validation(db, strategy, _VALID_CODE)
+            await enroll_in_paper_trading(
+                db,
+                strategy_version_id=version.id,
+                symbol=symbol,
+                builtin_strategy="sma_crossover",
+            )
+    for symbol in ("SCHEDISOGOOD", "SCHEDISOBAD"):
+        await redis_client.delete(tick_stream_key(symbol))
+
+    class _OneUnquotable:
+        async def next_tick(self, symbol: str) -> Tick:
+            if symbol == "SCHEDISOBAD":
+                raise RuntimeError("broker has no quote for this symbol")
+            return Tick(symbol=symbol, price=101.0, timestamp_ms=1_000)
+
+    monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
+
+    # The job still fails (so the run history says so, naming the symbol) ...
+    with pytest.raises(TickPublishError, match="SCHEDISOBAD"):
+        await scheduler_module.run_tick_publish_job(
+            db_session_factory, redis_client, _OneUnquotable
+        )
+
+    # ... but the good symbol got its tick, whichever order the symbols came in.
+    assert await redis_client.xlen(tick_stream_key("SCHEDISOGOOD")) == 1
+    assert await redis_client.xlen(tick_stream_key("SCHEDISOBAD")) == 0
+    for symbol in ("SCHEDISOGOOD", "SCHEDISOBAD"):
+        await redis_client.delete(tick_stream_key(symbol))

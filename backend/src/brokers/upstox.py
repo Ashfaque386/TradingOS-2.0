@@ -40,6 +40,7 @@ from src.brokers.base import (
     BrokerOrderResult,
     BrokerPosition,
     BrokerQuote,
+    BrokerQuoteUnavailableError,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
@@ -175,12 +176,15 @@ class UpstoxAdapter:
     async def get_quote(self, symbol: str) -> BrokerQuote:
         data = await self._request("GET", "/market-quote/quotes", params={"symbol": symbol})
         row = data.get("data", {}).get(symbol, {})
+        last_price = float(row.get("last_price") or 0.0)
+        if last_price <= 0:
+            raise BrokerQuoteUnavailableError("upstox", symbol)
         depth = row.get("depth", {})
         buy_levels = depth.get("buy") or []
         sell_levels = depth.get("sell") or []
         return BrokerQuote(
             symbol=symbol,
-            last_price=float(row.get("last_price", 0.0)),
+            last_price=last_price,
             bid=buy_levels[0].get("price") if buy_levels else None,
             ask=sell_levels[0].get("price") if sell_levels else None,
             timestamp=datetime.now(UTC),

@@ -9,7 +9,9 @@ import httpx
 import pytest
 
 from src.brokers.base import (
+    BrokerAuthError,
     BrokerCredentials,
+    BrokerQuoteUnavailableError,
     BrokerRequestError,
     OrderRequest,
     OrderSide,
@@ -320,3 +322,35 @@ async def test_option_chain_surfaces_a_real_server_error_from_the_instrument_dum
     adapter = _adapter(handler)
     with pytest.raises(BrokerServerError):
         await adapter.get_option_chain("NIFTY", "2025-01-30")
+
+
+# ---- A quote the broker did not give is an error, not a price of 0.0 ------------
+# Both adapters used to answer 0.0 when the response had no entry for the symbol.
+# Every consumer takes `last_price` at face value: the paper tick feed read it as
+# a total price collapse and stopped out any open position, and a live order
+# intent was built with a zero price and a zero position value.
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"data": {}},  # no entry for the symbol at all
+        {"data": {"OTHER": {"last_price": 100.0}}},  # an entry, but for another symbol
+        {"data": {"INFY": {"last_price": 0}}},  # the broker's own zero
+        {"data": {"INFY": {"last_price": None}}},
+        {"data": {"INFY": {}}},
+        {},
+    ],
+)
+async def test_a_missing_or_zero_quote_is_an_error_not_a_zero_price(body):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(BrokerQuoteUnavailableError) as caught:
+        await _adapter(handler).get_quote("INFY")
+
+    assert caught.value.status_code == 404
+    assert caught.value.symbol == "INFY"
+    assert "no usable quote for INFY" in str(caught.value)
+    assert isinstance(caught.value, BrokerRequestError)  # an ordinary 4xx: never trips the breaker
+    assert not isinstance(caught.value, BrokerAuthError)

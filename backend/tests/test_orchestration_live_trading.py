@@ -706,3 +706,56 @@ async def test_intent_expiry_window_too_long_is_rejected_at_enrollment(db_sessio
                 broker_name="zerodha",
                 intent_expiry_seconds=301,
             )
+
+
+async def test_a_missing_quote_fails_the_intent_instead_of_trading_at_a_price_of_zero(
+    db_session_factory,
+):
+    """The adapters used to answer 0.0 for a symbol the broker had no quote for,
+    which built an intent with a zero price and a zero position value -- one the
+    risk gate's position limits pass trivially. It fails honestly now, and no
+    order reaches the broker."""
+    from src.models.audit_log import AuditLog
+
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(db_session_factory, strategy_id)
+    async with db_session_factory() as db:
+        await run_live_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=_BUY_AS_OF)
+
+    broker_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        broker_calls.append(request.url.path)
+        if request.url.path == "/quote":
+            return httpx.Response(200, json={"data": {}})  # no quote for the symbol
+        return httpx.Response(200, json={"data": {"order_id": "MUST_NOT_BE_PLACED"}})
+
+    async with db_session_factory() as db:
+        intent = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=_mock_adapter(handler),
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+
+    assert intent is not None
+    assert intent.status == "failed"
+    assert intent.resulting_order_id is None
+    assert broker_calls == ["/quote"], "nothing but the quote lookup may reach the broker"
+    async with db_session_factory() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(AuditLog).where(
+                        AuditLog.action == "live_order_intent.submission_failed",
+                        AuditLog.entity_id == str(intent.id),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1
+    assert "quote lookup failed" in rows[0].details["reason"]
+    assert "no usable quote for DEMOSTOCK" in rows[0].details["reason"]

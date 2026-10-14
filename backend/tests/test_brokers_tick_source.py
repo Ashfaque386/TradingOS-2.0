@@ -10,7 +10,12 @@ import pytest
 from cryptography.fernet import Fernet
 
 from src.brokers import tick_source as tick_source_module
-from src.brokers.base import BrokerAuthError, BrokerCredentials, BrokerRequestError
+from src.brokers.base import (
+    BrokerAuthError,
+    BrokerCredentials,
+    BrokerQuoteUnavailableError,
+    BrokerRequestError,
+)
 from src.brokers.tick_source import (
     BrokerQuoteTickSource,
     _RefreshingTickSource,
@@ -414,3 +419,22 @@ def test_reconnecting_the_broker_replaces_a_suspended_source(tmp_path, monkeypat
         assert isinstance(renewed, BrokerQuoteTickSource) and renewed._suspended_until is None
     finally:
         _reset_settings_and_store_caches()
+
+
+async def test_a_symbol_with_no_quote_gives_no_tick_and_does_not_suspend_polling():
+    """The broker answered fine but has nothing for this symbol: that used to come
+    back as a 0.0 price and be published as a real tick. It is a per-symbol
+    failure now -- and not a reason to stop asking about the other symbols."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params["i"])
+        return httpx.Response(200, json={"data": {}})
+
+    source = _zerodha_source(handler)
+
+    for _ in range(3):
+        with pytest.raises(BrokerQuoteUnavailableError):
+            await source.next_tick("NOSUCHSYMBOL")
+
+    assert calls == ["NOSUCHSYMBOL"] * 3  # every firing really asked; nothing suspended

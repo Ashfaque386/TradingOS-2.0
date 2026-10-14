@@ -56,6 +56,22 @@ class BrokerAuthError(BrokerRequestError):
     has already refused."""
 
 
+class BrokerQuoteUnavailableError(BrokerRequestError):
+    """The broker answered, but with no usable price for this symbol (no entry
+    for it, or a last price of 0). Raised instead of returning a quote priced
+    0.0: every consumer of `get_quote` takes `last_price` at face value -- the
+    paper-trading tick feed would read a 0.0 tick as a total price collapse and
+    stop out any open position, and a live order intent would be built with a
+    zero price and a zero position value. A `BrokerRequestError` (status 404,
+    "not found") so it never trips the circuit breaker, which reacts only to
+    outages."""
+
+    def __init__(self, broker: str, symbol: str):
+        self.broker = broker
+        self.symbol = symbol
+        super().__init__(404, f"{broker} returned no usable quote for {symbol}")
+
+
 _AUTH_REJECTED_STATUSES = frozenset({401, 403})
 
 

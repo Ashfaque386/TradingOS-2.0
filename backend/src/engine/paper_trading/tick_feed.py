@@ -135,13 +135,55 @@ class TickSourceUnavailableError(Exception):
     firing of the job that drives it."""
 
 
+_MAX_SYMBOLS_IN_ERROR = 5
+_MAX_REASON_CHARS = 120
+
+
+class TickPublishError(Exception):
+    """Some symbols' ticks could not be published this round; the rest were.
+    `failures` maps each failed symbol to its exception, `published` holds the
+    ticks that did go out. Raised only *after* every symbol has been tried, so
+    the job that drives `publish_ticks_once` still fails honestly (its run
+    history shows which symbols and why) without one bad symbol having starved
+    the ones after it."""
+
+    def __init__(self, failures: dict[str, Exception], published: list[Tick], total: int) -> None:
+        self.failures = failures
+        self.published = published
+        shown = list(failures.items())[:_MAX_SYMBOLS_IN_ERROR]
+        detail = "; ".join(
+            f"{symbol} ({type(exc).__name__}: {str(exc)[:_MAX_REASON_CHARS]})"
+            for symbol, exc in shown
+        )
+        more = len(failures) - len(shown)
+        if more > 0:
+            detail += f"; and {more} more"
+        super().__init__(f"tick publish failed for {len(failures)} of {total} symbols: {detail}")
+
+
 async def publish_ticks_once(redis: Redis, source: TickSource, symbols: list[str]) -> list[Tick]:
     """Publishes one tick per symbol -- the body of the APScheduler
     interval job driving whichever `TickSource` it was constructed with
-    (real broker-quote polling or this module's mock fallback)."""
-    ticks = []
+    (real broker-quote polling or this module's mock fallback).
+
+    Each symbol is attempted independently: a symbol the broker cannot quote
+    must not stop every symbol after it from getting its tick (it used to --
+    the first failure aborted the loop). If any failed, `TickPublishError` is
+    raised once all have been tried. `TickSourceUnavailableError` is different:
+    the whole source is down and says so, so it is re-raised at once, unwrapped.
+    """
+    ticks: list[Tick] = []
+    failures: dict[str, Exception] = {}
     for symbol in symbols:
-        tick = await source.next_tick(symbol)
-        await publish_tick(redis, tick)
+        try:
+            tick = await source.next_tick(symbol)
+            await publish_tick(redis, tick)
+        except TickSourceUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - isolating one symbol's failure from the rest
+            failures[symbol] = exc
+            continue
         ticks.append(tick)
+    if failures:
+        raise TickPublishError(failures, ticks, len(symbols)) from next(iter(failures.values()))
     return ticks
