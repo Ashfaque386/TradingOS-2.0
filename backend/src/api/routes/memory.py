@@ -206,10 +206,11 @@ async def query_memory(
     q: str = Query(min_length=1, max_length=MAX_TEXT_CHARS),
     kind: str | None = None,
     limit: int = Query(default=5, ge=1, le=MAX_QUERY_LIMIT),
+    min_score: float | None = Query(default=None, ge=-1.0, le=1.0),
     _current_user: User = Depends(require_role),
 ) -> list[MemoryHitResponse]:
     try:
-        hits = await service.query(q, kind=kind, limit=limit)
+        hits = await service.query(q, kind=kind, limit=limit, min_score=min_score)
     except (MemoryUnavailableError, MemoryValidationError, MemoryStoreError) as exc:
         raise _translate(exc) from exc
     return [

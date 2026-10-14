@@ -117,7 +117,11 @@ class QdrantMemoryStore:
             points=[qm.PointStruct(id=memory_id, vector=vector, payload={**payload, "text": text})],
         )
 
-    async def search(self, kind: str, vector: list[float], limit: int) -> list[MemoryHit]:
+    async def search(
+        self, kind: str, vector: list[float], limit: int, *, min_score: float | None = None
+    ) -> list[MemoryHit]:
+        """The `limit` nearest memories, best first. With `min_score`, only those at least
+        that similar (cosine, so -1..1): fewer than `limit` -- or none -- is a normal answer."""
         name = collection_name(kind)
         existing = await self._dimension(name)
         if existing is None:
@@ -127,7 +131,9 @@ class QdrantMemoryStore:
                 f"{kind} memory holds {existing}-dimension vectors but the query "
                 f"embedding has {len(vector)}"
             )
-        result = await self._client.query_points(name, query=vector, limit=limit, with_payload=True)
+        result = await self._client.query_points(
+            name, query=vector, limit=limit, with_payload=True, score_threshold=min_score
+        )
         hits: list[MemoryHit] = []
         for point in result.points:
             payload = dict(point.payload or {})

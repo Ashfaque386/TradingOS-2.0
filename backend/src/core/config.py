@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -90,6 +91,14 @@ class Settings(BaseSettings):
     memory_embedding_model: str = ""
     # How many prior lessons a pipeline run recalls into its prompts.
     memory_recall_limit: int = 3
+    # The least cosine similarity a lesson needs to be recalled into a prompt at all. Without
+    # a floor recall returns the nearest few lessons however unrelated, and the prompt says
+    # "lessons from earlier similar runs" about things that are not similar. Measured with
+    # nomic-embed-text: a lesson about the same kind of strategy scores 0.60-0.69, a loosely
+    # related one 0.44-0.52, an unrelated one 0.31-0.49, so 0.5 keeps the first two and drops
+    # the last. Other embedding models score on different scales (OpenAI's are lower across
+    # the board): re-tune this when MEMORY_EMBEDDING_MODEL changes. -1 disables the floor.
+    memory_recall_min_score: float = Field(default=0.5, ge=-1.0, le=1.0)
 
     # Strategy sandbox (src/engine/sandbox/, Build Spec §9) AND, as of
     # Phase 10, the real DuckDB + Parquet data lake root (src/data/lake.py)

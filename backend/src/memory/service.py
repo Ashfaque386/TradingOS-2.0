@@ -244,10 +244,16 @@ class MemoryService:
         return memory_id
 
     async def query(
-        self, text: str, *, kind: str | None = None, limit: int = 5
+        self,
+        text: str,
+        *,
+        kind: str | None = None,
+        limit: int = 5,
+        min_score: float | None = None,
     ) -> list[tuple[str, MemoryHit]]:
         """Similarity search; `kind=None` searches every collection and merges
-        by score. Returns (kind, hit) pairs, best first."""
+        by score. Returns (kind, hit) pairs, best first. With `min_score`, hits less
+        similar than that are left out (an empty list is a normal answer)."""
         if kind is not None:
             _check_kind(kind)
         cleaned = _check_text(text)
@@ -258,7 +264,9 @@ class MemoryService:
         merged: list[tuple[str, MemoryHit]] = []
         try:
             for k in kinds:
-                merged.extend((k, hit) for hit in await store.search(k, vector, limit))
+                merged.extend(
+                    (k, hit) for hit in await store.search(k, vector, limit, min_score=min_score)
+                )
         except MemoryStoreError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -282,20 +290,28 @@ class PipelineMemory:
     run recalls before it starts and records as it learns. Every method
     swallows failure -- a run proceeds with less context rather than failing."""
 
-    def __init__(self, service: MemoryService, *, recall_limit: int) -> None:
+    def __init__(
+        self, service: MemoryService, *, recall_limit: int, min_score: float | None = None
+    ) -> None:
         self._service = service
         self._recall_limit = recall_limit
+        self._min_score = min_score
 
     async def recall(self, objective: str) -> list[str]:
         if self._recall_limit <= 0:
             return []
         try:
             hits = await self._service.query(
-                objective, kind=_PIPELINE_KIND, limit=self._recall_limit
+                objective,
+                kind=_PIPELINE_KIND,
+                limit=self._recall_limit,
+                min_score=self._min_score,
             )
         except Exception as exc:  # noqa: BLE001 - see class docstring
             logger.info("memory.recall_skipped", reason=str(exc)[:200])
             return []
+        if not hits and self._min_score is not None:
+            logger.info("memory.recall_none_above_floor", min_score=self._min_score)
         return [hit.text for _, hit in hits]
 
     async def remember(self, text: str, metadata: dict[str, Any]) -> None:
@@ -318,4 +334,12 @@ def get_memory_service() -> MemoryService:
 
 
 def get_pipeline_memory(service: MemoryService) -> PipelineMemory:
-    return PipelineMemory(service, recall_limit=get_settings().memory_recall_limit)
+    settings = get_settings()
+    return PipelineMemory(
+        service,
+        recall_limit=settings.memory_recall_limit,
+        # -1 is the documented "no floor": nothing is less similar than that.
+        min_score=None
+        if settings.memory_recall_min_score <= -1.0
+        else settings.memory_recall_min_score,
+    )

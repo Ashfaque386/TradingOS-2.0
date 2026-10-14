@@ -816,3 +816,116 @@ async def test_resetting_settings_that_were_never_saved_is_a_200_that_is_not_aud
     async with db_session_factory() as db:
         rows = (await db.execute(select(AuditLog).where(AuditLog.action == action))).scalars().all()
     assert len(rows) == 1  # only the reset that dropped a saved choice
+
+
+# ---- the recall similarity floor ---------------------------------------------
+# Without a floor, recall returned the nearest few lessons however unrelated, and the
+# prompt then said "lessons from earlier similar runs" about things that are not similar.
+# (The bag-of-words test embedder makes similarity controllable: shared words, shared score.)
+
+
+async def test_the_store_leaves_out_hits_below_the_floor():
+    svc = _service()
+    await svc.remember("strategy", "momentum crossover strategy failed validation banned import")
+    await svc.remember("strategy", "weather forecast monsoon rainfall service subprocess")
+
+    everything = await svc.query("momentum crossover strategy", kind="strategy", limit=5)
+    floored = await svc.query(
+        "momentum crossover strategy", kind="strategy", limit=5, min_score=0.5
+    )
+
+    assert len(everything) == 2  # no floor: the unrelated one comes back too, just last
+    assert everything[0][1].score >= 0.5 > everything[1][1].score
+    assert [hit.text for _, hit in floored] == [everything[0][1].text]
+    assert all(hit.score >= 0.5 for _, hit in floored)
+
+
+async def test_a_floor_above_every_score_returns_nothing_not_an_error():
+    svc = _service()
+    await svc.remember("strategy", "momentum crossover strategy failed validation")
+
+    assert await svc.query("completely different words here", kind="strategy", min_score=0.99) == []
+
+
+async def test_a_floor_applies_to_every_kind_when_searching_all():
+    svc = _service()
+    await svc.remember("strategy", "momentum crossover lesson")
+    await svc.remember("news", "banana harvest report")
+
+    hits = await svc.query("momentum crossover lesson", min_score=0.5)
+
+    assert [k for k, _ in hits] == ["strategy"]
+
+
+async def test_pipeline_memory_recalls_only_lessons_that_clear_the_floor():
+    svc = _service()
+    await svc.remember("strategy", "momentum crossover strategy failed static validation")
+    await svc.remember("strategy", "weather forecast monsoon rainfall service subprocess")
+
+    with_floor = await PipelineMemory(svc, recall_limit=3, min_score=0.5).recall(
+        "momentum crossover strategy"
+    )
+    without = await PipelineMemory(svc, recall_limit=3).recall("momentum crossover strategy")
+
+    assert with_floor == ["momentum crossover strategy failed static validation"]
+    assert len(without) == 2  # unchanged when no floor is given
+
+
+async def test_pipeline_memory_says_so_when_nothing_clears_the_floor(monkeypatch):
+    from src.memory import service as service_module
+
+    events = []
+
+    class _Log:
+        def info(self, event, **kw):
+            events.append((event, kw))
+
+    monkeypatch.setattr(service_module, "logger", _Log())
+    svc = _service()
+    await svc.remember("strategy", "momentum crossover strategy failed static validation")
+
+    recalled = await PipelineMemory(svc, recall_limit=3, min_score=0.99).recall("unrelated words")
+
+    assert recalled == []
+    assert ("memory.recall_none_above_floor", {"min_score": 0.99}) in events
+
+
+def test_the_configured_floor_reaches_the_pipeline_and_minus_one_disables_it(monkeypatch):
+    from src.memory import service as service_module
+
+    def build(value: float):
+        monkeypatch.setattr(
+            service_module, "get_settings", lambda: _settings(memory_recall_min_score=value)
+        )
+        return service_module.get_pipeline_memory(_service())
+
+    assert build(0.62)._min_score == 0.62
+    assert build(-1.0)._min_score is None  # documented "no floor"
+    assert _settings().memory_recall_min_score == 0.5  # the measured default
+
+
+@pytest.mark.parametrize("bad", [1.5, -1.5])
+def test_the_floor_must_be_a_cosine_value(bad):
+    with pytest.raises(ValueError):
+        _settings(memory_recall_min_score=bad)
+
+
+async def test_the_query_endpoint_accepts_a_floor(client, make_user, memory_service):
+    admin = await _login(client, make_user, Role.SYSTEM_ADMINISTRATOR, "admin-floor@example.com")
+    await client.post(
+        "/api/v1/memory/strategy", json={"text": "momentum crossover lesson"}, headers=admin
+    )
+    await client.post(
+        "/api/v1/memory/strategy", json={"text": "banana harvest report"}, headers=admin
+    )
+    url = "/api/v1/memory/query"
+
+    everything = await client.get(url, params={"q": "momentum crossover"}, headers=admin)
+    floored = await client.get(
+        url, params={"q": "momentum crossover", "min_score": 0.5}, headers=admin
+    )
+    invalid = await client.get(url, params={"q": "x", "min_score": 2}, headers=admin)
+
+    assert len(everything.json()) == 2
+    assert [h["text"] for h in floored.json()] == ["momentum crossover lesson"]
+    assert invalid.status_code == 422
