@@ -20,6 +20,8 @@
 'use strict'
 
 const { spawn } = require('child_process')
+const fs = require('fs')
+const path = require('path')
 
 // One entry per service this stack publishes a host port for. `envVar` is
 // what docker-compose.yml's `${...}` substitution reads; `composeService`
@@ -59,9 +61,34 @@ const SERVICES = [
   },
 ]
 
+// Optional root certificate for image builds behind a TLS-intercepting antivirus/proxy (Norton
+// Web/Mail Shield, a corporate proxy): `pip`/`pnpm` inside the build then trust what that proxy
+// re-signs npm/PyPI with. docker-compose.yml passes it to the Dockerfiles as the `extra_ca` build
+// secret (never stored in an image layer). Taken from, in order: the EXTRA_CA_PEM environment
+// variable, the file EXTRA_CA_FILE names, or `.local/extra-ca.pem` (git-ignored). None of them set
+// is the normal case and changes nothing.
+function readExtraCa(env) {
+  if (env.EXTRA_CA_PEM) return env.EXTRA_CA_PEM
+  const file = env.EXTRA_CA_FILE || path.join(__dirname, '..', '.local', 'extra-ca.pem')
+  try {
+    const pem = fs.readFileSync(file, 'utf8').split(/\r?\n/).join('\n')
+    if (!pem.includes('BEGIN CERTIFICATE')) {
+      console.warn('[docker:up] ' + file + ' is not a PEM certificate - ignoring it')
+      return ''
+    }
+    console.log('[docker:up] build will also trust the certificate in ' + file)
+    return pem
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn('[docker:up] could not read ' + file + ': ' + err.message)
+    return ''
+  }
+}
+
 function runDockerComposeUp(ports, extraArgs) {
   return new Promise((resolve) => {
     const env = { ...process.env }
+    const extraCa = readExtraCa(env)
+    if (extraCa) env.EXTRA_CA_PEM = extraCa
     for (const service of SERVICES) {
       env[service.envVar] = String(ports[service.key])
     }

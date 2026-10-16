@@ -89,3 +89,6 @@ backend/data_lake_backups/
 # doc lives at docs/CLAUDE.md.
 /AGENTS.md
 /CLAUDE.md
+# Machine-specific build inputs (e.g. .local/extra-ca.pem: an antivirus/proxy root for image
+# builds, read by scripts/docker-up.js).
+/.local/
