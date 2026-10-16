@@ -180,7 +180,7 @@ def feed_unavailable_reason() -> str | None:
     broker, credentials = fingerprint
     if not credentials.access_token:
         return f"{broker} has keys saved but is not connected"
-    if credentials.token_status == "expired":
+    if credentials.token_status == "expired":  # nosec B105: a status label, not a secret
         return f"the {broker} token has expired"
     rejection = feed_health.get_rejection(broker)
     if rejection is not None:
