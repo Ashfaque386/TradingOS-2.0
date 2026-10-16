@@ -185,7 +185,7 @@ export default function PortfolioPage() {
         {summary && (
           <div className="orders-summary">
             <div className="summary-stat"><span>ACTIVE STRATEGIES</span><strong>{summary.active_strategy_count}</strong><small>paper/live-eligible/live</small></div>
-            <div className="summary-stat"><span>PAPER REALIZED P&amp;L TODAY</span><strong className={summary.paper_realized_pnl_today >= 0 ? 'gain' : 'loss'}>{summary.paper_realized_pnl_today.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong><small>{summary.paper_open_position_count} open paper position(s)</small></div>
+            <div className="summary-stat"><span>PAPER REALIZED P&amp;L TODAY</span><strong className={summary.paper_realized_pnl_today >= 0 ? 'gain' : 'loss'}>{summary.paper_realized_pnl_today.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong><small>{summary.paper_open_position_count} open paper position(s){summary.paper_unmanaged_position_count > 0 ? ` · ${summary.paper_unmanaged_position_count} unmanaged (subscription inactive)` : ''}</small></div>
             <div className="summary-stat"><span>LIVE POSITIONS</span><strong>{summary.live_position_count}</strong><small>open live position(s)</small></div>
             <div className="summary-stat">
               <span>BROKER MARGIN</span>

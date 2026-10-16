@@ -158,6 +158,21 @@ class TickSourceUnavailableError(Exception):
     firing of the job that drives it."""
 
 
+class UnavailableTickSource:
+    """The `TickSource` used when there is no real source and synthetic mode is off: every call
+    says so. Paper trading does not run on generated prices for real symbols -- the subscription
+    waits (the job reports it) until a broker is connected."""
+
+    def __init__(self, reason: str = "no broker is connected") -> None:
+        self.reason = reason
+
+    async def next_tick(self, symbol: str) -> Tick:
+        raise TickSourceUnavailableError(
+            f"{self.reason}; paper trading does not run on synthetic data "
+            "(connect a broker in Settings, or set PAPER_TRADING_SYNTHETIC=true for a demo)"
+        )
+
+
 _MAX_SYMBOLS_IN_ERROR = 5
 _MAX_REASON_CHARS = 120
 

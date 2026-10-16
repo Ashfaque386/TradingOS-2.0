@@ -328,10 +328,12 @@ export const getTodaysPaperPnl = () => apiGet<TodaysPaperPnl>('/api/v1/paper-tra
 
 export type UnrealizedPaperPnl = {
   as_of: string
-  price_source: 'real' | 'synthetic'
+  price_source: 'real' | 'synthetic' | 'none'
   unrealized_pnl: number | null
   positions_priced: number
   positions_unpriced: number
+  // open positions on an inactive subscription: nothing watches their stop-loss
+  unmanaged_positions: number
 }
 export const getUnrealizedPaperPnl = () =>
   apiGet<UnrealizedPaperPnl>('/api/v1/paper-trading/pnl/unrealized')
@@ -1001,6 +1003,7 @@ export type PortfolioSummary = {
   active_strategy_count: number
   paper_realized_pnl_today: number
   paper_open_position_count: number
+  paper_unmanaged_position_count: number
   live_position_count: number
   broker_configured: boolean
   broker_name: string | null

@@ -25,7 +25,11 @@ from src.brokers.tick_source import (
 from src.brokers.upstox import UpstoxAdapter
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.config import get_settings
-from src.engine.paper_trading.tick_feed import MockTickSource, TickSourceUnavailableError
+from src.engine.paper_trading.tick_feed import (
+    MockTickSource,
+    TickSourceUnavailableError,
+    UnavailableTickSource,
+)
 from src.security.secrets_store import SecretsStore, get_secrets_store
 
 
@@ -52,24 +56,72 @@ async def test_broker_quote_tick_source_returns_a_tick_from_the_adapters_quote()
     assert tick.timestamp_ms > 0
 
 
-def test_build_tick_source_falls_back_to_mock_when_no_key_configured(monkeypatch):
+def test_build_tick_source_is_unavailable_not_synthetic_when_no_key_configured(monkeypatch):
     monkeypatch.delenv("SECRETS_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("PAPER_TRADING_SYNTHETIC", raising=False)
     _reset_settings_and_store_caches()
     try:
         source = build_tick_source()
-        assert isinstance(source, MockTickSource)
+        assert isinstance(source, UnavailableTickSource)
+        assert not isinstance(source, MockTickSource)
     finally:
         _reset_settings_and_store_caches()
 
 
-def test_build_tick_source_falls_back_to_mock_when_no_credentials_stored(tmp_path, monkeypatch):
+def test_build_tick_source_is_unavailable_not_synthetic_when_no_credentials_stored(
+    tmp_path, monkeypatch
+):
     key = Fernet.generate_key().decode()
     monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
     monkeypatch.setenv("SECRETS_STORE_PATH", str(tmp_path / "secrets.enc"))
+    monkeypatch.delenv("PAPER_TRADING_SYNTHETIC", raising=False)
     _reset_settings_and_store_caches()
     try:
         source = build_tick_source()
-        assert isinstance(source, MockTickSource)
+        assert isinstance(source, UnavailableTickSource)
+    finally:
+        _reset_settings_and_store_caches()
+
+
+async def test_an_unavailable_source_refuses_every_symbol_and_says_why():
+    """Paper trading must not run on generated prices for real symbols: the tick job gets a clear,
+    unwrapped TickSourceUnavailableError (it is re-raised at once, not counted per symbol)."""
+    source = UnavailableTickSource()
+
+    with pytest.raises(TickSourceUnavailableError) as caught:
+        await source.next_tick("RELIANCE")
+
+    assert "no broker is connected" in str(caught.value)
+    assert "does not run on synthetic data" in str(caught.value)
+    assert "PAPER_TRADING_SYNTHETIC" in str(caught.value)  # and how a demo opts in
+
+
+@pytest.mark.parametrize("have_store", [False, True])
+def test_synthetic_mode_is_the_only_way_to_get_the_mock_source(tmp_path, monkeypatch, have_store):
+    if have_store:
+        monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        monkeypatch.setenv("SECRETS_STORE_PATH", str(tmp_path / "secrets.enc"))
+    else:
+        monkeypatch.delenv("SECRETS_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("PAPER_TRADING_SYNTHETIC", "true")
+    _reset_settings_and_store_caches()
+    try:
+        assert isinstance(build_tick_source(), MockTickSource)
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_synthetic_mode_does_not_override_a_connected_broker(tmp_path, monkeypatch):
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(tmp_path / "secrets.enc"))
+    monkeypatch.setenv("PAPER_TRADING_SYNTHETIC", "true")
+    _reset_settings_and_store_caches()
+    try:
+        SecretsStore(tmp_path / "secrets.enc", key).set_credentials(
+            "zerodha", BrokerCredentials(api_key="k", access_token="t")
+        )
+        assert isinstance(build_tick_source(), BrokerQuoteTickSource)  # real data still wins
     finally:
         _reset_settings_and_store_caches()
 
@@ -140,6 +192,7 @@ def test_refreshing_tick_source_reuses_the_same_instance_when_config_is_unchange
     every tick-publish firing. Proves the cached instance survives
     repeated calls when nothing about the broker config changed."""
     monkeypatch.delenv("SECRETS_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("PAPER_TRADING_SYNTHETIC", "true")  # the mock only exists in demo mode
     _reset_settings_and_store_caches()
     try:
         refreshing = _RefreshingTickSource()
@@ -160,11 +213,12 @@ def test_refreshing_tick_source_rebuilds_the_moment_a_broker_is_connected(tmp_pa
     store_path = tmp_path / "secrets.enc"
     monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
     monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    monkeypatch.delenv("PAPER_TRADING_SYNTHETIC", raising=False)
     _reset_settings_and_store_caches()
     try:
         refreshing = _RefreshingTickSource()
         before = refreshing()
-        assert isinstance(before, MockTickSource)
+        assert isinstance(before, UnavailableTickSource)
 
         store = SecretsStore(store_path, key)
         store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
@@ -208,7 +262,7 @@ def test_refreshing_tick_source_rebuilds_when_the_same_brokers_credentials_chang
         _reset_settings_and_store_caches()
 
 
-def test_refreshing_tick_source_falls_back_to_mock_once_a_broker_is_disconnected(
+def test_refreshing_tick_source_halts_rather_than_going_synthetic_once_a_broker_is_disconnected(
     tmp_path, monkeypatch
 ):
     """The symmetric case: disconnecting a broker must also take effect
@@ -217,6 +271,7 @@ def test_refreshing_tick_source_falls_back_to_mock_once_a_broker_is_disconnected
     store_path = tmp_path / "secrets.enc"
     monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
     monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    monkeypatch.delenv("PAPER_TRADING_SYNTHETIC", raising=False)
     _reset_settings_and_store_caches()
     try:
         store = SecretsStore(store_path, key)
@@ -231,7 +286,7 @@ def test_refreshing_tick_source_falls_back_to_mock_once_a_broker_is_disconnected
         get_secrets_store.cache_clear()
 
         after = refreshing()
-        assert isinstance(after, MockTickSource)
+        assert isinstance(after, UnavailableTickSource)  # disconnected: halted, not synthetic
     finally:
         _reset_settings_and_store_caches()
 

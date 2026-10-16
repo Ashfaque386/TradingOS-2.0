@@ -8,9 +8,11 @@ advancing a synthetic random walk.
 implementation actually runs: it delegates credential lookup and adapter
 construction to `src.brokers.factory.build_configured_adapter` (shared
 with Phase 9's live-order submission path) and, if a broker is
-configured, wraps it in `BrokerQuoteTickSource`; otherwise it falls back
-to `MockTickSource`. Swapping in real credentials later (via the
-broker-credentials API) changes this function's output with no change at
+configured, wraps it in `BrokerQuoteTickSource`; otherwise it returns an
+`UnavailableTickSource` that says so on every call -- it no longer falls back to
+`MockTickSource`, which would have paper-traded real symbols on a random walk. The mock
+is only used when `PAPER_TRADING_SYNTHETIC` is set (demo/tests). Swapping in real credentials later
+(via the broker-credentials API) changes this function's output with no change at
 any call site, same Protocol-swap posture as every other provider in
 `src.engine.paper_trading`.
 
@@ -42,11 +44,13 @@ import structlog
 from src.brokers import feed_health
 from src.brokers.base import BrokerAdapter, BrokerAuthError, BrokerCredentials
 from src.brokers.factory import KNOWN_BROKERS, build_configured_adapter
+from src.core.config import get_settings
 from src.engine.paper_trading.tick_feed import (
     MockTickSource,
     Tick,
     TickSource,
     TickSourceUnavailableError,
+    UnavailableTickSource,
 )
 from src.models.data_source import DataSource
 from src.security.secrets_store import SecretsStoreError, get_secrets_store
@@ -116,8 +120,13 @@ class BrokerQuoteTickSource:
 def build_tick_source() -> TickSource:
     adapter = build_configured_adapter(sandbox=False)
     if adapter is None:
-        logger.info("tick_source.selected", source="mock", reason="no broker configured")
-        return MockTickSource()
+        if get_settings().paper_trading_synthetic:
+            logger.info(
+                "tick_source.selected", source="mock", reason="no broker; synthetic mode is on"
+            )
+            return MockTickSource()
+        logger.info("tick_source.selected", source="unavailable", reason="no broker configured")
+        return UnavailableTickSource()
     logger.info("tick_source.selected", source="broker_quotes", adapter=type(adapter).__name__)
     return BrokerQuoteTickSource(adapter)
 

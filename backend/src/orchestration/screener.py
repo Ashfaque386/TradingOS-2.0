@@ -23,7 +23,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.engine.paper_trading.price_data import PriceDataProvider
+from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
 from src.engine.sandbox.process_runtime import RestrictedProcessSandboxRuntime
 from src.models.instrument import Instrument
 from src.models.strategy import Strategy
@@ -80,9 +80,22 @@ async def screen_instruments(
 
     results: list[ScreenResult] = []
     for instrument in instruments:
-        bars = price_provider.daily_bars(
-            instrument.symbol, as_of=as_of, lookback_days=filters.lookback_days
-        )
+        try:
+            bars = price_provider.daily_bars(
+                instrument.symbol, as_of=as_of, lookback_days=filters.lookback_days
+            )
+        except InsufficientHistoryError:
+            results.append(
+                ScreenResult(
+                    instrument.symbol,
+                    0.0,
+                    0.0,
+                    0.0,
+                    False,
+                    ("not enough real price history ingested yet",),
+                )
+            )
+            continue
         if bars.empty:
             results.append(
                 ScreenResult(instrument.symbol, 0.0, 0.0, 0.0, False, ("no price data",))

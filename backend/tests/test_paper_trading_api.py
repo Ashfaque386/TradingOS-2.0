@@ -10,8 +10,20 @@ from httpx import AsyncClient
 
 from src.core.redis_client import get_redis
 from src.core.roles import Role
+from src.data.price_provider import get_signal_price_provider
+from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.paper_trading.tick_feed import Tick, publish_tick, tick_stream_key
 from src.main import app
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_signal_prices():
+    """These tests drive the signal -> tick -> fill cycle through the manual endpoints and rely on
+    the known default-seeded series. The real endpoints read the real lake and refuse to invent
+    bars, so the dependency is replaced by the explicit synthetic provider -- for this file only."""
+    app.dependency_overrides[get_signal_price_provider] = lambda: FakeDailyPriceProvider()
+    yield
+    app.dependency_overrides.pop(get_signal_price_provider, None)
 
 
 @pytest.fixture(autouse=True)
@@ -285,11 +297,10 @@ async def test_unrealized_pnl_endpoint_is_zero_with_no_open_positions(client, ma
     assert body["unrealized_pnl"] == 0.0
     assert body["positions_priced"] == 0
     assert body["positions_unpriced"] == 0
-    # This sandbox has no broker credentials configured -- see Root Cause
-    # 1 of the Settings-fix pass earlier in this project's history --
-    # so the live TickSource is genuinely MockTickSource, not a fabricated
-    # label.
-    assert body["price_source"] == "synthetic"
+    # No broker credentials are configured and synthetic mode is off, so nothing is feeding
+    # prices: the label says "none", not "synthetic" (no generated feed exists any more).
+    assert body["price_source"] == "none"
+    assert body["unmanaged_positions"] == 0
 
 
 async def test_unrealized_pnl_endpoint_marks_an_open_position_against_the_latest_published_tick(
@@ -355,7 +366,7 @@ async def test_unrealized_pnl_endpoint_marks_an_open_position_against_the_latest
     body = resp.json()
     assert body["positions_priced"] == 1
     assert body["positions_unpriced"] == 0
-    assert body["price_source"] == "synthetic"
+    assert body["price_source"] == "none"  # no broker, synthetic off: the tick above was injected
     assert body["unrealized_pnl"] == pytest.approx((current_price - avg_cost) * quantity)
 
     await redis_client.delete(tick_stream_key(symbol))

@@ -8,6 +8,7 @@ runs itself without either endpoint ever being called.
 
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,12 +28,13 @@ from src.api.schemas import (
     UnrealizedPaperPnlResponse,
 )
 from src.brokers.tick_source import is_broker_configured
+from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.core.redis_client import get_redis
+from src.data.price_provider import DataLakePriceProvider, get_signal_price_provider
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
-from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.paper_trading.tick_feed import get_latest_tick
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.models.daily_signal import DailySignal
@@ -69,11 +71,9 @@ register_policy(
     "POST", "/api/v1/paper-trading/subscriptions/{subscription_id}/tick", roles=_OPERATOR_ROLES
 )
 
-# Module-level honest-stub providers, same instances the scheduler wires up
-# in src.main's lifespan -- these manual-trigger endpoints exercise the
-# real engine against the real (if fake-data-backed) pipeline, not a
-# separate mocked-out demo path.
-_PRICE_PROVIDER = FakeDailyPriceProvider()
+# Module-level stand-ins for the order book and regulatory table, the same kind the scheduler
+# wires up in src.main's lifespan. (The daily-signal price provider is a dependency --
+# `get_signal_price_provider` -- so a manual run reads the real lake, never generated bars.)
 _ORDER_BOOK_PROVIDER = MockOrderBookProvider()
 _REGULATORY_PROVIDER = ReferenceTableRegulatoryDataProvider()
 
@@ -138,6 +138,12 @@ async def todays_paper_pnl_endpoint(
     )
 
 
+def _price_source() -> Literal["real", "synthetic", "none"]:
+    if is_broker_configured():
+        return "real"
+    return "synthetic" if get_settings().paper_trading_synthetic else "none"
+
+
 @router.get("/pnl/unrealized")
 async def unrealized_paper_pnl_endpoint(
     db: AsyncSession = Depends(get_db),
@@ -153,8 +159,16 @@ async def unrealized_paper_pnl_endpoint(
     the two are never blended into one unlabeled figure. Not date-scoped,
     unlike /pnl/today: an open position may have been opened on an
     earlier day and is still marked as of now."""
-    result = await db.execute(select(PaperPosition).where(PaperPosition.quantity != 0))
-    open_positions = result.scalars().all()
+    result = await db.execute(
+        select(PaperPosition, PaperTradingSubscription.is_active)
+        .join(
+            PaperTradingSubscription, PaperPosition.subscription_id == PaperTradingSubscription.id
+        )
+        .where(PaperPosition.quantity != 0)
+    )
+    rows = result.all()
+    open_positions = [position for position, _ in rows]
+    unmanaged_positions = sum(1 for _, is_active in rows if not is_active)
 
     positions_priced = 0
     positions_unpriced = 0
@@ -176,10 +190,11 @@ async def unrealized_paper_pnl_endpoint(
 
     return UnrealizedPaperPnlResponse(
         as_of=datetime.now(UTC).isoformat(),
-        price_source="real" if is_broker_configured() else "synthetic",
+        price_source=_price_source(),
         unrealized_pnl=unrealized_pnl,
         positions_priced=positions_priced,
         positions_unpriced=positions_unpriced,
+        unmanaged_positions=unmanaged_positions,
     )
 
 
@@ -279,9 +294,10 @@ async def run_daily_signal_endpoint(
     body: RunDailySignalRequest,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
+    price_provider: DataLakePriceProvider = Depends(get_signal_price_provider),
 ) -> list[DailySignalResponse]:
     as_of = pd.Timestamp(body.as_of) if body.as_of else pd.Timestamp.now().normalize()
-    signals = await run_daily_signal_generation(db, price_provider=_PRICE_PROVIDER, as_of=as_of)
+    signals = await run_daily_signal_generation(db, price_provider=price_provider, as_of=as_of)
     return [
         DailySignalResponse(
             id=s.id,

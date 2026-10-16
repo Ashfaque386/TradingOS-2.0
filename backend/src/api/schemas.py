@@ -380,6 +380,8 @@ class PortfolioSummaryResponse(BaseModel):
     active_strategy_count: int
     paper_realized_pnl_today: float
     paper_open_position_count: int
+    # How many of those sit on an inactive subscription (no stop-loss, no exits).
+    paper_unmanaged_position_count: int = 0
     live_position_count: int
     broker_configured: bool
     broker_name: str | None
@@ -655,10 +657,14 @@ class UnrealizedPaperPnlResponse(BaseModel):
     position."""
 
     as_of: str
-    price_source: Literal["real", "synthetic"]
+    # "none": no broker is connected and synthetic mode is off, so nothing is feeding prices
+    # (any last tick in the stream is stale, and old ones may be synthetic).
+    price_source: Literal["real", "synthetic", "none"]
     unrealized_pnl: float | None
     positions_priced: int
     positions_unpriced: int
+    # Open positions whose subscription is inactive: nothing is watching their stop-loss.
+    unmanaged_positions: int = 0
 
 
 class DailySignalResponse(BaseModel):

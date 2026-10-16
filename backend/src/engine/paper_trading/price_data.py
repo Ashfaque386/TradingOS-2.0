@@ -35,6 +35,22 @@ _SERIES_START = pd.Timestamp("2020-01-01")
 _SERIES_END = pd.Timestamp("2035-12-31")
 
 
+class InsufficientHistoryError(Exception):
+    """There is not enough *real* history for this symbol to drive a signal. Raised instead of
+    quietly substituting generated bars: a subscription on a real symbol used to get its signals
+    from a random walk while its ticks came from the market, i.e. trades driven by fiction.
+    Callers skip the subscription and say why (`awaiting_history`); they never invent bars."""
+
+    def __init__(self, symbol: str, *, have: int, need: int):
+        self.symbol = symbol
+        self.have = have
+        self.need = need
+        super().__init__(
+            f"{symbol}: {have} real daily bar(s) available, at least {need} needed "
+            "(history has not been ingested yet)"
+        )
+
+
 class PriceDataProvider(Protocol):
     def daily_bars(self, symbol: str, *, as_of: pd.Timestamp, lookback_days: int) -> pd.DataFrame:
         """Returns an OHLCV DataFrame (columns open/high/low/close/volume,

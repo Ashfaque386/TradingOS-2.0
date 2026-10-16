@@ -16,10 +16,9 @@ from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
 from src.core.security import warn_if_signing_key_weak
-from src.data.price_provider import DataLakePriceProvider
+from src.data.price_provider import build_signal_price_provider
 from src.data.providers import FakeMarketDataProvider
 from src.engine.paper_trading.order_book import MockOrderBookProvider
-from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
@@ -112,9 +111,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     # Market Data & Data Lake (Build Spec §14) -- started before paper/live
     # trading below since both now read from the real ingested lake
-    # (data_lake_price_provider), falling back per-symbol to the same
-    # synthetic FakeDailyPriceProvider used pre-Phase-10 for any symbol
-    # not yet ingested.
+    # (data_lake_price_provider). A symbol with too little ingested history is
+    # skipped ("awaiting history"), never filled in with generated bars -- unless
+    # PAPER_TRADING_SYNTHETIC is set (demo/tests).
     data_lake_root = Path(settings.data_lake_path)
     market_data_scheduler = start_market_data_scheduler(
         AsyncSessionLocal,
@@ -122,8 +121,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         root=data_lake_root,
         backup_root=Path(settings.data_lake_backup_path),
     )
-    data_lake_price_provider = DataLakePriceProvider(
-        root=data_lake_root, fallback=FakeDailyPriceProvider()
+    data_lake_price_provider = build_signal_price_provider(
+        data_lake_root, synthetic=settings.paper_trading_synthetic
     )
 
     # Autonomous Paper Trading Engine (Build Spec §11) -- the mock L2 depth
@@ -133,7 +132,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # (data_lake_price_provider), not a permanent fake. The tick source is
     # no longer a permanent mock as of Phase 8: build_tick_source() polls
     # real broker quotes when credentials are configured in the secrets
-    # store, and falls back to the Phase 7 mock feed otherwise. Passed as
+    # store; with none it is an UnavailableTickSource (the subscription waits),
+    # not the mock feed, unless PAPER_TRADING_SYNTHETIC is set. Passed as
     # a factory (get_tick_source itself, not get_tick_source()) so the
     # tick-publish job re-resolves it on every firing -- a broker
     # connected or disconnected later via Settings now takes effect on

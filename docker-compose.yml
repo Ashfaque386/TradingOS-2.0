@@ -17,6 +17,9 @@ services:
       ENV: ${ENV:-development}
       # Optional extra root for the API's outbound HTTPS (see the entrypoint); empty = none.
       EXTRA_CA_PEM: ${EXTRA_CA_PEM:-}
+      # Paper trading runs on real market data only. true = generated demo data (never for a
+      # session whose results are meant to be believed); see src/core/config.py.
+      PAPER_TRADING_SYNTHETIC: ${PAPER_TRADING_SYNTHETIC:-false}
       POSTGRES_USER: ${POSTGRES_USER:-tradingos}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradingos}
       POSTGRES_DB: ${POSTGRES_DB:-tradingos}

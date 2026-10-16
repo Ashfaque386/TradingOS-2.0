@@ -36,7 +36,7 @@ from src.brokers.base import BrokerAdapter
 from src.brokers.factory import build_configured_adapter
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
-from src.engine.paper_trading.price_data import FakeDailyPriceProvider
+from src.data.price_provider import DataLakePriceProvider, get_signal_price_provider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.live_order_intent import LiveOrderIntent
@@ -85,9 +85,9 @@ register_policy(
     roles=_OPERATOR_ROLES,
 )
 
-# Module-level honest-stub providers, same instances used by
-# src.orchestration.live_trading_scheduler in src.main's lifespan.
-_PRICE_PROVIDER = FakeDailyPriceProvider()
+# Module-level honest-stub provider, same kind used by
+# src.orchestration.live_trading_scheduler in src.main's lifespan. (The daily-signal price
+# provider is a dependency -- `get_signal_price_provider` -- so it is the real lake, not a fake.)
 _REGULATORY_PROVIDER = ReferenceTableRegulatoryDataProvider()
 
 
@@ -179,11 +179,10 @@ async def run_daily_signal_endpoint(
     body: RunDailySignalRequest,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
+    price_provider: DataLakePriceProvider = Depends(get_signal_price_provider),
 ) -> list[LiveTradingSubscriptionResponse]:
     as_of = pd.Timestamp(body.as_of) if body.as_of else pd.Timestamp.now().normalize()
-    updated = await run_live_daily_signal_generation(
-        db, price_provider=_PRICE_PROVIDER, as_of=as_of
-    )
+    updated = await run_live_daily_signal_generation(db, price_provider=price_provider, as_of=as_of)
     return [_subscription_response(s) for s in updated]
 
 

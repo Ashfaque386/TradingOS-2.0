@@ -40,7 +40,7 @@ from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signal
 from src.engine.paper_trading.daily_signal import detect_todays_signal
 from src.engine.paper_trading.order_book import FillResult, OrderBookProvider, Side, simulate_fill
 from src.engine.paper_trading.position_ledger import Position, apply_fill
-from src.engine.paper_trading.price_data import PriceDataProvider
+from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
 from src.engine.paper_trading.stop_loss import check_universal_stop_loss
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
@@ -103,9 +103,20 @@ async def run_daily_signal_generation(
 
     created: list[DailySignal] = []
     for subscription in subscriptions:
-        bars = price_provider.daily_bars(
-            subscription.symbol, as_of=pd.Timestamp(as_of), lookback_days=DAILY_LOOKBACK_DAYS
-        )
+        try:
+            bars = price_provider.daily_bars(
+                subscription.symbol, as_of=pd.Timestamp(as_of), lookback_days=DAILY_LOOKBACK_DAYS
+            )
+        except InsufficientHistoryError as exc:
+            # Never substitute generated bars: this subscription waits for real history.
+            logger.warning(
+                "paper_trading.signal_skipped_awaiting_history",
+                subscription_id=str(subscription.id),
+                symbol=subscription.symbol,
+                have=exc.have,
+                need=exc.need,
+            )
+            continue
         # A real DB CHECK constraint (ck_paper_trading_subscriptions_builtin_strategy)
         # already restricts this column to exactly these two literal values --
         # the Mapped column itself is plain `str` since SQLAlchemy has no way

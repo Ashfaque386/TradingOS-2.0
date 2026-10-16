@@ -88,8 +88,11 @@ You need, running locally (not via Docker):
    SECRETS_ENCRYPTION_KEY=<output of: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"> \
    SECRETS_STORE_PATH=secrets/e2e_broker_credentials.enc \
    API_RATE_LIMIT_PER_MINUTE=100000 \
+   PAPER_TRADING_SYNTHETIC=true \
      .venv/bin/python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
    ```
+   `PAPER_TRADING_SYNTHETIC=true` is test-only: paper and live trading normally refuse to run
+   on generated prices or history for a symbol, and these specs use demo symbols.
 4. **The frontend**, on port 3010 (matches `playwright.config.ts`'s
    default `baseURL`; override with `E2E_BASE_URL` if you use a different
    port):

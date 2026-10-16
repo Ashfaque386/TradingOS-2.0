@@ -8,12 +8,15 @@ src/api/routes/live_trading.py's module docstring.
 """
 
 import httpx
+import pytest
 from httpx import AsyncClient
 
 from src.api.routes.live_trading import get_live_broker_adapter
 from src.brokers.base import BrokerCredentials
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.roles import Role
+from src.data.price_provider import get_signal_price_provider
+from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.main import app
 
 
@@ -25,6 +28,16 @@ async def _login(client: AsyncClient, email: str, password: str) -> str:
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_signal_prices():
+    """The manual daily-signal endpoint reads the real lake and refuses to invent bars; this
+    file's cycle test needs the known default-seeded series, so the dependency is replaced by the
+    explicit synthetic provider -- for this file only."""
+    app.dependency_overrides[get_signal_price_provider] = lambda: FakeDailyPriceProvider()
+    yield
+    app.dependency_overrides.pop(get_signal_price_provider, None)
 
 
 def _mock_broker_handler(price: float = 106.5, order_id: str = "LIVE_API_OID"):

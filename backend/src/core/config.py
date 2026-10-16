@@ -172,6 +172,12 @@ class Settings(BaseSettings):
     # frontend's published port, since this backend's own /settings 404s.
     frontend_base_url: str | None = None
 
+    # Paper trading runs on REAL market data only. With this off (the default) a missing broker
+    # or too little ingested history halts the affected subscription ("awaiting data") instead of
+    # quietly trading on a random walk. On, it restores the old generated-data fallbacks -- for
+    # demos and the automated tests, never for a session whose results are meant to be believed.
+    paper_trading_synthetic: bool = False
+
     # LLM provider credentials (Settings redesign): a sibling encrypted
     # store to secrets_store_path above, same Fernet key, same
     # write-only/never-logged contract -- kept as its own file rather than

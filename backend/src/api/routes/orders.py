@@ -132,6 +132,9 @@ class PositionByStrategyResponse(BaseModel):
     quantity: int
     avg_cost: float
     realized_pnl: float
+    # False for a paper position whose subscription is inactive: nothing is watching its
+    # stop-loss or acting on signals for it. (Live positions are always managed.)
+    managed: bool = True
 
 
 @router.get("/positions")
@@ -157,7 +160,7 @@ async def list_positions_by_strategy_endpoint(
     ).all()
     paper_rows = (
         await db.execute(
-            select(PaperPosition, Strategy.id, Strategy.name)
+            select(PaperPosition, Strategy.id, Strategy.name, PaperTradingSubscription.is_active)
             .join(
                 PaperTradingSubscription,
                 PaperPosition.subscription_id == PaperTradingSubscription.id,
@@ -192,7 +195,8 @@ async def list_positions_by_strategy_endpoint(
             quantity=position.quantity,
             avg_cost=position.avg_cost,
             realized_pnl=position.realized_pnl,
+            managed=is_active,
         )
-        for position, strategy_id, name in paper_rows
+        for position, strategy_id, name, is_active in paper_rows
     )
     return positions

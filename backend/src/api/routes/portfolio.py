@@ -176,6 +176,16 @@ async def portfolio_summary_endpoint(
     paper_open_position_count = (
         await db.execute(select(func.count(PaperPosition.id)).where(PaperPosition.quantity != 0))
     ).scalar_one()
+    paper_unmanaged_position_count = (
+        await db.execute(
+            select(func.count(PaperPosition.id))
+            .join(
+                PaperTradingSubscription,
+                PaperPosition.subscription_id == PaperTradingSubscription.id,
+            )
+            .where(PaperPosition.quantity != 0, PaperTradingSubscription.is_active.is_(False))
+        )
+    ).scalar_one()
 
     live_position_count = (
         await db.execute(select(func.count(LivePosition.id)).where(LivePosition.quantity != 0))
@@ -196,6 +206,7 @@ async def portfolio_summary_endpoint(
         active_strategy_count=active_strategy_count,
         paper_realized_pnl_today=float(paper_realized_pnl_today),
         paper_open_position_count=paper_open_position_count,
+        paper_unmanaged_position_count=paper_unmanaged_position_count,
         live_position_count=live_position_count,
         broker_configured=adapter is not None,
         broker_name=adapter.broker_name if adapter is not None else None,
