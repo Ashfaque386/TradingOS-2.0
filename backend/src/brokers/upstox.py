@@ -49,6 +49,7 @@ from src.brokers.base import (
     broker_request_error,
     broker_unreachable,
 )
+from src.brokers.upstox_instruments import InstrumentResolver, get_instruments
 from src.engine.risk.circuit_breaker import BrokerServerError
 
 PRODUCTION_BASE_URL = "https://api.upstox.com/v2"
@@ -67,7 +68,11 @@ class UpstoxAdapter:
         sandbox: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        instruments: InstrumentResolver | None = None,
     ):
+        # Symbol -> `instrument_key` (Upstox takes keys like NSE_EQ|INE009A01021, never `INFY`);
+        # the shared directory by default, a stub in tests.
+        self._instruments = instruments or get_instruments()
         self._credentials = credentials
         self._base_url = SANDBOX_BASE_URL if sandbox else PRODUCTION_BASE_URL
         self.pointed_at_sandbox = sandbox
@@ -117,8 +122,16 @@ class UpstoxAdapter:
             payload["price"] = 0
         return payload
 
-    async def place_order(self, order: OrderRequest) -> BrokerOrderResult:
+    async def prepare_order_payload(self, order: OrderRequest) -> dict[str, Any]:
+        """The payload `place_order` actually sends: `build_order_payload` (synchronous and offline,
+        so it can only carry the symbol) with the symbol swapped for its instrument key. Shadow
+        Mode records this one, so a dry run's stored payload is what the sandbox really received."""
         payload = self.build_order_payload(order)
+        payload["instrument_token"] = await self._instruments.resolve(order.symbol)
+        return payload
+
+    async def place_order(self, order: OrderRequest) -> BrokerOrderResult:
+        payload = await self.prepare_order_payload(order)
         data = await self._request("POST", "/order/place", json=payload)
         order_id = str(data.get("data", {}).get("order_id", ""))
         return BrokerOrderResult(broker_order_id=order_id, status="submitted", raw=data)
@@ -178,20 +191,22 @@ class UpstoxAdapter:
         return positions
 
     async def get_quote(self, symbol: str) -> BrokerQuote:
-        # Upstox's quotes endpoint takes `instrument_key` (e.g. "NSE_EQ|INE848E01016"); this
-        # sent `symbol`. Each row of the response carries the `instrument_token` it answers
-        # for, which is what a row is matched on -- the key the response object itself uses is
-        # not documented, so a few forms are tried rather than one guessed.
-        data = await self._request("GET", "/market-quote/quotes", params={"instrument_key": symbol})
+        # Upstox's quotes endpoint takes `instrument_key` (e.g. "NSE_EQ|INE848E01016"), not the
+        # trading symbol -- a bare `INFY` is refused (UDAPI1087, seen against a live token). Each
+        # row of the response carries the `instrument_token` it answers for, which is what a row
+        # is matched on -- the key the response object itself uses is not documented, so a few
+        # forms are tried rather than one guessed.
+        key = await self._instruments.resolve(symbol)
+        data = await self._request("GET", "/market-quote/quotes", params={"instrument_key": key})
         rows = data.get("data", {})
         row = (
-            rows.get(symbol)
-            or rows.get(symbol.replace("|", ":"))
+            rows.get(key)
+            or rows.get(key.replace("|", ":"))
             or next(
                 (
                     r
                     for r in rows.values()
-                    if isinstance(r, dict) and r.get("instrument_token") == symbol
+                    if isinstance(r, dict) and r.get("instrument_token") == key
                 ),
                 {},
             )
@@ -212,7 +227,12 @@ class UpstoxAdapter:
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         data = await self._request(
-            "GET", "/option/chain", params={"instrument_key": underlying, "expiry_date": expiry}
+            "GET",
+            "/option/chain",
+            params={
+                "instrument_key": await self._instruments.resolve(underlying),
+                "expiry_date": expiry,
+            },
         )
         entries = []
         for row in data.get("data", []):
@@ -238,7 +258,11 @@ class UpstoxAdapter:
         return entries
 
     async def get_expiries(self, underlying: str) -> list[str]:
-        data = await self._request("GET", "/option/contract", params={"instrument_key": underlying})
+        data = await self._request(
+            "GET",
+            "/option/contract",
+            params={"instrument_key": await self._instruments.resolve(underlying)},
+        )
         expiries: list[str] = []
         for row in data.get("data", []):
             expiry = row.get("expiry")

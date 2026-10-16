@@ -283,6 +283,14 @@ def _zerodha_source(handler, clock=None, retry=600.0):
     return BrokerQuoteTickSource(adapter, retry_after_seconds=retry, clock=clock or _Clock())
 
 
+class _FixedInstruments:
+    """The Upstox instrument directory would download a ~100 MB file; these tests are about the
+    auth error, not the symbol lookup."""
+
+    async def resolve(self, symbol: str) -> str:
+        return "NSE_EQ|INE009A01021"
+
+
 @pytest.mark.parametrize("status", [401, 403])
 async def test_both_brokers_report_a_rejected_token_as_an_auth_error(status):
     handler = _Counting(status)
@@ -290,7 +298,9 @@ async def test_both_brokers_report_a_rejected_token_as_an_auth_error(status):
         BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
     )
     upstox = UpstoxAdapter(
-        BrokerCredentials(api_key="k", access_token="t"), transport=httpx.MockTransport(handler)
+        BrokerCredentials(api_key="k", access_token="t"),
+        transport=httpx.MockTransport(handler),
+        instruments=_FixedInstruments(),
     )
 
     for adapter in (zerodha, upstox):

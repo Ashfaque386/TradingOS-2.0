@@ -7,6 +7,8 @@ and that `has_sandbox` is a fixed broker-level capability flag,
 independent of which URL a given instance is pointed at.
 """
 
+import json
+
 import httpx
 import pytest
 
@@ -19,13 +21,38 @@ from src.brokers.base import (
     OrderSide,
 )
 from src.brokers.upstox import PRODUCTION_BASE_URL, SANDBOX_BASE_URL, UpstoxAdapter
+from src.brokers.upstox_instruments import UpstoxInstrumentNotFoundError
 from src.engine.risk.circuit_breaker import BrokerServerError
 
 _CREDENTIALS = BrokerCredentials(api_key="test-key", access_token="test-token")
+INFY_KEY = "NSE_EQ|INE009A01021"
 
 
-def _adapter(handler, *, sandbox: bool = False) -> UpstoxAdapter:
-    return UpstoxAdapter(_CREDENTIALS, sandbox=sandbox, transport=httpx.MockTransport(handler))
+class _StubInstruments:
+    """Stands in for the downloaded instrument master: the real one would fetch a ~100 MB file
+    from assets.upstox.com, which these tests must never do. Mirrors its one rule -- a string that
+    is already a key passes through -- and records what was asked."""
+
+    def __init__(self, mapping: dict[str, str] | None = None):
+        self.mapping = {"INFY": INFY_KEY, "NIFTY": "NSE_INDEX|Nifty 50"} | (mapping or {})
+        self.asked: list[str] = []
+
+    async def resolve(self, symbol: str) -> str:
+        self.asked.append(symbol)
+        if "|" in symbol:
+            return symbol
+        if symbol not in self.mapping:
+            raise UpstoxInstrumentNotFoundError(symbol)
+        return self.mapping[symbol]
+
+
+def _adapter(handler, *, sandbox: bool = False, instruments=None) -> UpstoxAdapter:
+    return UpstoxAdapter(
+        _CREDENTIALS,
+        sandbox=sandbox,
+        transport=httpx.MockTransport(handler),
+        instruments=instruments or _StubInstruments(),
+    )
 
 
 def test_broker_identity_and_has_sandbox_is_a_capability_flag():
@@ -76,7 +103,7 @@ async def test_place_order_5xx_raises_broker_server_error():
 
 async def test_place_order_4xx_raises_broker_request_error():
     adapter = _adapter(lambda request: httpx.Response(422, text="invalid instrument_token"))
-    order = OrderRequest(symbol="BOGUS", side=OrderSide.BUY, quantity=10)
+    order = OrderRequest(symbol="NSE_EQ|BOGUS", side=OrderSide.BUY, quantity=10)
     with pytest.raises(BrokerRequestError) as exc_info:
         await adapter.place_order(order)
     assert exc_info.value.status_code == 422
@@ -253,9 +280,9 @@ async def test_get_expiries_deduplicates_and_sorts():
     [
         {"data": {}},  # no entry for the symbol at all
         {"data": {"OTHER": {"last_price": 100.0}}},  # an entry, but for another symbol
-        {"data": {"INFY": {"last_price": 0}}},  # the broker's own zero
-        {"data": {"INFY": {"last_price": None}}},
-        {"data": {"INFY": {}}},
+        {"data": {INFY_KEY: {"last_price": 0}}},  # the broker's own zero
+        {"data": {INFY_KEY: {"last_price": None}}},
+        {"data": {INFY_KEY: {}}},
         {},
     ],
 )
@@ -370,3 +397,112 @@ async def test_a_colon_keyed_row_without_an_instrument_token_is_still_found():
         return httpx.Response(200, json={"data": {"NSE_EQ:INE848E01016": {"last_price": 55.5}}})
 
     assert (await _adapter(handler).get_quote("NSE_EQ|INE848E01016")).last_price == 55.5
+
+
+# ---- A trading symbol is not an instrument key ----------------------------------
+# Found against a live token: the quote request sent `instrument_key=INFY` and Upstox answered
+# UDAPI1087 ("One of either symbol or instrument_key is invalid"). The mocked tests above accepted
+# any string, so none of them could have seen it. A symbol is now resolved to its key first
+# (src/brokers/upstox_instruments.py) -- for quotes, orders, and the option endpoints.
+
+
+async def test_a_bare_symbol_is_sent_to_the_quotes_endpoint_as_its_instrument_key():
+    seen = {}
+    instruments = _StubInstruments()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.url.params)
+        return httpx.Response(
+            200,
+            json={"data": {"NSE_EQ:INFY": {"instrument_token": INFY_KEY, "last_price": 1161.2}}},
+        )
+
+    quote = await _adapter(handler, instruments=instruments).get_quote("INFY")
+
+    assert seen == {"instrument_key": INFY_KEY}
+    assert quote.last_price == 1161.2
+    assert quote.symbol == "INFY"  # callers keep the symbol they asked about
+
+
+async def test_an_unknown_symbol_fails_before_any_request_is_made():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    with pytest.raises(UpstoxInstrumentNotFoundError) as caught:
+        await _adapter(handler).get_quote("NOPE123")
+
+    assert calls == []
+    assert caught.value.status_code == 404
+    assert isinstance(
+        caught.value, BrokerRequestError
+    )  # a request mistake: never trips the breaker
+    assert not isinstance(caught.value, BrokerAuthError)
+
+
+async def test_an_order_is_placed_on_the_instrument_key_not_the_symbol():
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"data": {"order_id": "OID1"}})
+
+    order = OrderRequest(symbol="INFY", side=OrderSide.BUY, quantity=5)
+    await _adapter(handler).place_order(order)
+
+    assert sent["instrument_token"] == INFY_KEY
+    assert sent["quantity"] == 5 and sent["transaction_type"] == "BUY"
+
+
+async def test_an_order_for_an_unknown_symbol_is_never_sent():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"data": {"order_id": "OID1"}})
+
+    order = OrderRequest(symbol="NOPE123", side=OrderSide.BUY, quantity=1)
+    with pytest.raises(UpstoxInstrumentNotFoundError):
+        await _adapter(handler).place_order(order)
+
+    assert calls == []  # nothing reached the broker: no order under a guessed instrument
+
+
+def test_the_offline_order_payload_still_carries_the_symbol_it_was_given():
+    """`build_order_payload` is synchronous and offline (Shadow Mode records it): it cannot look
+    the key up, so it keeps the symbol; `place_order` replaces it with the key before sending."""
+    payload = _adapter(lambda request: httpx.Response(200, json={})).build_order_payload(
+        OrderRequest(symbol="INFY", side=OrderSide.BUY, quantity=1)
+    )
+
+    assert payload["instrument_token"] == "INFY"
+
+
+async def test_the_option_endpoints_resolve_an_index_name_to_its_key():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        if request.url.path.endswith("/option/contract"):
+            return httpx.Response(200, json={"data": [{"expiry": "2026-10-27"}]})
+        return httpx.Response(200, json={"data": []})
+
+    adapter = _adapter(handler)
+    await adapter.get_expiries("NIFTY")
+    await adapter.get_option_chain("NIFTY", "2026-10-27")
+
+    assert [params["instrument_key"] for _, params in seen] == ["NSE_INDEX|Nifty 50"] * 2
+
+
+async def test_an_already_qualified_key_is_not_looked_up_or_altered():
+    instruments = _StubInstruments()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"NSE_EQ|X": {"last_price": 3.0}}})
+
+    quote = await _adapter(handler, instruments=instruments).get_quote("NSE_EQ|X")
+
+    assert quote.last_price == 3.0
+    assert instruments.asked == ["NSE_EQ|X"]

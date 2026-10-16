@@ -104,6 +104,27 @@ def _reset_broker_feed_health():
 
 
 @pytest.fixture(autouse=True)
+def _never_download_the_upstox_instrument_file(monkeypatch):
+    """Resolving a bare symbol for Upstox downloads ~100 MB from assets.upstox.com
+    (`src.brokers.upstox_instruments`). No test may do that by accident -- through a factory-built
+    adapter, say -- so the shared directory is replaced with one that refuses loudly. A test that
+    wants the real behaviour builds its own `UpstoxInstruments` with a mock transport."""
+    from src.brokers import upstox_instruments
+
+    class _Refuses:
+        async def resolve(self, symbol: str) -> str:
+            if "|" in symbol:
+                return symbol
+            raise AssertionError(
+                f"a test tried to resolve {symbol!r} through the real Upstox instrument "
+                "directory (a network download): pass `instruments=` to the adapter"
+            )
+
+    monkeypatch.setattr(upstox_instruments, "_default", _Refuses())
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _disable_ambient_rate_limit():
     """`RateLimitMiddleware` (src.observability.rate_limit_middleware) is
     IP-keyed, and every test in this suite shares one fixed client IP via

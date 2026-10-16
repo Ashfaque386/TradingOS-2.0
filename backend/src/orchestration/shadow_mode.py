@@ -34,7 +34,10 @@ from src.models.shadow_mode_run import ShadowModeConfidence, ShadowModeRun
 async def run_shadow_order_check(
     db: AsyncSession, *, adapter: BrokerAdapter, order: OrderRequest
 ) -> ShadowModeRun:
-    payload = adapter.build_order_payload(order)
+    # An adapter that must look something up before it can build the real payload (Upstox: the
+    # instrument key for a symbol) offers `prepare_order_payload`; record what will really be sent.
+    prepare = getattr(adapter, "prepare_order_payload", None)
+    payload = await prepare(order) if prepare else adapter.build_order_payload(order)
     broker_response: dict[str, Any] | None = None
 
     if adapter.has_sandbox:

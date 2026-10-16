@@ -6,6 +6,8 @@ Zerodha path genuinely never touches the network, not just that it
 *reports* not touching it.
 """
 
+import json
+
 import httpx
 from sqlalchemy import select
 
@@ -18,6 +20,14 @@ from src.orchestration.shadow_mode import run_shadow_order_check
 
 _CREDENTIALS = BrokerCredentials(api_key="test-key", access_token="test-token")
 _ORDER = OrderRequest(symbol="INFY", side=OrderSide.BUY, quantity=10)
+
+
+class _FixedInstruments:
+    """Upstox's real symbol -> instrument_key directory downloads a ~100 MB file; a sandbox dry run
+    places the order on the *key*, and these tests are about what the run records."""
+
+    async def resolve(self, symbol: str) -> str:
+        return "NSE_EQ|INE009A01021"
 
 
 async def test_zerodha_shadow_run_is_local_payload_only_and_never_calls_the_network(
@@ -48,7 +58,12 @@ async def test_upstox_shadow_run_makes_a_genuine_sandbox_call(db_session_factory
         calls.append(request)
         return httpx.Response(200, json={"data": {"order_id": "SANDBOX_OID"}})
 
-    adapter = UpstoxAdapter(_CREDENTIALS, sandbox=True, transport=httpx.MockTransport(handler))
+    adapter = UpstoxAdapter(
+        _CREDENTIALS,
+        sandbox=True,
+        transport=httpx.MockTransport(handler),
+        instruments=_FixedInstruments(),
+    )
 
     async with db_session_factory() as db:
         run = await run_shadow_order_check(db, adapter=adapter, order=_ORDER)
@@ -57,6 +72,27 @@ async def test_upstox_shadow_run_makes_a_genuine_sandbox_call(db_session_factory
     assert run.has_sandbox is True
     assert run.confidence == ShadowModeConfidence.REAL_SANDBOX_DRY_RUN
     assert run.broker_response == {"data": {"order_id": "SANDBOX_OID"}}
+
+
+async def test_the_recorded_upstox_payload_is_the_one_the_sandbox_received(db_session_factory):
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": {"order_id": "SANDBOX_OID"}})
+
+    adapter = UpstoxAdapter(
+        _CREDENTIALS,
+        sandbox=True,
+        transport=httpx.MockTransport(handler),
+        instruments=_FixedInstruments(),
+    )
+
+    async with db_session_factory() as db:
+        run = await run_shadow_order_check(db, adapter=adapter, order=_ORDER)
+
+    assert run.order_payload == sent[0]  # not the bare symbol the offline builder would give
+    assert run.order_payload["instrument_token"] == "NSE_EQ|INE009A01021"
 
 
 async def test_the_two_brokers_are_never_reported_as_equivalent(db_session_factory):
@@ -72,7 +108,10 @@ async def test_the_two_brokers_are_never_reported_as_equivalent(db_session_facto
 
     zerodha = ZerodhaKiteAdapter(_CREDENTIALS, transport=httpx.MockTransport(zerodha_handler))
     upstox = UpstoxAdapter(
-        _CREDENTIALS, sandbox=True, transport=httpx.MockTransport(upstox_handler)
+        _CREDENTIALS,
+        sandbox=True,
+        transport=httpx.MockTransport(upstox_handler),
+        instruments=_FixedInstruments(),
     )
 
     async with db_session_factory() as db:
