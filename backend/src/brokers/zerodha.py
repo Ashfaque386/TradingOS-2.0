@@ -51,7 +51,7 @@ clients.
 import csv
 import io
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
 import httpx
@@ -63,6 +63,9 @@ from src.brokers.base import (
     BrokerPosition,
     BrokerQuote,
     BrokerQuoteUnavailableError,
+    Candle,
+    CandleInterval,
+    InstrumentNotFoundError,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
@@ -70,6 +73,7 @@ from src.brokers.base import (
     OrderType,
     broker_request_error,
     broker_unreachable,
+    parse_candle,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -103,6 +107,21 @@ INDEX_QUOTE_KEYS = {
 _NFO_INSTRUMENTS_CACHE_TTL_SECONDS = 900
 _nfo_instruments_cache: list[dict[str, Any]] | None = None
 _nfo_instruments_cache_at: float = 0.0
+
+# The NSE dump (equities and indices, ~10k rows) is the symbol -> instrument_token map the
+# historical-data endpoint needs. Public exchange data like the NFO dump, so shared the same way;
+# it changes at most daily, hence the long lifetime.
+_NSE_INSTRUMENTS_CACHE_TTL_SECONDS = 6 * 3600
+_nse_token_cache: dict[str, str] | None = None
+_nse_token_cache_at: float = 0.0
+
+# Kite's per-request span limits for historical candles (documented: 2000 days for daily, 60 for
+# minute), kept a little inside so a boundary day is never the one that fails.
+_HISTORY_SPAN_DAYS = {"day": 1900, "minute": 55}
+# Short index names -> Kite's tradingsymbol for the index (INDEX_QUOTE_KEYS holds exchange:symbol).
+_INDEX_TRADINGSYMBOLS = {
+    name: key.split(":", 1)[1] for name, key in INDEX_QUOTE_KEYS.items() if key.startswith("NSE:")
+}
 
 
 class ZerodhaKiteAdapter:
@@ -279,6 +298,88 @@ class ZerodhaKiteAdapter:
         _nfo_instruments_cache = rows
         _nfo_instruments_cache_at = now
         return rows
+
+    async def _nse_tokens(self) -> dict[str, str]:
+        """tradingsymbol -> instrument_token for NSE cash equities and NSE indices."""
+        global _nse_token_cache, _nse_token_cache_at
+        now = time.monotonic()
+        if (
+            _nse_token_cache is not None
+            and (now - _nse_token_cache_at) < _NSE_INSTRUMENTS_CACHE_TTL_SECONDS
+        ):
+            return _nse_token_cache
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, transport=self._transport, timeout=self._timeout
+            ) as client:
+                resp = await client.get("/instruments/NSE", headers=self._headers())
+        except httpx.TransportError as exc:
+            raise broker_unreachable("zerodha", "GET", "/instruments/NSE", exc) from exc
+        if resp.status_code >= 500:
+            raise BrokerServerError(
+                resp.status_code, f"zerodha GET /instruments/NSE: {resp.text[:200]}"
+            )
+        if resp.status_code >= 400:
+            raise broker_request_error(
+                resp.status_code, f"zerodha GET /instruments/NSE: {resp.text[:200]}"
+            )
+        tokens: dict[str, str] = {}
+        for row in csv.DictReader(io.StringIO(resp.text)):
+            symbol = (row.get("tradingsymbol") or "").upper()
+            token = row.get("instrument_token")
+            is_equity = row.get("segment") == "NSE" and row.get("instrument_type") == "EQ"
+            if symbol and token and (is_equity or row.get("segment") == "INDICES"):
+                tokens.setdefault(symbol, token)
+        _nse_token_cache = tokens
+        _nse_token_cache_at = now
+        return tokens
+
+    async def _instrument_token(self, symbol: str) -> str:
+        tokens = await self._nse_tokens()
+        wanted = symbol.strip().upper()
+        # An exchange-qualified name ("NSE:INFY") is accepted; the exchange part is dropped.
+        if ":" in wanted:
+            wanted = wanted.split(":", 1)[1]
+        token = tokens.get(_INDEX_TRADINGSYMBOLS.get(wanted, wanted)) or tokens.get(wanted)
+        if token is None:
+            raise InstrumentNotFoundError("zerodha", symbol)
+        return token
+
+    async def has_instrument(self, symbol: str) -> bool:
+        try:
+            await self._instrument_token(symbol)
+        except InstrumentNotFoundError:
+            return False
+        return True
+
+    async def get_historical_candles(
+        self, symbol: str, interval: CandleInterval, start: date, end: date
+    ) -> list[Candle]:
+        """Candles for `start`..`end` inclusive, oldest first. A range wider than Kite allows per
+        request is fetched in spans. Today's daily candle, when asked for, is the partial bar so
+        far: callers must not treat it as final before the session closes."""
+        if end < start:
+            raise ValueError(f"end {end} is before start {start}")
+        token = await self._instrument_token(symbol)
+        span = timedelta(days=_HISTORY_SPAN_DAYS[interval])
+        candles: dict[datetime, Candle] = {}
+        cursor = start
+        while cursor <= end:
+            chunk_end = min(end, cursor + span)
+            data = await self._request(
+                "GET",
+                f"/instruments/historical/{token}/{interval}",
+                params={
+                    "from": f"{cursor.isoformat()} 00:00:00",
+                    "to": f"{chunk_end.isoformat()} 23:59:59",
+                    "oi": 1,
+                },
+            )
+            for row in data.get("data", {}).get("candles", []):
+                candle = parse_candle(row)
+                candles[candle.timestamp] = candle
+            cursor = chunk_end + timedelta(days=1)
+        return [candles[stamp] for stamp in sorted(candles)]
 
     async def _batch_quote(self, tradingsymbols: list[str]) -> dict[str, dict[str, Any]]:
         """Kite Connect's real `/quote` endpoint accepts multiple `i=`

@@ -36,6 +36,13 @@ INTRADAY_SUBDIR = "ohlcv_intraday"
 CATALOG_DB_FILENAME = "catalog.duckdb"
 
 DAILY_OHLCV_COLUMNS = ["date", "symbol", "open", "high", "low", "close", "volume"]
+
+# Where a bar came from: an optional `source` column on each row ("zerodha", "upstox",
+# "synthetic"...). A row with none -- everything written before this existed -- is **not real**:
+# nobody can say what it rests on, and the old lake was filled by a generated-data provider.
+# `real_only` reads and the per-symbol source pin both go by it.
+SOURCE_COLUMN = "source"
+SYNTHETIC_SOURCE = "synthetic"
 INTRADAY_OHLCV_COLUMNS = ["timestamp", "symbol", "open", "high", "low", "close", "volume"]
 
 _DUCKDB_TYPE = {
@@ -107,6 +114,11 @@ def _write_partitioned(
                 merged = group
             merged = merged.drop_duplicates(subset=[key_column, "symbol"], keep="last")
             merged = merged.sort_values(key_column).reset_index(drop=True)
+            if SOURCE_COLUMN in merged.columns:
+                # Rows written before sources existed come back NaN: store them as NULL.
+                merged[SOURCE_COLUMN] = (
+                    merged[SOURCE_COLUMN].astype(object).where(merged[SOURCE_COLUMN].notna(), None)
+                )
             con.register("merged_view", merged)
             con.execute("COPY merged_view TO ? (FORMAT PARQUET)", [str(path)])
             rows_added += len(merged) - rows_before
@@ -144,7 +156,19 @@ def _month_range(start: date, end: date) -> list[tuple[int, int]]:
     return months
 
 
-def read_daily_bars(root: Path, symbol: str, start: date, end: date) -> pd.DataFrame:
+def _real_mask(df: pd.DataFrame) -> "pd.Series[bool]":
+    """Rows with a recorded, non-synthetic source."""
+    if SOURCE_COLUMN not in df.columns:
+        return pd.Series(False, index=df.index)
+    source = df[SOURCE_COLUMN]
+    return source.notna() & (source != "") & (source != SYNTHETIC_SOURCE)
+
+
+def read_daily_bars(
+    root: Path, symbol: str, start: date, end: date, *, real_only: bool = False
+) -> pd.DataFrame:
+    """Daily bars for `symbol`. With `real_only`, rows without a recorded real source are left
+    out -- what a signal is allowed to see."""
     paths = [
         _partition_path(root, DAILY_SUBDIR, symbol, year, month)
         for year, month in _month_range(start, end)
@@ -161,9 +185,71 @@ def read_daily_bars(root: Path, symbol: str, start: date, end: date) -> pd.DataF
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = df[(df["symbol"] == symbol) & (df["date"] >= start) & (df["date"] <= end)]
+    if real_only:
+        df = df[_real_mask(df)]
     df = df.sort_values("date")
     df = df.set_index(pd.DatetimeIndex(pd.to_datetime(df["date"])))
     return df[["open", "high", "low", "close", "volume"]]
+
+
+def _symbol_partitions(root: Path, symbol: str) -> list[Path]:
+    base = root / DAILY_SUBDIR
+    if not base.exists():
+        return []
+    return sorted(base.glob(f"*/*/{symbol}.parquet"))
+
+
+def _read_all_daily(root: Path, symbol: str) -> pd.DataFrame:
+    paths = _symbol_partitions(root, symbol)
+    if not paths:
+        return pd.DataFrame()
+    con = duckdb.connect(":memory:")
+    try:
+        frames = [con.execute("SELECT * FROM read_parquet(?)", [str(p)]).df() for p in paths]
+    finally:
+        con.close()
+    df = pd.concat(frames, ignore_index=True)
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    return df[df["symbol"] == symbol].sort_values("date")
+
+
+def pinned_source(root: Path, symbol: str) -> str | None:
+    """The source of the newest real bar stored for `symbol`, or `None` if it has none.
+
+    A symbol's history is **pinned** to the source it started with and never blended with another:
+    two brokers' daily candles disagree for some symbols (measured: INFY differed by ~2% on 183 of
+    272 days between Zerodha and Upstox, while NIFTY matched exactly), and splicing two adjustment
+    bases into one series fakes a price jump that a moving-average signal would trade on."""
+    df = _read_all_daily(root, symbol)
+    if df.empty:
+        return None
+    real = df[_real_mask(df)]
+    if real.empty:
+        return None
+    return str(real.iloc[-1][SOURCE_COLUMN])
+
+
+def purge_unreal_daily_rows(root: Path, symbol: str) -> int:
+    """Delete every stored daily row for `symbol` that has no real source (generated or
+    untagged), keeping the real ones. Real history is about to be written over a symbol; the old
+    rows would otherwise sit in the same series, blended in with it. Returns the rows removed."""
+    removed = 0
+    for path in _symbol_partitions(root, symbol):
+        con = duckdb.connect(":memory:")
+        try:
+            df = con.execute("SELECT * FROM read_parquet(?)", [str(path)]).df()
+            keep = df[_real_mask(df)]
+            removed += len(df) - len(keep)
+            if len(keep) == len(df):
+                continue
+            if keep.empty:
+                path.unlink()
+                continue
+            con.register("kept_view", keep)
+            con.execute("COPY kept_view TO ? (FORMAT PARQUET)", [str(path)])
+        finally:
+            con.close()
+    return removed
 
 
 def has_data_for(root: Path, symbol: str, day: date, *, subdir: str = DAILY_SUBDIR) -> bool:

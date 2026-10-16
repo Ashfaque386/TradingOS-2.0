@@ -16,8 +16,8 @@ from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
 from src.core.redis_client import get_redis
 from src.core.security import warn_if_signing_key_weak
+from src.data.market_data_factory import get_market_data_provider
 from src.data.price_provider import build_signal_price_provider
-from src.data.providers import FakeMarketDataProvider
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
@@ -117,7 +117,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     data_lake_root = Path(settings.data_lake_path)
     market_data_scheduler = start_market_data_scheduler(
         AsyncSessionLocal,
-        provider=FakeMarketDataProvider(),
+        provider=get_market_data_provider(),
         root=data_lake_root,
         backup_root=Path(settings.data_lake_backup_path),
     )

@@ -22,7 +22,8 @@ class MarketDataProvenance(Base):
         CheckConstraint(
             "pipeline IN ("
             "'incremental_daily','corporate_actions','instrument_master',"
-            "'intraday_minute','bhavcopy_fallback','catalog_refresh','data_lake_backup'"
+            "'intraday_minute','bhavcopy_fallback','catalog_refresh','data_lake_backup',"
+            "'history_backfill','history_gap_repair'"
             ")",
             name="ck_market_data_provenance_pipeline",
         ),

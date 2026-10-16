@@ -32,6 +32,9 @@ class DataLakePriceProvider:
     root: Path
     # Only ever set deliberately (synthetic demo/test mode); None = never fabricate bars.
     fallback: PriceDataProvider | None = None
+    # Read only rows with a recorded real source: bars written by the generated-data provider (or
+    # before sources were recorded) are never allowed to drive a signal.
+    real_only: bool = False
     # Below this many real rows, the ingested history is too sparse to
     # drive a real signal (e.g. a symbol enrolled today with one day of
     # data) -- refuse rather than run a backtest on near-nothing.
@@ -42,7 +45,7 @@ class DataLakePriceProvider:
         # Generous calendar-day buffer so weekends/holidays inside the
         # window don't undercount trading days actually present.
         start = as_of_date - timedelta(days=int(lookback_days * 2.2) + 10)
-        bars = lake.read_daily_bars(self.root, symbol, start, as_of_date)
+        bars = lake.read_daily_bars(self.root, symbol, start, as_of_date, real_only=self.real_only)
         if len(bars) < self.min_rows_required:
             if self.fallback is None:
                 raise InsufficientHistoryError(symbol, have=len(bars), need=self.min_rows_required)
@@ -55,7 +58,9 @@ def build_signal_price_provider(root: Path, *, synthetic: bool) -> DataLakePrice
     `synthetic` (the `PAPER_TRADING_SYNTHETIC` demo/test mode) asks for generated bars as a
     labelled fallback."""
     return DataLakePriceProvider(
-        root=root, fallback=FakeDailyPriceProvider() if synthetic else None
+        root=root,
+        fallback=FakeDailyPriceProvider() if synthetic else None,
+        real_only=not synthetic,
     )
 
 

@@ -131,6 +131,25 @@ class MarketDataProvider(Protocol):
     def market_pulse(self) -> MarketPulseSnapshot: ...
 
 
+class AsyncMarketDataProvider(Protocol):
+    """The same surface for a provider that does real I/O (a broker's historical endpoints):
+    every method is awaited. The pipelines accept either flavour (`AnyMarketDataProvider`) and
+    await whatever a call returns, so the synchronous generated-data provider keeps working."""
+
+    async def daily_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame: ...
+
+    async def intraday_minute_bars(self, symbol: str, day: date) -> pd.DataFrame: ...
+
+    async def instrument_master(self, symbols: list[str]) -> list[InstrumentRecord]: ...
+
+    async def corporate_actions(self, symbol: str, since: date) -> list[CorporateActionRecord]: ...
+
+    async def market_pulse(self) -> MarketPulseSnapshot: ...
+
+
+AnyMarketDataProvider = MarketDataProvider | AsyncMarketDataProvider
+
+
 _SERIES_START = pd.Timestamp("2020-01-01")
 _SERIES_END = pd.Timestamp("2035-12-31")
 

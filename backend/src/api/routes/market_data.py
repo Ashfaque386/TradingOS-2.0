@@ -44,8 +44,10 @@ from src.brokers.factory import build_configured_adapter
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.data.broker_provider import NoRealDataSourceError
 from src.data.lake import read_daily_bars
-from src.data.providers import FakeMarketDataProvider
+from src.data.market_data_factory import get_market_data_provider
+from src.data.providers import AnyMarketDataProvider
 from src.engine.indicators import (
     bollinger_bands,
     exponential_moving_average,
@@ -79,6 +81,8 @@ _KNOWN_PIPELINES = (
     "bhavcopy_fallback",
     "catalog_refresh",
     "data_lake_backup",
+    "history_backfill",
+    "history_gap_repair",
 )
 
 register_policy("GET", "/api/v1/market-data/market-hours", roles=list(Role))
@@ -97,10 +101,6 @@ register_policy("POST", "/api/v1/market-data/ingest/instrument-master", roles=_O
 register_policy("POST", "/api/v1/market-data/bhavcopy-fallback", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/market-data/catalog-refresh", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/market-data/backup", roles=_OPERATOR_ROLES)
-
-# Module-level honest-stub provider -- the same instance
-# src.orchestration.market_data_scheduler uses via src.main's lifespan.
-_PROVIDER = FakeMarketDataProvider()
 
 
 def get_market_data_broker_adapter() -> BrokerAdapter | None:
@@ -156,8 +156,15 @@ async def market_hours_endpoint(
 
 
 @router.get("/pulse")
-async def market_pulse_endpoint(current_user: User = Depends(require_role)) -> MarketPulseResponse:
-    pulse = market_data_orch.get_market_pulse(_PROVIDER)
+async def market_pulse_endpoint(
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
+    current_user: User = Depends(require_role),
+) -> MarketPulseResponse:
+    try:
+        pulse = await market_data_orch.resolve_market_pulse(provider)
+    except NoRealDataSourceError as exc:
+        # Not sourced from broker data (yet): say so rather than serve generated indices.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return MarketPulseResponse(
         as_of=pulse.as_of.isoformat(),
         india_vix=pulse.india_vix,
@@ -507,11 +514,12 @@ async def run_daily_ingestion_endpoint(
     body: RunDailyIngestionRequest,
     db: AsyncSession = Depends(get_db),
     root: Path = Depends(get_data_lake_root),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
     current_user: User = Depends(require_role),
 ) -> MarketDataProvenanceResponse:
     as_of = body.as_of or datetime.now().date()
     result = await market_data_orch.run_incremental_daily_ingestion(
-        db, provider=_PROVIDER, root=root, symbols=body.symbols, as_of=as_of
+        db, provider=provider, root=root, symbols=body.symbols, as_of=as_of
     )
     return _provenance_response(result)
 
@@ -521,11 +529,12 @@ async def run_intraday_ingestion_endpoint(
     body: RunIntradayIngestionRequest,
     db: AsyncSession = Depends(get_db),
     root: Path = Depends(get_data_lake_root),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
     current_user: User = Depends(require_role),
 ) -> MarketDataProvenanceResponse:
     day = body.day or datetime.now().date()
     result = await market_data_orch.run_intraday_ingestion(
-        db, provider=_PROVIDER, root=root, symbols=body.symbols, day=day
+        db, provider=provider, root=root, symbols=body.symbols, day=day
     )
     return _provenance_response(result)
 
@@ -534,11 +543,12 @@ async def run_intraday_ingestion_endpoint(
 async def run_corporate_actions_endpoint(
     body: RunCorporateActionsIngestionRequest,
     db: AsyncSession = Depends(get_db),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
     current_user: User = Depends(require_role),
 ) -> MarketDataProvenanceResponse:
     since = body.since or date_type(2020, 1, 1)
     result = await market_data_orch.run_corporate_actions_ingestion(
-        db, provider=_PROVIDER, symbols=body.symbols, since=since
+        db, provider=provider, symbols=body.symbols, since=since
     )
     return _provenance_response(result)
 
@@ -547,10 +557,11 @@ async def run_corporate_actions_endpoint(
 async def run_instrument_master_endpoint(
     body: RunInstrumentMasterSyncRequest,
     db: AsyncSession = Depends(get_db),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
     current_user: User = Depends(require_role),
 ) -> MarketDataProvenanceResponse:
     result = await market_data_orch.run_instrument_master_sync(
-        db, provider=_PROVIDER, symbols=body.symbols
+        db, provider=provider, symbols=body.symbols
     )
     return _provenance_response(result)
 

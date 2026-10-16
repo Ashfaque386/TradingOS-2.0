@@ -23,7 +23,12 @@ from typing import Any, Protocol
 import httpx
 import structlog
 
-from src.brokers.base import BrokerRequestError, broker_request_error, broker_unreachable
+from src.brokers.base import (
+    BrokerRequestError,
+    InstrumentNotFoundError,
+    broker_request_error,
+    broker_unreachable,
+)
 from src.engine.risk.circuit_breaker import BrokerServerError
 
 logger = structlog.get_logger(__name__)
@@ -40,14 +45,14 @@ EQUITY_TYPE = "EQ"
 INDEX_SEGMENT = "NSE_INDEX"
 
 
-class UpstoxInstrumentNotFoundError(BrokerRequestError):
+class UpstoxInstrumentNotFoundError(InstrumentNotFoundError):
     """Upstox lists no NSE equity or index under this name. A `BrokerRequestError` (404): a
     request mistake, not an outage, so it never trips the circuit breaker."""
 
     def __init__(self, symbol: str):
-        self.symbol = symbol
         super().__init__(
-            404,
+            "upstox",
+            symbol,
             f"upstox lists no NSE equity or index named {symbol!r} "
             "(use the exchange trading symbol, e.g. INFY, or a full instrument_key)",
         )

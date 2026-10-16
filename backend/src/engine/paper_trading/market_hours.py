@@ -41,6 +41,18 @@ def is_market_open_ist(now: datetime | None = None) -> bool:
     return MARKET_OPEN_IST <= now_ist.time() <= MARKET_CLOSE_IST
 
 
+def session_is_complete(now: datetime | None = None) -> bool:
+    """True once today's regular session has ended (a trading day, at or after the close). Until
+    then today's daily bar is still forming: a broker's daily candle for today is a partial bar,
+    and no signal may be computed from it."""
+    if now is None:
+        now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    now_ist = now.astimezone(IST)
+    return is_nse_trading_day(now_ist.date()) and now_ist.time() >= MARKET_CLOSE_IST
+
+
 def next_market_event(now: datetime | None = None) -> datetime:
     """The next real NSE market-hours boundary (an open or a close) after
     `now`, in IST -- used by GET /api/v1/system/vitals's `market` block

@@ -655,6 +655,20 @@ class PaperSubscriptionDetailResponse(BaseModel):
     unrealized_pnl: float | None
 
 
+class PaperHistoryBackfillResponse(BaseModel):
+    """The outcome of fetching a subscription's real price history: how much, from which broker,
+    and -- when it failed -- why."""
+
+    status: Literal["success", "failed"]
+    symbol: str
+    rows: int
+    first_date: str | None
+    last_date: str | None
+    source: str | None
+    unreal_rows_removed: int
+    error: str | None
+
+
 class DeactivatePaperSubscriptionRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
     # Required when a position is open: 'close' closes it first (through the risk gate);

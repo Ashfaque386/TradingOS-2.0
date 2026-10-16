@@ -16,10 +16,12 @@ failed), or `failed` (every symbol failed), never a bare exception
 bubbling out of a scheduled job.
 """
 
+import inspect
 import uuid
-from datetime import UTC, date, datetime
+from collections.abc import Awaitable
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 import pandas as pd
@@ -30,8 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.data import backup as backup_module
 from src.data import bhavcopy as bhavcopy_module
 from src.data import lake
-from src.data.nse_calendar import is_nse_trading_day
-from src.data.providers import FakeMarketDataProvider, MarketDataProvider, MarketPulseSnapshot
+from src.data.nse_calendar import is_nse_trading_day, previous_nse_trading_day
+from src.data.providers import AnyMarketDataProvider, FakeMarketDataProvider, MarketPulseSnapshot
 from src.models.corporate_action import CorporateAction
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.instrument import Instrument
@@ -40,6 +42,34 @@ from src.models.market_data_provenance import MarketDataProvenance
 logger = structlog.get_logger(__name__)
 
 PROVIDER_SOURCE_NAME = "fake_market_data_provider"
+
+_T = TypeVar("_T")
+
+# Fewer real daily bars than this and a symbol cannot drive a moving-average signal.
+MIN_HISTORY_ROWS = 60
+BACKFILL_DAYS = 400  # about a year of trading days
+REPAIR_WINDOW_DAYS = 7  # re-fetched every morning: a broker's final daily bar can differ from the
+# one composed at the close (the official close is a 30-minute average; the last trade is not)
+
+
+async def _resolve(value: _T | Awaitable[_T]) -> _T:
+    """A provider call's result, whether the provider is synchronous (the generated-data one) or
+    does real I/O and returns an awaitable."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _source_name(provider: AnyMarketDataProvider) -> str:
+    return str(getattr(provider, "source_name", PROVIDER_SOURCE_NAME))
+
+
+def _tagged(bars: pd.DataFrame) -> pd.DataFrame:
+    """Bars as the lake should store them: with a `source`. A provider that did not say where its
+    bars came from is the generated-data one, so they are stored as `synthetic` -- never as real."""
+    if lake.SOURCE_COLUMN in bars.columns:
+        return bars
+    return bars.assign(**{lake.SOURCE_COLUMN: lake.SYNTHETIC_SOURCE})
 
 
 async def _record_provenance(
@@ -97,7 +127,7 @@ async def _upsert_freshness_record(
 async def run_incremental_daily_ingestion(
     db: AsyncSession,
     *,
-    provider: MarketDataProvider,
+    provider: AnyMarketDataProvider,
     root: Path,
     symbols: list[str],
     as_of: date,
@@ -111,7 +141,7 @@ async def run_incremental_daily_ingestion(
         provenance = await _record_provenance(
             db,
             pipeline="incremental_daily",
-            source=PROVIDER_SOURCE_NAME,
+            source=_source_name(provider),
             status="success",
             symbols_processed=0,
             rows_ingested=0,
@@ -126,11 +156,11 @@ async def run_incremental_daily_ingestion(
     errors: list[str] = []
     for symbol in symbols:
         try:
-            bars = provider.daily_bars(symbol, as_of, as_of)
+            bars = await _resolve(provider.daily_bars(symbol, as_of, as_of))
             if bars.empty:
                 errors.append(f"{symbol}: provider returned no bar for {as_of.isoformat()}")
                 continue
-            lake.write_daily_bars(root, symbol, bars)
+            lake.write_daily_bars(root, symbol, _tagged(bars))
             if lake.has_data_for(root, symbol, as_of, subdir=lake.DAILY_SUBDIR):
                 await _upsert_freshness_record(
                     db, symbol=symbol, data_type="daily_ohlcv", data_date=as_of, row_count=len(bars)
@@ -146,7 +176,7 @@ async def run_incremental_daily_ingestion(
     provenance = await _record_provenance(
         db,
         pipeline="incremental_daily",
-        source=PROVIDER_SOURCE_NAME,
+        source=_source_name(provider),
         status=status,
         symbols_processed=symbols_processed,
         rows_ingested=rows_ingested,
@@ -161,7 +191,7 @@ async def run_incremental_daily_ingestion(
 async def run_intraday_ingestion(
     db: AsyncSession,
     *,
-    provider: MarketDataProvider,
+    provider: AnyMarketDataProvider,
     root: Path,
     symbols: list[str],
     day: date,
@@ -172,11 +202,11 @@ async def run_intraday_ingestion(
     errors: list[str] = []
     for symbol in symbols:
         try:
-            bars = provider.intraday_minute_bars(symbol, day)
+            bars = await _resolve(provider.intraday_minute_bars(symbol, day))
             if bars.empty:
                 errors.append(f"{symbol}: provider returned no intraday bars for {day.isoformat()}")
                 continue
-            lake.write_intraday_bars(root, symbol, bars)
+            lake.write_intraday_bars(root, symbol, _tagged(bars))
             if lake.has_data_for(root, symbol, day, subdir=lake.INTRADAY_SUBDIR):
                 await _upsert_freshness_record(
                     db,
@@ -196,7 +226,7 @@ async def run_intraday_ingestion(
     provenance = await _record_provenance(
         db,
         pipeline="intraday_minute",
-        source=PROVIDER_SOURCE_NAME,
+        source=_source_name(provider),
         status=status,
         symbols_processed=symbols_processed,
         rows_ingested=rows_ingested,
@@ -209,7 +239,7 @@ async def run_intraday_ingestion(
 
 
 async def run_corporate_actions_ingestion(
-    db: AsyncSession, *, provider: MarketDataProvider, symbols: list[str], since: date
+    db: AsyncSession, *, provider: AnyMarketDataProvider, symbols: list[str], since: date
 ) -> MarketDataProvenance:
     started = datetime.now(UTC)
     rows_ingested = 0
@@ -217,7 +247,7 @@ async def run_corporate_actions_ingestion(
     errors: list[str] = []
     for symbol in symbols:
         try:
-            actions = provider.corporate_actions(symbol, since)
+            actions = await _resolve(provider.corporate_actions(symbol, since))
             for action in actions:
                 values = {
                     "symbol": action.symbol,
@@ -249,7 +279,7 @@ async def run_corporate_actions_ingestion(
     provenance = await _record_provenance(
         db,
         pipeline="corporate_actions",
-        source=PROVIDER_SOURCE_NAME,
+        source=_source_name(provider),
         status=status,
         symbols_processed=symbols_processed,
         rows_ingested=rows_ingested,
@@ -262,10 +292,10 @@ async def run_corporate_actions_ingestion(
 
 
 async def run_instrument_master_sync(
-    db: AsyncSession, *, provider: MarketDataProvider, symbols: list[str]
+    db: AsyncSession, *, provider: AnyMarketDataProvider, symbols: list[str]
 ) -> MarketDataProvenance:
     started = datetime.now(UTC)
-    records = provider.instrument_master(symbols)
+    records = await _resolve(provider.instrument_master(symbols))
     now = datetime.now(UTC)
     for record in records:
         values = {
@@ -292,7 +322,7 @@ async def run_instrument_master_sync(
     provenance = await _record_provenance(
         db,
         pipeline="instrument_master",
-        source=PROVIDER_SOURCE_NAME,
+        source=_source_name(provider),
         status="success",
         symbols_processed=len(records),
         rows_ingested=len(records),
@@ -310,7 +340,7 @@ async def run_bhavcopy_fallback(
     symbols: list[str],
     day: date,
     segment: str = "equity",
-    fallback_provider: MarketDataProvider | None = None,
+    fallback_provider: AnyMarketDataProvider | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> MarketDataProvenance:
     """Build Spec §14's on-demand fallback path. Tries a real NSE Bhavcopy
@@ -366,11 +396,11 @@ async def run_bhavcopy_fallback(
     else:
         provider = fallback_provider or FakeMarketDataProvider()
         for symbol in symbols:
-            bars = provider.daily_bars(symbol, day, day)
+            bars = await _resolve(provider.daily_bars(symbol, day, day))
             if bars.empty:
                 errors.append(f"{symbol}: synthetic fallback produced no bar")
                 continue
-            lake.write_daily_bars(root, symbol, bars)
+            lake.write_daily_bars(root, symbol, _tagged(bars))
             if lake.has_data_for(root, symbol, day, subdir=lake.DAILY_SUBDIR):
                 await _upsert_freshness_record(
                     db, symbol=symbol, data_type="daily_ohlcv", data_date=day, row_count=len(bars)
@@ -445,5 +475,126 @@ async def run_nightly_backup(
     return provenance
 
 
-def get_market_pulse(provider: MarketDataProvider) -> MarketPulseSnapshot:
-    return provider.market_pulse()
+def get_market_pulse(provider: AnyMarketDataProvider) -> MarketPulseSnapshot:
+    """The synchronous (generated-data) providers' pulse; `resolve_market_pulse` handles both."""
+    pulse = provider.market_pulse()
+    if inspect.isawaitable(pulse):
+        raise TypeError("this provider's market_pulse is async: use resolve_market_pulse")
+    return pulse
+
+
+async def resolve_market_pulse(provider: AnyMarketDataProvider) -> MarketPulseSnapshot:
+    return await _resolve(provider.market_pulse())
+
+
+# ---- history: backfill and the morning gap repair ----
+
+
+async def run_symbol_history_backfill(
+    db: AsyncSession,
+    *,
+    provider: AnyMarketDataProvider,
+    root: Path,
+    symbol: str,
+    as_of: date,
+    days: int = BACKFILL_DAYS,
+    replace_unreal: bool = True,
+    pipeline: str = "history_backfill",
+) -> MarketDataProvenance:
+    """Fetch `days` of daily history ending `as_of` for one symbol and store it, tagged with its
+    source. With `replace_unreal`, the symbol's generated or untagged rows are deleted first: real
+    history must not sit in the same series as them. Never raises: a provider failure is a
+    `failed` provenance row carrying the reason."""
+    started = datetime.now(UTC)
+    removed = 0
+    rows = 0
+    details: dict[str, Any] = {"symbol": symbol, "as_of": as_of.isoformat(), "days": days}
+    error: str | None = None
+    try:
+        bars = await _resolve(provider.daily_bars(symbol, as_of - timedelta(days=days), as_of))
+        if bars.empty:
+            raise ValueError(f"{symbol}: the provider returned no daily bars")
+        if replace_unreal:
+            removed = lake.purge_unreal_daily_rows(root, symbol)
+        lake.write_daily_bars(root, symbol, _tagged(bars))
+        rows = len(bars)
+        last_day = bars.index.max().date()
+        if lake.has_data_for(root, symbol, last_day, subdir=lake.DAILY_SUBDIR):
+            await _upsert_freshness_record(
+                db, symbol=symbol, data_type="daily_ohlcv", data_date=last_day, row_count=rows
+            )
+        details.update(
+            rows=rows,
+            first_date=bars.index.min().date().isoformat(),
+            last_date=last_day.isoformat(),
+            source=str(bars[lake.SOURCE_COLUMN].iloc[0]) if lake.SOURCE_COLUMN in bars else None,
+            unreal_rows_removed=removed,
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed symbol is a recorded outcome, not a crash
+        error = f"{type(exc).__name__}: {exc}"
+        logger.warning("market_data.history_backfill_failed", symbol=symbol, error=error)
+    provenance = await _record_provenance(
+        db,
+        pipeline=pipeline,
+        source=_source_name(provider),
+        status="failed" if error else "success",
+        symbols_processed=0 if error else 1,
+        rows_ingested=rows,
+        started_at=started,
+        error_message=error[:1000] if error else None,
+        details=details,
+    )
+    await db.commit()
+    return provenance
+
+
+def _real_history_state(root: Path, symbol: str, as_of: date) -> tuple[int, date | None]:
+    """(real daily rows stored, the newest real day) for `symbol`."""
+    bars = lake.read_daily_bars(root, symbol, date(2000, 1, 1), as_of, real_only=True)
+    if bars.empty:
+        return 0, None
+    return len(bars), bars.index.max().date()
+
+
+async def run_history_gap_repair(
+    db: AsyncSession,
+    *,
+    provider: AnyMarketDataProvider,
+    root: Path,
+    symbols: list[str],
+    as_of: date,
+) -> list[MarketDataProvenance]:
+    """Before the morning's signals: make sure every symbol has enough real history and that the
+    previous trading day is in it. A symbol with too little (a new subscription, a long outage) gets
+    a full backfill; any other gets the last `REPAIR_WINDOW_DAYS` re-fetched, which both fills a
+    missed day and replaces a bar composed at the close with the broker's final one. Returns one
+    provenance row per symbol; a `failed` row is the caller's cue to alert."""
+    results: list[MarketDataProvenance] = []
+    previous = previous_nse_trading_day(as_of)
+    for symbol in symbols:
+        count, newest = _real_history_state(root, symbol, as_of)
+        if count < MIN_HISTORY_ROWS:
+            results.append(
+                await run_symbol_history_backfill(
+                    db, provider=provider, root=root, symbol=symbol, as_of=as_of,
+                    pipeline="history_gap_repair",
+                )
+            )  # fmt: skip
+        else:
+            results.append(
+                await run_symbol_history_backfill(
+                    db,
+                    provider=provider,
+                    root=root,
+                    symbol=symbol,
+                    as_of=as_of,
+                    days=max(REPAIR_WINDOW_DAYS, (as_of - newest).days + 2)
+                    if newest
+                    else BACKFILL_DAYS,
+                    replace_unreal=False,
+                    pipeline="history_gap_repair",
+                )
+            )
+        if newest is not None and newest < previous:
+            logger.info("market_data.history_gap_found", symbol=symbol, newest=newest.isoformat())
+    return results

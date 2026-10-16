@@ -16,6 +16,7 @@ open/cooldown/half-open state machine, only adapts the richer Phase 8
 """
 
 import time
+from datetime import date
 from typing import Any
 
 from src.brokers.base import (
@@ -24,6 +25,8 @@ from src.brokers.base import (
     BrokerOrderResult,
     BrokerPosition,
     BrokerQuote,
+    Candle,
+    CandleInterval,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
@@ -96,3 +99,13 @@ class ResilientBrokerAdapter:
 
     async def get_expiries(self, underlying: str) -> list[str]:
         return await self._breaker.call(lambda: self._adapter.get_expiries(underlying))
+
+    async def get_historical_candles(
+        self, symbol: str, interval: CandleInterval, start: date, end: date
+    ) -> list[Candle]:
+        return await self._breaker.call(
+            lambda: self._adapter.get_historical_candles(symbol, interval, start, end)
+        )
+
+    async def has_instrument(self, symbol: str) -> bool:
+        return await self._breaker.call(lambda: self._adapter.has_instrument(symbol))

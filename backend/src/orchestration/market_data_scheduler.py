@@ -32,16 +32,21 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.data.providers import MarketDataProvider
+from src.data.nse_calendar import is_nse_trading_day
+from src.data.providers import AnyMarketDataProvider
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.paper_trading_subscription import PaperTradingSubscription
+from src.notifications.dispatch import notify
+from src.notifications.types import AlertLevel
 from src.observability.correlation import with_job_correlation_id
 from src.orchestration import market_data as market_data_orch
 
 logger = structlog.get_logger(__name__)
 
 INCREMENTAL_DAILY_HOUR_IST = 18
+HISTORY_GAP_REPAIR_HOUR_IST = 7  # 07:30 IST: before the 08:00 daily signals
+HISTORY_GAP_REPAIR_MINUTE_IST = 30
 CORPORATE_ACTIONS_HOUR_IST = 18
 CORPORATE_ACTIONS_MINUTE_IST = 5
 INSTRUMENT_MASTER_HOUR_IST = 18
@@ -52,6 +57,7 @@ BACKUP_MINUTE_IST = 15
 INTRADAY_INGESTION_INTERVAL_SECONDS = 300
 CORPORATE_ACTIONS_LOOKBACK_DAYS = 400
 
+HISTORY_GAP_REPAIR_JOB_ID = "market_data_history_gap_repair"
 INCREMENTAL_DAILY_JOB_ID = "market_data_incremental_daily"
 CORPORATE_ACTIONS_JOB_ID = "market_data_corporate_actions"
 INSTRUMENT_MASTER_JOB_ID = "market_data_instrument_master"
@@ -77,7 +83,7 @@ async def _active_symbols(session_factory: async_sessionmaker[AsyncSession]) -> 
 
 
 async def run_incremental_daily_job(
-    session_factory: async_sessionmaker[AsyncSession], provider: MarketDataProvider, root: Path
+    session_factory: async_sessionmaker[AsyncSession], provider: AnyMarketDataProvider, root: Path
 ) -> None:
     symbols = await _active_symbols(session_factory)
     if not symbols:
@@ -90,8 +96,37 @@ async def run_incremental_daily_job(
     logger.info("market_data.incremental_daily_job_ran", status=result.status, symbols=len(symbols))
 
 
+async def run_history_gap_repair_job(
+    session_factory: async_sessionmaker[AsyncSession], provider: AnyMarketDataProvider, root: Path
+) -> None:
+    """07:30 IST on a trading day: every active symbol has enough real history and yesterday's bar.
+    A symbol that could not be fetched is reported through the notification channels -- its
+    subscription will otherwise just sit at `awaiting_history`."""
+    today = datetime.now(IST).date()
+    if not is_nse_trading_day(today):
+        return
+    symbols = await _active_symbols(session_factory)
+    if not symbols:
+        return
+    async with session_factory() as db:
+        results = await market_data_orch.run_history_gap_repair(
+            db, provider=provider, root=root, symbols=symbols, as_of=today
+        )
+    failed = [r for r in results if r.status == "failed"]
+    logger.info("market_data.history_gap_repair_job_ran", symbols=len(symbols), failed=len(failed))
+    if failed:
+        lines = [f"{(r.details or {}).get('symbol', '?')}: {r.error_message}" for r in failed]
+        await notify(
+            AlertLevel.DAILY,
+            title="Price history could not be fetched",
+            body=("Subscriptions on these symbols cannot signal until it is: " + "; ".join(lines))[
+                :900
+            ],
+        )
+
+
 async def run_corporate_actions_job(
-    session_factory: async_sessionmaker[AsyncSession], provider: MarketDataProvider
+    session_factory: async_sessionmaker[AsyncSession], provider: AnyMarketDataProvider
 ) -> None:
     symbols = await _active_symbols(session_factory)
     if not symbols:
@@ -105,7 +140,7 @@ async def run_corporate_actions_job(
 
 
 async def run_instrument_master_job(
-    session_factory: async_sessionmaker[AsyncSession], provider: MarketDataProvider
+    session_factory: async_sessionmaker[AsyncSession], provider: AnyMarketDataProvider
 ) -> None:
     symbols = await _active_symbols(session_factory)
     if not symbols:
@@ -118,7 +153,7 @@ async def run_instrument_master_job(
 
 
 async def run_intraday_ingestion_job(
-    session_factory: async_sessionmaker[AsyncSession], provider: MarketDataProvider, root: Path
+    session_factory: async_sessionmaker[AsyncSession], provider: AnyMarketDataProvider, root: Path
 ) -> None:
     if not is_market_open_ist():
         return
@@ -161,12 +196,24 @@ async def run_backup_job(
 def start_market_data_scheduler(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    provider: MarketDataProvider,
+    provider: AnyMarketDataProvider,
     root: Path,
     backup_root: Path,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST)
 
+    scheduler.add_job(
+        with_job_correlation_id(HISTORY_GAP_REPAIR_JOB_ID, run_history_gap_repair_job),
+        CronTrigger(
+            hour=HISTORY_GAP_REPAIR_HOUR_IST,
+            minute=HISTORY_GAP_REPAIR_MINUTE_IST,
+            timezone=IST,
+            day_of_week="mon-fri",
+        ),
+        args=[session_factory, provider, root],
+        id=HISTORY_GAP_REPAIR_JOB_ID,
+        replace_existing=True,
+    )
     scheduler.add_job(
         with_job_correlation_id(INCREMENTAL_DAILY_JOB_ID, run_incremental_daily_job),
         CronTrigger(hour=INCREMENTAL_DAILY_HOUR_IST, minute=0, timezone=IST),

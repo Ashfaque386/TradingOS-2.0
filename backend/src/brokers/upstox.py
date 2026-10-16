@@ -29,7 +29,8 @@ below follow Upstox's publicly documented v2 API envelope from training
 knowledge; this sandbox cannot verify them against a live call.
 """
 
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
 import httpx
@@ -41,6 +42,8 @@ from src.brokers.base import (
     BrokerPosition,
     BrokerQuote,
     BrokerQuoteUnavailableError,
+    Candle,
+    CandleInterval,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
@@ -48,11 +51,19 @@ from src.brokers.base import (
     OrderType,
     broker_request_error,
     broker_unreachable,
+    parse_candle,
 )
-from src.brokers.upstox_instruments import InstrumentResolver, get_instruments
+from src.brokers.upstox_instruments import (
+    InstrumentResolver,
+    UpstoxInstrumentNotFoundError,
+    get_instruments,
+)
+from src.engine.paper_trading.market_hours import IST, session_is_complete
 from src.engine.risk.circuit_breaker import BrokerServerError
 
 PRODUCTION_BASE_URL = "https://api.upstox.com/v2"
+# Upstox serves 1-minute history a month at a time; the adapter asks one day per call.
+MAX_MINUTE_HISTORY_DAYS = 31
 SANDBOX_BASE_URL = "https://api-sandbox.upstox.com/v2"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
@@ -69,7 +80,10 @@ class UpstoxAdapter:
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         instruments: InstrumentResolver | None = None,
+        clock: Callable[[], datetime] | None = None,
     ):
+        # Injected in tests; "now" decides whether today's daily bar is final.
+        self._clock = clock or (lambda: datetime.now(UTC))
         # Symbol -> `instrument_key` (Upstox takes keys like NSE_EQ|INE009A01021, never `INFY`);
         # the shared directory by default, a stub in tests.
         self._instruments = instruments or get_instruments()
@@ -224,6 +238,84 @@ class UpstoxAdapter:
             ask=sell_levels[0].get("price") if sell_levels else None,
             timestamp=datetime.now(UTC),
         )
+
+    async def has_instrument(self, symbol: str) -> bool:
+        try:
+            await self._instruments.resolve(symbol)
+        except UpstoxInstrumentNotFoundError:
+            return False
+        return True
+
+    async def _candles_at(self, path: str) -> list[Candle]:
+        data = await self._request("GET", path)
+        return [parse_candle(row) for row in data.get("data", {}).get("candles", [])]
+
+    @staticmethod
+    def _day_bar(day: date, minutes: list[Candle]) -> Candle | None:
+        """One daily candle out of a day's 1-minute candles (stamped at that day's midnight, IST,
+        like a broker's own daily candle)."""
+        if not minutes:
+            return None
+        ordered = sorted(minutes, key=lambda c: c.timestamp)
+        return Candle(
+            timestamp=datetime.combine(day, time.min, tzinfo=IST),
+            open=ordered[0].open,
+            high=max(c.high for c in ordered),
+            low=min(c.low for c in ordered),
+            close=ordered[-1].close,
+            volume=sum(c.volume for c in ordered),
+        )
+
+    async def get_historical_candles(
+        self, symbol: str, interval: CandleInterval, start: date, end: date
+    ) -> list[Candle]:
+        """Candles for `start`..`end` inclusive, oldest first.
+
+        Upstox's daily history **stops at yesterday**; today's bar comes from the 1-minute intraday
+        endpoint and is added only once the session is over (a partial bar is never returned as a
+        daily candle). Minute history is fetched one day per call (today from the intraday
+        endpoint)."""
+        if end < start:
+            raise ValueError(f"end {end} is before start {start}")
+        key = await self._instruments.resolve(symbol)
+        now = self._clock()
+        today = now.astimezone(IST).date()
+
+        if interval == "day":
+            candles = {
+                c.timestamp: c
+                for c in await self._candles_at(
+                    f"/historical-candle/{key}/day/{end.isoformat()}/{start.isoformat()}"
+                )
+            }
+            if start <= today <= end and session_is_complete(now):
+                have_today = any(
+                    c.timestamp.astimezone(IST).date() == today for c in candles.values()
+                )
+                if not have_today:
+                    bar = self._day_bar(
+                        today, await self._candles_at(f"/historical-candle/intraday/{key}/1minute")
+                    )
+                    if bar is not None:
+                        candles[bar.timestamp] = bar
+            return [candles[stamp] for stamp in sorted(candles)]
+
+        if (end - start).days + 1 > MAX_MINUTE_HISTORY_DAYS:
+            raise ValueError(
+                f"minute history is limited to {MAX_MINUTE_HISTORY_DAYS} days per request"
+            )
+        minutes: dict[datetime, Candle] = {}
+        day = start
+        while day <= end:
+            path = (
+                f"/historical-candle/intraday/{key}/1minute"
+                if day == today
+                else f"/historical-candle/{key}/1minute/{day.isoformat()}/{day.isoformat()}"
+            )
+            for candle in await self._candles_at(path):
+                minutes[candle.timestamp] = candle
+            day += timedelta(days=1)
+        return [minutes[stamp] for stamp in sorted(minutes)]
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         data = await self._request(

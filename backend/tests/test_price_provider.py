@@ -126,3 +126,53 @@ def test_the_dependency_follows_the_setting(monkeypatch, tmp_path: Path):
         assert isinstance(get_signal_price_provider().fallback, FakeDailyPriceProvider)
     finally:
         get_settings.cache_clear()
+
+
+# ---- real_only: bars with no recorded real source never reach a signal ----
+
+
+def _tagged_bars(n: int, start: str, source: str | None) -> pd.DataFrame:
+    frame = _bars(n, start)
+    if source is not None:
+        frame["source"] = source
+    return frame
+
+
+def test_real_only_ignores_untagged_and_generated_bars_so_a_symbol_without_real_history_is_refused(
+    lake_root: Path,
+):
+    lake.write_daily_bars(lake_root, "RELIANCE", _tagged_bars(30, "2026-08-01", None))
+    lake.write_daily_bars(lake_root, "TCS", _tagged_bars(30, "2026-08-01", "synthetic"))
+    provider = DataLakePriceProvider(root=lake_root, real_only=True)
+
+    for symbol in ("RELIANCE", "TCS"):
+        with pytest.raises(InsufficientHistoryError) as caught:
+            provider.daily_bars(symbol, as_of=pd.Timestamp("2026-09-10"), lookback_days=10)
+        assert caught.value.have == 0  # thirty stored rows, none of them real
+
+
+def test_real_only_accepts_bars_tagged_with_a_broker(lake_root: Path):
+    lake.write_daily_bars(lake_root, "INFY", _tagged_bars(30, "2026-08-01", "zerodha"))
+    provider = DataLakePriceProvider(root=lake_root, real_only=True)
+
+    result = provider.daily_bars("INFY", as_of=pd.Timestamp("2026-09-10"), lookback_days=10)
+
+    assert len(result) == 10
+
+
+def test_without_real_only_untagged_bars_are_still_read_as_before(lake_root: Path):
+    lake.write_daily_bars(lake_root, "INFY", _tagged_bars(30, "2026-08-01", None))
+
+    assert (
+        len(
+            DataLakePriceProvider(root=lake_root).daily_bars(
+                "INFY", as_of=pd.Timestamp("2026-09-10"), lookback_days=10
+            )
+        )
+        == 10
+    )
+
+
+def test_the_factory_makes_real_only_the_default_and_synthetic_mode_the_exception(lake_root: Path):
+    assert build_signal_price_provider(lake_root, synthetic=False).real_only is True
+    assert build_signal_price_provider(lake_root, synthetic=True).real_only is False

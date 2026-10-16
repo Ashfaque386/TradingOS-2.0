@@ -19,9 +19,9 @@ without ever sending it, for a broker with no sandbox to send it to.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -56,6 +56,23 @@ class BrokerAuthError(BrokerRequestError):
     symbol or parameter, it fails *every* call until the credentials change,
     so retrying it every few seconds only hammers the broker with a token it
     has already refused."""
+
+
+class InstrumentNotFoundError(BrokerRequestError):
+    """The broker lists no such NSE equity or index. A 404 request mistake, not an outage, so it
+    never trips the circuit breaker."""
+
+    def __init__(self, broker: str, symbol: str, message: str | None = None):
+        self.broker = broker
+        self.symbol = symbol
+        super().__init__(
+            404,
+            message
+            or (
+                f"{broker} lists no NSE equity or index named {symbol!r} "
+                "(use the exchange trading symbol, e.g. INFY)"
+            ),
+        )
 
 
 class BrokerQuoteUnavailableError(BrokerRequestError):
@@ -216,6 +233,43 @@ class BrokerQuote:
     timestamp: datetime
 
 
+CandleInterval = Literal["day", "minute"]
+
+
+@dataclass(frozen=True, slots=True)
+class Candle:
+    """One OHLCV bar from a broker's historical-data endpoint. `timestamp` is timezone-aware (IST,
+    as the brokers send it); a daily candle is stamped at that day's midnight."""
+
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+    open_interest: int | None = None
+
+
+def parse_candle(row: list[Any]) -> Candle:
+    """[timestamp, open, high, low, close, volume(, open interest)] -- the shape both Zerodha Kite
+    and Upstox v2 use. Raises ValueError on a malformed row rather than inventing a bar."""
+    if len(row) < 6:
+        raise ValueError(f"a candle needs at least 6 fields, got {len(row)}: {row!r}")
+    stamp = datetime.fromisoformat(str(row[0]))
+    if stamp.tzinfo is None:
+        raise ValueError(f"candle timestamp has no timezone: {row[0]!r}")
+    open_interest = row[6] if len(row) > 6 and row[6] not in (None, "") else None
+    return Candle(
+        timestamp=stamp,
+        open=float(row[1]),
+        high=float(row[2]),
+        low=float(row[3]),
+        close=float(row[4]),
+        volume=int(row[5] or 0),
+        open_interest=int(open_interest) if open_interest is not None else None,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class OptionChainEntry:
     """`call_oi`/`put_oi`/`call_iv`/`put_iv` are genuinely optional --
@@ -259,3 +313,7 @@ class BrokerAdapter(Protocol):
     async def get_quote(self, symbol: str) -> BrokerQuote: ...
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]: ...
     async def get_expiries(self, underlying: str) -> list[str]: ...
+    async def get_historical_candles(
+        self, symbol: str, interval: CandleInterval, start: date, end: date
+    ) -> list[Candle]: ...
+    async def has_instrument(self, symbol: str) -> bool: ...

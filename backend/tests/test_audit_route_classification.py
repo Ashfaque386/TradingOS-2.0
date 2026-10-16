@@ -195,6 +195,10 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ),
     ("POST", "/orchestration/runs/{run_id}/rerun"): (N, "always creates a new run"),
     ("POST", "/paper-trading/subscriptions"): (N, "enrols a subscription"),
+    ("POST", "/paper-trading/subscriptions/{subscription_id}/backfill-history"): (
+        N,
+        "fetches history and reports the outcome; repeating it is harmless (writes are idempotent)",
+    ),
     ("POST", "/paper-trading/subscriptions/{subscription_id}/deactivate"): (
         X,
         "tests/test_paper_subscription_controls.py::test_deactivating_twice_is_refused_not_answered_200",

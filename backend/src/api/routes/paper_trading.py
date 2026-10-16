@@ -8,6 +8,7 @@ runs itself without either endpoint ever being called.
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import pandas as pd
@@ -23,6 +24,7 @@ from src.api.schemas import (
     DeactivatePaperSubscriptionResponse,
     EnrollPaperTradingRequest,
     PaperFillResponse,
+    PaperHistoryBackfillResponse,
     PaperLastTick,
     PaperPositionClosedResponse,
     PaperPositionResponse,
@@ -38,7 +40,10 @@ from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.core.redis_client import get_redis
+from src.data.broker_provider import NoRealDataSourceError
+from src.data.market_data_factory import get_market_data_provider
 from src.data.price_provider import DataLakePriceProvider, get_signal_price_provider
+from src.data.providers import AnyMarketDataProvider
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.tick_feed import get_latest_tick
@@ -49,6 +54,7 @@ from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.user import User
+from src.orchestration.market_data import run_symbol_history_backfill
 from src.orchestration.paper_subscription_controls import (
     CloseBlockedError,
     CloseResult,
@@ -87,6 +93,11 @@ register_policy(
 register_policy(
     "POST",
     "/api/v1/paper-trading/subscriptions/{subscription_id}/close-position",
+    roles=_OPERATOR_ROLES,
+)
+register_policy(
+    "POST",
+    "/api/v1/paper-trading/subscriptions/{subscription_id}/backfill-history",
     roles=_OPERATOR_ROLES,
 )
 register_policy("GET", "/api/v1/paper-trading/pnl/today", roles=list(Role))
@@ -237,8 +248,18 @@ async def unrealized_paper_pnl_endpoint(
 async def enroll_subscription_endpoint(
     body: EnrollPaperTradingRequest,
     db: AsyncSession = Depends(get_db),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
     current_user: User = Depends(require_role),
 ) -> PaperTradingSubscriptionResponse:
+    listed = await _symbol_listing(provider, body.symbol)
+    if listed is False:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"no connected broker lists an NSE equity or index named {body.symbol!r}: paper "
+                "trading runs on real symbols"
+            ),
+        )
     try:
         await assert_no_active_duplicate(
             db, strategy_version_id=body.strategy_version_id, symbol=body.symbol
@@ -256,7 +277,31 @@ async def enroll_subscription_endpoint(
         position_size_pct=body.position_size_pct,
         created_by=str(current_user.id),
     )
+    if listed is True:
+        # Fetch its real price history now so it can signal tomorrow morning. Best effort: a
+        # failure is recorded (and shown as `awaiting_history`), it does not undo the enrolment --
+        # the 07:30 gap repair and `backfill-history` try again.
+        await run_symbol_history_backfill(
+            db,
+            provider=provider,
+            root=Path(get_settings().data_lake_path),
+            symbol=subscription.symbol,
+            as_of=datetime.now(IST).date(),
+        )
     return _subscription_response(subscription)
+
+
+async def _symbol_listing(provider: AnyMarketDataProvider, symbol: str) -> bool | None:
+    """True/False: a connected broker does/does not list the symbol. None: cannot tell (no broker
+    is connected, or the provider is the generated-data one) -- the subscription is then allowed
+    and its state says why it is not running."""
+    check = getattr(provider, "symbol_listed", None)
+    if check is None:
+        return None
+    try:
+        return bool(await check(symbol))
+    except NoRealDataSourceError:
+        return None
 
 
 def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
@@ -324,6 +369,39 @@ def _control_error(exc: Exception) -> HTTPException:
     if isinstance(exc, PriceUnavailableError):
         return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+@router.post("/subscriptions/{subscription_id}/backfill-history")
+async def backfill_history_endpoint(
+    subscription_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
+    _current_user: User = Depends(require_role),
+) -> PaperHistoryBackfillResponse:
+    """(Re)fetch this subscription's real price history from the connected broker. It replaces any
+    generated or untagged rows the symbol has, and keeps the symbol on the broker its history
+    started with. Safe to repeat. The response says what happened, including a failure."""
+    subscription = await db.get(PaperTradingSubscription, subscription_id)
+    if subscription is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+    row = await run_symbol_history_backfill(
+        db,
+        provider=provider,
+        root=Path(get_settings().data_lake_path),
+        symbol=subscription.symbol,
+        as_of=datetime.now(IST).date(),
+    )
+    details = row.details or {}
+    return PaperHistoryBackfillResponse(
+        status="success" if row.status == "success" else "failed",
+        symbol=subscription.symbol,
+        rows=row.rows_ingested,
+        first_date=details.get("first_date"),
+        last_date=details.get("last_date"),
+        source=details.get("source"),
+        unreal_rows_removed=int(details.get("unreal_rows_removed", 0)),
+        error=row.error_message,
+    )
 
 
 @router.get("/subscriptions")

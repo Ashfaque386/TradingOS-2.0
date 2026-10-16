@@ -19,6 +19,8 @@ from src.brokers.upstox import UpstoxAdapter
 from src.brokers.zerodha import ZerodhaKiteAdapter
 from src.core.roles import Role
 from src.data import lake
+from src.data.market_data_factory import get_market_data_provider
+from src.data.providers import FakeMarketDataProvider
 from src.main import app
 from src.models.market_data_provenance import MarketDataProvenance
 
@@ -37,7 +39,11 @@ def _isolated_data_lake_root(tmp_path):
     app.dependency_overrides[get_bhavcopy_transport] = lambda: httpx.MockTransport(
         lambda request: httpx.Response(503)
     )
+    # The routes run on the connected broker's data by default; these tests exercise the
+    # pipelines with the deterministic generated-data provider, chosen explicitly.
+    app.dependency_overrides[get_market_data_provider] = lambda: FakeMarketDataProvider()
     yield
+    app.dependency_overrides.pop(get_market_data_provider, None)
     app.dependency_overrides.pop(get_data_lake_root, None)
     app.dependency_overrides.pop(get_bhavcopy_transport, None)
     app.dependency_overrides.pop(get_data_lake_backup_root, None)
@@ -163,6 +169,8 @@ async def test_datalake_status_lists_every_known_pipeline_before_any_run_ever_ha
         "bhavcopy_fallback",
         "catalog_refresh",
         "data_lake_backup",
+        "history_backfill",
+        "history_gap_repair",
     }
     assert all(row["last_run_status"] is None for row in body["pipelines"])
     assert body["symbols_with_daily_data"] == 0
