@@ -91,4 +91,5 @@ backend/data_lake_backups/
 /CLAUDE.md
 # Machine-specific build inputs (e.g. .local/extra-ca.pem: an antivirus/proxy root for image
 # builds, read by scripts/docker-up.js).
-/.local/
+/.local/*
+!/.local/.gitkeep

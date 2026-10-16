@@ -18,7 +18,15 @@ POSTGRES_DB="${POSTGRES_DB:-tradingos}"
 # e.g. a TLS-intercepting antivirus/proxy on the host (Norton Web/Mail Shield) that re-signs those
 # sites with its own root -- without it every call fails "CERTIFICATE_VERIFY_FAILED" and Settings
 # shows "could not reach <broker>". EXTRA_CA_PEM is the PEM text (scripts/docker-up.js fills it from
-# .local/extra-ca.pem). The bundle is the normal public roots plus that one; unset, nothing changes.
+# .local/extra-ca.pem). It is also read straight from /extra-ca/extra-ca.pem, the repo's .local/
+# directory mounted by docker-compose.yml, so a stack started any way at all (plain `docker compose
+# up`, Docker Desktop's start button) trusts it, not only one started by that script. The bundle is
+# the normal public roots plus that one; neither present, nothing changes.
+EXTRA_CA_FILE_IN_IMAGE=/extra-ca/extra-ca.pem
+if [ -z "${EXTRA_CA_PEM:-}" ] && [ -s "$EXTRA_CA_FILE_IN_IMAGE" ] \
+        && grep -q 'BEGIN CERTIFICATE' "$EXTRA_CA_FILE_IN_IMAGE"; then
+    EXTRA_CA_PEM="$(cat "$EXTRA_CA_FILE_IN_IMAGE")"
+fi
 if [ -n "${EXTRA_CA_PEM:-}" ]; then
     CA_BUNDLE=/etc/ssl/tradingos-ca-bundle.pem
     {
@@ -26,7 +34,7 @@ if [ -n "${EXTRA_CA_PEM:-}" ]; then
         printf '\n%s\n' "$EXTRA_CA_PEM"
     } > "$CA_BUNDLE"
     export SSL_CERT_FILE="$CA_BUNDLE" REQUESTS_CA_BUNDLE="$CA_BUNDLE" CURL_CA_BUNDLE="$CA_BUNDLE"
-    echo "[entrypoint] Outbound HTTPS also trusts the certificate in EXTRA_CA_PEM."
+    echo "[entrypoint] Outbound HTTPS also trusts the extra certificate (EXTRA_CA_PEM or /extra-ca/extra-ca.pem)."
 fi
 
 mkdir -p "$PGDATA"

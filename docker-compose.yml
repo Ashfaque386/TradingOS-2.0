@@ -117,6 +117,10 @@ services:
       # meant to be hand-edited from the host while the container runs —
       # the Agent Gateway hot-reloads on any change (Build Spec §6.2).
       - ./config:/app/config
+      # Optional extra root certificate (.local/extra-ca.pem, git-ignored) for the API's outbound
+      # HTTPS behind a TLS-intercepting antivirus/proxy -- see the entrypoint. The directory always
+      # exists (it holds a tracked .gitkeep); without the file inside it nothing changes.
+      - ./.local:/extra-ca:ro
       # The encrypted Settings stores (broker_credentials.enc,
       # llm_provider_credentials.enc, notification_channels.enc -- all
       # under /app/secrets, see src/core/config.py) must outlive the
