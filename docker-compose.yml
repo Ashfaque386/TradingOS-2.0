@@ -15,6 +15,8 @@ services:
         condition: service_healthy
     environment:
       ENV: ${ENV:-development}
+      # Optional extra root for the API's outbound HTTPS (see the entrypoint); empty = none.
+      EXTRA_CA_PEM: ${EXTRA_CA_PEM:-}
       POSTGRES_USER: ${POSTGRES_USER:-tradingos}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradingos}
       POSTGRES_DB: ${POSTGRES_DB:-tradingos}

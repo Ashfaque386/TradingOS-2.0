@@ -14,6 +14,21 @@ POSTGRES_USER="${POSTGRES_USER:-tradingos}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-tradingos}"
 POSTGRES_DB="${POSTGRES_DB:-tradingos}"
 
+# Optional: trust one extra root certificate for the API's outbound HTTPS (broker, LLM, Telegram...),
+# e.g. a TLS-intercepting antivirus/proxy on the host (Norton Web/Mail Shield) that re-signs those
+# sites with its own root -- without it every call fails "CERTIFICATE_VERIFY_FAILED" and Settings
+# shows "could not reach <broker>". EXTRA_CA_PEM is the PEM text (scripts/docker-up.js fills it from
+# .local/extra-ca.pem). The bundle is the normal public roots plus that one; unset, nothing changes.
+if [ -n "${EXTRA_CA_PEM:-}" ]; then
+    CA_BUNDLE=/etc/ssl/tradingos-ca-bundle.pem
+    {
+        cat "$(python -c 'import certifi; print(certifi.where())')"
+        printf '\n%s\n' "$EXTRA_CA_PEM"
+    } > "$CA_BUNDLE"
+    export SSL_CERT_FILE="$CA_BUNDLE" REQUESTS_CA_BUNDLE="$CA_BUNDLE" CURL_CA_BUNDLE="$CA_BUNDLE"
+    echo "[entrypoint] Outbound HTTPS also trusts the certificate in EXTRA_CA_PEM."
+fi
+
 mkdir -p "$PGDATA"
 chown -R postgres:postgres "$PGDATA"
 
