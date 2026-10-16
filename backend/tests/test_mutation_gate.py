@@ -86,13 +86,10 @@ def test_the_repositorys_own_module_list_is_well_formed():
         assert m.max_survivors >= 0
 
 
-def test_the_ci_matrix_and_the_pyproject_module_list_name_the_same_modules():
-    """Add a module in one place only and it is either never mutated or has no baseline."""
-    import re
-
+def test_the_ci_matrix_is_built_from_the_planner_which_reads_the_pyproject_list():
+    """There is no second module list to keep in step: the workflow's matrix comes from the
+    change plan, and the plan lists modules from pyproject.toml. Fail if someone hard-codes one."""
     text = (_BACKEND.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    workflow = "\n".join(text.splitlines())  # a CRLF checkout must not break the split below
-    block = workflow.split("matrix:\n        module:\n", 1)[1]
-    in_ci = re.findall(r"^\s+- (src/\S+\.py)\s*$", block.split("\n\n", 1)[0], flags=re.M)
 
-    assert sorted(in_ci) == sorted(m.path for m in mg.load_modules(_BACKEND / "pyproject.toml"))
+    assert "module: ${{ fromJSON(needs.changes.outputs.mutation_modules) }}" in text
+    assert "- src/" not in text, "a hard-coded module list would drift from pyproject.toml"

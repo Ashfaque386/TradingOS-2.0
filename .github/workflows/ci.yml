@@ -8,10 +8,18 @@ on:
     # A `v*` tag publishes a versioned image too (see the `images` job).
     tags: ['v*']
   workflow_dispatch:
+  # Everything, weekly: a change-based run only checks what a change touched, so this is what
+  # catches drift nothing in the repo caused (a new dependency advisory, a base-image change) and
+  # anything a skipped job would have said.
+  schedule:
+    - cron: '17 3 * * 1'
 
+# Only a pull request's superseded run is cancelled. A push to main runs to the end: the change
+# plan below diffs against the *previous* commit, so cancelling a run would let the next
+# (say docs-only) push skip the very jobs the cancelled one never finished.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -26,6 +34,32 @@ permissions:
 # nothing yet.) To try 26 early, change one job's label to `ubuntu-26.04` on a
 # branch and watch it run.
 jobs:
+  # Decides which of the jobs below have anything to say about this change
+  # (backend/scripts/ci_plan.py; its docstring has the rules). Everything runs for a tag, a
+  # manual run, the weekly run, a change to this file, or a diff it cannot read.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    outputs:
+      backend: ${{ steps.plan.outputs.backend }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      e2e: ${{ steps.plan.outputs.e2e }}
+      images: ${{ steps.plan.outputs.images }}
+      mutation_modules: ${{ steps.plan.outputs.mutation_modules }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          BASE_SHA: ${{ github.event.before }}
+          PR_BASE: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 backend/scripts/ci_plan.py
+
   secrets-scan:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-24.04
@@ -55,6 +89,8 @@ jobs:
 
   backend:
     name: Backend (pytest, ruff, bandit, mypy, pip-audit)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-24.04
 
     services:
@@ -188,26 +224,20 @@ jobs:
   # module's own tests). One job per module so they run in parallel -- mutmut
   # has no parallel mode and a module takes minutes. Each fails if more mutants
   # survive than the baseline in `[[tool.tradingos.mutation.module]]`
-  # (pyproject.toml); a test in backend/tests keeps this list and that one in
-  # step. Deliberately not a prerequisite of the image jobs: a slow gate should
+  # (pyproject.toml), which is also where the module list comes from (ci_plan.py
+  # picks the ones a change touched). Deliberately not a prerequisite of the image jobs: a slow gate should
   # not delay publishing, though a red run still says the safety tests slipped.
   mutation:
     name: Mutation (${{ matrix.module }})
+    needs: changes
+    if: needs.changes.outputs.mutation_modules != '[]'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        module:
-          - src/engine/risk/kill_switch.py
-          - src/engine/risk/compliance.py
-          - src/engine/risk/correlation_constraint.py
-          - src/orchestration/kill_switch.py
-          - src/orchestration/risk_gate.py
-          - src/orchestration/risk_limits.py
-          - src/engine/risk/go_live_gate.py
-          - src/engine/risk/circuit_breaker.py
-          - src/engine/options_grounding.py
-          - src/orchestration/live_intent_expiry.py
+        # Only the modules this change touched (their source or their own tests), or all of
+        # them when the baselines/gate/CI changed or on the weekly run: see ci_plan.py.
+        module: ${{ fromJSON(needs.changes.outputs.mutation_modules) }}
 
     services:
       postgres:
@@ -258,6 +288,8 @@ jobs:
 
   e2e:
     name: Frontend E2E (Playwright)
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-24.04
     # A real backend+frontend+Postgres+Redis stack, driven by the actual
     # Playwright specs in e2e/ (Phase 26, docs/phase20-old-vs-new-comparison.md
@@ -423,6 +455,8 @@ jobs:
 
   frontend:
     name: Frontend (tsc)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -461,7 +495,16 @@ jobs:
   # (`docker compose build frontend`) with the URL you actually need.
   images:
     name: Docker image (${{ matrix.image.name }})
-    needs: [secrets-scan, backend, e2e, frontend]
+    needs: [changes, secrets-scan, backend, e2e, frontend]
+    # A job skipped by the change plan counts as passed; a failed or cancelled one does not.
+    # (`!cancelled()` is what lets this run at all when a need was skipped.)
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.images == 'true'
+      && needs.secrets-scan.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.backend.result)
+      && contains(fromJSON('["success","skipped"]'), needs.e2e.result)
+      && contains(fromJSON('["success","skipped"]'), needs.frontend.result)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
