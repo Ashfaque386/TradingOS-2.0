@@ -618,6 +618,77 @@ class PaperPositionResponse(BaseModel):
     realized_pnl: float
 
 
+class PaperLastTick(BaseModel):
+    price: float
+    age_seconds: float
+    source: str
+
+
+class PaperSubscriptionDetailResponse(BaseModel):
+    """One row of the subscription list: the subscription, what state it is in and why, and its
+    position. `state` is derived: `inactive`; else `awaiting_history` (too little real price
+    history to signal); else `halted_no_data` (no real price feed); else `active`.
+    `managed` is false for an open position on an inactive subscription: nothing watches its
+    stop-loss."""
+
+    id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    symbol: str
+    builtin_strategy: str
+    sma_window: int
+    initial_capital: float
+    stop_loss_pct: float
+    position_size_pct: float
+    is_active: bool
+    state: Literal["active", "awaiting_history", "halted_no_data", "inactive"]
+    state_reason: str | None
+    created_at: str
+    created_by: str | None
+    deactivated_at: str | None
+    deactivated_by: str | None
+    deactivation_reason: str | None
+    quantity: int
+    avg_cost: float
+    realized_pnl: float
+    managed: bool
+    last_tick: PaperLastTick | None
+    unrealized_pnl: float | None
+
+
+class DeactivatePaperSubscriptionRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    # Required when a position is open: 'close' closes it first (through the risk gate);
+    # 'leave_unmanaged' accepts that nothing will watch its stop-loss afterwards.
+    on_open_position: Literal["close", "leave_unmanaged"] | None = None
+    close_price: float | None = Field(default=None, gt=0)
+
+
+class ClosePaperPositionRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    # Close at this price (recorded as operator-supplied); omit to use a live tick no older
+    # than two minutes.
+    price: float | None = Field(default=None, gt=0)
+    # SystemAdministrator only: skip the risk gate and fill the whole quantity at `price`.
+    administrative: bool = False
+
+
+class PaperPositionClosedResponse(BaseModel):
+    fill: "PaperFillResponse"
+    position: PaperPositionResponse
+    closed: bool
+    remaining_quantity: int
+    price: float
+    price_basis: str
+    data_source: str
+    administrative: bool
+
+
+class DeactivatePaperSubscriptionResponse(BaseModel):
+    subscription: PaperTradingSubscriptionResponse
+    closed: PaperPositionClosedResponse | None
+    left_unmanaged_quantity: int
+
+
 class PaperFillResponse(BaseModel):
     id: uuid.UUID
     subscription_id: uuid.UUID

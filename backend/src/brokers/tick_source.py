@@ -170,6 +170,24 @@ def get_tick_source() -> TickSource:
     return _refreshing_tick_source()
 
 
+def feed_unavailable_reason() -> str | None:
+    """Why paper trading has no real price feed right now, or `None` if it has one. Cheap and
+    network-free (secrets store + the in-process rejection registry), so list endpoints can call
+    it per request. A feed in synthetic demo mode is "available"."""
+    fingerprint = _configured_broker_fingerprint()
+    if fingerprint is None:
+        return None if get_settings().paper_trading_synthetic else "no broker is connected"
+    broker, credentials = fingerprint
+    if not credentials.access_token:
+        return f"{broker} has keys saved but is not connected"
+    if credentials.token_status == "expired":
+        return f"the {broker} token has expired"
+    rejection = feed_health.get_rejection(broker)
+    if rejection is not None:
+        return f"{broker} rejected the stored credentials (HTTP {rejection.status_code})"
+    return None
+
+
 def is_broker_configured() -> bool:
     """Cheap, no-network check for read paths (e.g. GET
     /api/v1/paper-trading/pnl/unrealized) that need to honestly label a

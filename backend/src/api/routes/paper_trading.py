@@ -17,10 +17,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
+    ClosePaperPositionRequest,
     DailySignalResponse,
+    DeactivatePaperSubscriptionRequest,
+    DeactivatePaperSubscriptionResponse,
     EnrollPaperTradingRequest,
     PaperFillResponse,
+    PaperLastTick,
+    PaperPositionClosedResponse,
     PaperPositionResponse,
+    PaperSubscriptionDetailResponse,
     PaperTradingSubscriptionResponse,
     ProcessTickRequest,
     RunDailySignalRequest,
@@ -43,6 +49,19 @@ from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.user import User
+from src.orchestration.paper_subscription_controls import (
+    CloseBlockedError,
+    CloseResult,
+    PriceUnavailableError,
+    SubscriptionNotFoundError,
+    SubscriptionStateError,
+    SubscriptionView,
+    activate_subscription,
+    assert_no_active_duplicate,
+    close_position,
+    deactivate_subscription,
+    list_subscription_views,
+)
 from src.orchestration.paper_trading import (
     enroll_in_paper_trading,
     process_tick,
@@ -54,6 +73,22 @@ router = APIRouter(prefix="/paper-trading", tags=["paper-trading"])
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("POST", "/api/v1/paper-trading/subscriptions", roles=_OPERATOR_ROLES)
+register_policy("GET", "/api/v1/paper-trading/subscriptions", roles=list(Role))
+register_policy(
+    "POST",
+    "/api/v1/paper-trading/subscriptions/{subscription_id}/deactivate",
+    roles=_OPERATOR_ROLES,
+)
+register_policy(
+    "POST",
+    "/api/v1/paper-trading/subscriptions/{subscription_id}/activate",
+    roles=_OPERATOR_ROLES,
+)
+register_policy(
+    "POST",
+    "/api/v1/paper-trading/subscriptions/{subscription_id}/close-position",
+    roles=_OPERATOR_ROLES,
+)
 register_policy("GET", "/api/v1/paper-trading/pnl/today", roles=list(Role))
 register_policy("GET", "/api/v1/paper-trading/pnl/unrealized", roles=list(Role))
 register_policy("GET", "/api/v1/paper-trading/subscriptions/{subscription_id}", roles=list(Role))
@@ -204,6 +239,12 @@ async def enroll_subscription_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> PaperTradingSubscriptionResponse:
+    try:
+        await assert_no_active_duplicate(
+            db, strategy_version_id=body.strategy_version_id, symbol=body.symbol
+        )
+    except SubscriptionStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     subscription = await enroll_in_paper_trading(
         db,
         strategy_version_id=body.strategy_version_id,
@@ -216,6 +257,169 @@ async def enroll_subscription_endpoint(
         created_by=str(current_user.id),
     )
     return _subscription_response(subscription)
+
+
+def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
+    sub = view.subscription
+    return PaperSubscriptionDetailResponse(
+        id=sub.id,
+        strategy_version_id=sub.strategy_version_id,
+        symbol=sub.symbol,
+        builtin_strategy=sub.builtin_strategy,
+        sma_window=sub.sma_window,
+        initial_capital=sub.initial_capital,
+        stop_loss_pct=sub.stop_loss_pct,
+        position_size_pct=sub.position_size_pct,
+        is_active=sub.is_active,
+        state=view.state,
+        state_reason=view.state_reason,
+        created_at=sub.created_at.isoformat(),
+        created_by=sub.created_by,
+        deactivated_at=sub.deactivated_at.isoformat() if sub.deactivated_at else None,
+        deactivated_by=sub.deactivated_by,
+        deactivation_reason=sub.deactivation_reason,
+        quantity=view.quantity,
+        avg_cost=view.avg_cost,
+        realized_pnl=view.realized_pnl,
+        managed=sub.is_active or view.quantity == 0,
+        last_tick=(
+            PaperLastTick(
+                price=view.last_tick.price,
+                age_seconds=view.last_tick_age_seconds or 0.0,
+                source=view.last_tick.source,
+            )
+            if view.last_tick is not None
+            else None
+        ),
+        unrealized_pnl=view.unrealized_pnl,
+    )
+
+
+def _closed_response(result: CloseResult) -> PaperPositionClosedResponse:
+    position = result.position
+    return PaperPositionClosedResponse(
+        fill=_fill_response(result.fill),
+        position=PaperPositionResponse(
+            subscription_id=position.subscription_id,
+            symbol=position.symbol,
+            quantity=position.quantity,
+            avg_cost=position.avg_cost,
+            realized_pnl=position.realized_pnl,
+        ),
+        closed=position.quantity == 0,
+        remaining_quantity=result.remaining_quantity,
+        price=result.price,
+        price_basis=result.price_basis,
+        data_source=result.data_source,
+        administrative=result.administrative,
+    )
+
+
+def _control_error(exc: Exception) -> HTTPException:
+    """The one mapping from a control's refusal to an HTTP status: an unknown id is 404; a request
+    that changes nothing or conflicts with the state (a risk-gate refusal included) is 409; no
+    usable price is 422."""
+    if isinstance(exc, SubscriptionNotFoundError):
+        return HTTPException(status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+    if isinstance(exc, PriceUnavailableError):
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+@router.get("/subscriptions")
+async def list_subscriptions_endpoint(
+    active: bool | None = None,
+    symbol: str | None = None,
+    state: Literal["active", "awaiting_history", "halted_no_data", "inactive"] | None = None,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    price_provider: DataLakePriceProvider = Depends(get_signal_price_provider),
+    _current_user: User = Depends(require_role),
+) -> list[PaperSubscriptionDetailResponse]:
+    views = await list_subscription_views(
+        db, redis, price_provider, active=active, symbol=symbol, state=state
+    )
+    return [_detail_response(view) for view in views]
+
+
+@router.post("/subscriptions/{subscription_id}/deactivate")
+async def deactivate_subscription_endpoint(
+    subscription_id: uuid.UUID,
+    body: DeactivatePaperSubscriptionRequest,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(require_role),
+) -> DeactivatePaperSubscriptionResponse:
+    try:
+        result = await deactivate_subscription(
+            db,
+            redis,
+            subscription_id,
+            actor=str(current_user.id),
+            reason=body.reason,
+            on_open_position=body.on_open_position,
+            close_price=body.close_price,
+            order_book_provider=_ORDER_BOOK_PROVIDER,
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+    except (SubscriptionNotFoundError, SubscriptionStateError, PriceUnavailableError) as exc:
+        raise _control_error(exc) from exc
+    return DeactivatePaperSubscriptionResponse(
+        subscription=_subscription_response(result.subscription),
+        closed=_closed_response(result.closed) if result.closed else None,
+        left_unmanaged_quantity=result.left_unmanaged_quantity,
+    )
+
+
+@router.post("/subscriptions/{subscription_id}/activate")
+async def activate_subscription_endpoint(
+    subscription_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(require_role),
+) -> PaperTradingSubscriptionResponse:
+    try:
+        subscription = await activate_subscription(
+            db, redis, subscription_id, actor=str(current_user.id)
+        )
+    except (SubscriptionNotFoundError, SubscriptionStateError) as exc:
+        raise _control_error(exc) from exc
+    return _subscription_response(subscription)
+
+
+@router.post("/subscriptions/{subscription_id}/close-position")
+async def close_position_endpoint(
+    subscription_id: uuid.UUID,
+    body: ClosePaperPositionRequest,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(require_role),
+) -> PaperPositionClosedResponse:
+    if body.administrative and current_user.role != Role.SYSTEM_ADMINISTRATOR:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="an administrative close (no risk gate) needs the SystemAdministrator role",
+        )
+    try:
+        result = await close_position(
+            db,
+            redis,
+            subscription_id,
+            actor=str(current_user.id),
+            reason=body.reason,
+            price=body.price,
+            administrative=body.administrative,
+            order_book_provider=_ORDER_BOOK_PROVIDER,
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+    except (
+        SubscriptionNotFoundError,
+        SubscriptionStateError,
+        CloseBlockedError,
+        PriceUnavailableError,
+    ) as exc:
+        raise _control_error(exc) from exc
+    return _closed_response(result)
 
 
 @router.get("/subscriptions/{subscription_id}")

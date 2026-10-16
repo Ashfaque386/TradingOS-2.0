@@ -113,6 +113,17 @@ async def get_latest_tick(redis: Redis, symbol: str) -> Tick | None:
     )
 
 
+async def get_latest_tick_id(redis: Redis, symbol: str) -> str | None:
+    """The stream id of the newest tick for `symbol`, or `None` for an empty stream. A
+    subscription that is switched back on starts its cursor here, so it does not drain (and act
+    on) every tick published while it was off."""
+    entries = await redis.xrevrange(tick_stream_key(symbol), count=1)
+    if not entries:
+        return None
+    entry_id, _fields = entries[0]
+    return str(entry_id)
+
+
 class TickSource(Protocol):
     async def next_tick(self, symbol: str) -> Tick: ...
 

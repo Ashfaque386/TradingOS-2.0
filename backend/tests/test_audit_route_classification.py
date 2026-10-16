@@ -195,6 +195,18 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ),
     ("POST", "/orchestration/runs/{run_id}/rerun"): (N, "always creates a new run"),
     ("POST", "/paper-trading/subscriptions"): (N, "enrols a subscription"),
+    ("POST", "/paper-trading/subscriptions/{subscription_id}/deactivate"): (
+        X,
+        "tests/test_paper_subscription_controls.py::test_deactivating_twice_is_refused_not_answered_200",
+    ),
+    ("POST", "/paper-trading/subscriptions/{subscription_id}/activate"): (
+        X,
+        "tests/test_paper_subscription_controls.py::test_activating_an_active_subscription_is_refused",
+    ),
+    ("POST", "/paper-trading/subscriptions/{subscription_id}/close-position"): (
+        X,
+        "tests/test_paper_subscription_controls.py::test_closing_a_flat_subscription_is_refused",
+    ),
     ("POST", "/paper-trading/daily-signal-run"): (
         N,
         "runs signal generation and reports the outcome",

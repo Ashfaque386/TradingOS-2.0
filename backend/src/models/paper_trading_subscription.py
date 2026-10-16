@@ -1,7 +1,17 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +56,11 @@ class PaperTradingSubscription(Base):
     position_size_pct: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Set by the deactivate control, cleared by activate; NULL for a subscription that was
+    # deactivated before these existed and has no audit entry saying who.
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deactivated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    deactivation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # The Redis Stream cursor (src.engine.paper_trading.tick_feed) the
     # intraday drain job resumes reading this symbol's ticks from -- "0"
