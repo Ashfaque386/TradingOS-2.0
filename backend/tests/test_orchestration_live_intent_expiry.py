@@ -139,7 +139,7 @@ async def test_the_result_is_committed_not_just_flushed(db_session_factory):
 async def test_an_intent_that_expires_at_exactly_the_sweep_instant_is_swept(
     db_session_factory, monkeypatch
 ):
-    """`expires_at <= now`, not `<`: the boundary cannot be hit with the real clock, so freeze it."""
+    """`expires_at <= now`, not `<`: the boundary can't be hit with the real clock, so freeze it."""
     from src.orchestration import live_intent_expiry as expiry_module
 
     instant = datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC)
