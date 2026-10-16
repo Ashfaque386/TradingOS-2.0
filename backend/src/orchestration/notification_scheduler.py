@@ -25,6 +25,10 @@ from src.models.live_order_intent import LiveOrderIntent
 from src.notifications.dispatch import notify
 from src.notifications.types import AlertLevel
 from src.observability.correlation import with_job_correlation_id
+from src.orchestration.broker_reconnect_reminder import (
+    reminder_triggers,
+    run_broker_reconnect_reminder_job,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -91,5 +95,14 @@ def start_notification_scheduler(
         id=DAILY_SUMMARY_JOB_ID,
         replace_existing=True,
     )
+    # Broker tokens expire every morning (Zerodha ~06:00 IST): nudge the operator to sign in
+    # again before the open, if -- and only if -- a stored token needs it.
+    for job_id, trigger in reminder_triggers():
+        scheduler.add_job(
+            with_job_correlation_id(job_id, run_broker_reconnect_reminder_job),
+            trigger,
+            id=job_id,
+            replace_existing=True,
+        )
     scheduler.start()
     return scheduler
