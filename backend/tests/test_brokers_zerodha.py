@@ -438,6 +438,48 @@ async def test_a_quote_is_requested_by_exchange_and_symbol(symbol, requested):
     assert quote.last_price == 123.5 and quote.symbol == symbol  # the caller's own symbol back
 
 
+@pytest.mark.parametrize(
+    ("symbol", "requested"),
+    [
+        ("NIFTY", "NSE:NIFTY 50"),
+        ("nifty", "NSE:NIFTY 50"),
+        ("  NIFTY ", "NSE:NIFTY 50"),
+        ("BANKNIFTY", "NSE:NIFTY BANK"),
+        ("FINNIFTY", "NSE:NIFTY FIN SERVICE"),
+        ("MIDCPNIFTY", "NSE:NIFTY MID SELECT"),
+        ("SENSEX", "BSE:SENSEX"),
+        ("INDIAVIX", "NSE:INDIA VIX"),
+    ],
+)
+async def test_an_index_short_name_is_requested_by_its_real_kite_key(symbol, requested):
+    """`NSE:NIFTY` finds nothing at Kite -- the index is `NSE:NIFTY 50` -- so the option chain's
+    spot lookup for NIFTY/BANKNIFTY silently returned no spot and no ATM strike."""
+    asked = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params["i"])
+        return httpx.Response(200, json={"data": {requested: {"last_price": 23146.15}}})
+
+    quote = await _adapter(handler).get_quote(symbol)
+
+    assert asked == [requested]
+    assert quote.last_price == 23146.15 and quote.symbol == symbol
+
+
+async def test_a_qualified_index_key_and_an_equity_that_merely_resembles_one_are_untouched():
+    asked = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params["i"])
+        return httpx.Response(200, json={"data": {asked[-1]: {"last_price": 1.0}}})
+
+    adapter = _adapter(handler)
+    await adapter.get_quote("NSE:NIFTY BANK")  # already qualified: not re-mapped
+    await adapter.get_quote("NIFTYBEES")  # an ETF whose name starts with NIFTY: a plain NSE equity
+
+    assert asked == ["NSE:NIFTY BANK", "NSE:NIFTYBEES"]
+
+
 async def test_a_response_keyed_by_the_bare_symbol_is_still_read():
     """Tolerant on the way back: a mock or a proxy that answers by the bare symbol."""
 

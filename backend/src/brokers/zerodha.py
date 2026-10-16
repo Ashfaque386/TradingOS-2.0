@@ -78,6 +78,18 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 # Kite's /quote wants `exchange:tradingsymbol` ("NSE:INFY") and keys its response the
 # same way; a bare tradingsymbol is read as NSE, the exchange orders are placed on.
 DEFAULT_QUOTE_EXCHANGE = "NSE"
+# The common index short names are not Kite tradingsymbols: the NIFTY 50 index is `NSE:NIFTY 50`,
+# and `NSE:NIFTY` finds nothing (seen against a live token: NIFTY and BANKNIFTY quotes failed while
+# every equity worked, which left the option chain without its spot price and ATM strike). Keys
+# checked live. Anything not listed -- or already `exchange:symbol` -- is passed through as is.
+INDEX_QUOTE_KEYS = {
+    "NIFTY": "NSE:NIFTY 50",
+    "BANKNIFTY": "NSE:NIFTY BANK",
+    "FINNIFTY": "NSE:NIFTY FIN SERVICE",
+    "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
+    "SENSEX": "BSE:SENSEX",
+    "INDIAVIX": "NSE:INDIA VIX",
+}
 
 # 15 minutes -- the NFO instrument dump (strikes/expiries/tradingsymbols)
 # doesn't change intraday, so re-downloading the full CSV on every single
@@ -215,7 +227,12 @@ class ZerodhaKiteAdapter:
         # Kite documents `exchange:tradingsymbol` for the request and keys the response by it;
         # a symbol that already names its exchange is passed through untouched. (Tolerant on
         # the way back: the bare symbol is also tried, and a missing key is simply "no data".)
-        instrument = symbol if ":" in symbol else f"{DEFAULT_QUOTE_EXCHANGE}:{symbol}"
+        if ":" in symbol:
+            instrument = symbol
+        else:
+            instrument = INDEX_QUOTE_KEYS.get(
+                symbol.strip().upper(), f"{DEFAULT_QUOTE_EXCHANGE}:{symbol}"
+            )
         data = await self._request("GET", "/quote", params={"i": instrument})
         rows = data.get("data", {})
         row = rows.get(instrument) or rows.get(symbol) or {}

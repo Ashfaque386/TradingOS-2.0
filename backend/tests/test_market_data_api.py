@@ -414,7 +414,10 @@ async def test_live_option_chain_returns_real_zerodha_ltp_and_oi_never_iv(
             data = {
                 "NFO:NIFTY25JAN24000CE": {"last_price": 120.5, "oi": 45000},
                 "NFO:NIFTY25JAN24000PE": {"last_price": 95.0, "oi": 38000},
-                "NSE:NIFTY": {"last_price": 24010.0, "depth": {}},
+                "NSE:NIFTY 50": {
+                    "last_price": 24010.0,
+                    "depth": {},
+                },  # the index is "NIFTY 50" at Kite
             }
             return httpx.Response(
                 200,
