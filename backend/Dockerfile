@@ -30,7 +30,16 @@ COPY alembic ./alembic
 COPY alembic.ini ./
 COPY scripts ./scripts
 
-RUN pip install . \
+# EXTRA_CA_PEM (docker-compose.yml's `extra_ca` secret) is optional: with it, pip also trusts a
+# TLS-intercepting proxy's root; without it this is the plain `pip install .`. Not kept in the image.
+RUN --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then \
+        cat "$(python -c 'import pip._vendor.certifi as c; print(c.where())')" /run/secrets/extra_ca \
+            > /tmp/ca-bundle.pem \
+        && export PIP_CERT=/tmp/ca-bundle.pem; \
+    fi \
+    && pip install . \
+    && rm -f /tmp/ca-bundle.pem \
     && sed -i 's/\r$//' scripts/container-entrypoint.sh scripts/api-entrypoint.sh \
     && chmod +x scripts/container-entrypoint.sh scripts/api-entrypoint.sh
 

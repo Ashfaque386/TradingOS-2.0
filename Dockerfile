@@ -11,7 +11,11 @@ RUN apk add --no-cache libc6-compat \
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+# `extra_ca` (docker-compose.yml) is an optional secret: a TLS-intercepting proxy's root, so Node
+# (corepack, pnpm) trusts it. Unset, this is the plain install. It is not kept in the image.
+RUN --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/extra_ca; fi \
+    && pnpm install --frozen-lockfile
 
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
@@ -25,7 +29,9 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ARG NEXT_PUBLIC_WS_URL=ws://localhost:8000
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
-RUN pnpm build
+RUN --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/extra_ca; fi \
+    && pnpm build
 
 # Standalone output (next.config.mjs: output: 'standalone') copies only the
 # traced production dependencies, not the full node_modules tree.

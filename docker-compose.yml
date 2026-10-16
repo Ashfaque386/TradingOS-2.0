@@ -4,6 +4,7 @@ services:
   backend:
     build:
       context: ./backend
+      secrets: [extra_ca]
     image: tradingos-2.0-backend:latest
     container_name: TradingOS-2.0-Backend
     restart: unless-stopped
@@ -134,6 +135,7 @@ services:
   frontend:
     build:
       context: .
+      secrets: [extra_ca]
       args:
         # Baked into the client bundle at build time (see Dockerfile) --
         # the browser reaches the backend over its published host port.
@@ -284,6 +286,15 @@ services:
       # relevant here since Grafana ships with an admin/admin default
       # login until someone changes it.
       - "${BIND_HOST:-127.0.0.1}:${GRAFANA_HOST_PORT:-3001}:3000"
+
+# Optional, build-time only: a PEM for a TLS-intercepting antivirus/proxy root (Norton Web/Mail
+# Shield, a corporate proxy) so `pip`/`pnpm` inside the image builds trust the certificate it
+# re-signs npm/PyPI with. Unset (the default) changes nothing. It is mounted for the one RUN step
+# that needs it and is never stored in an image layer. See docs/CLAUDE.md.
+#   EXTRA_CA_PEM="$(cat my-root.pem)" node scripts/docker-up.js -d
+secrets:
+  extra_ca:
+    environment: EXTRA_CA_PEM
 
 volumes:
   tradingos-2.0_pgdata:
