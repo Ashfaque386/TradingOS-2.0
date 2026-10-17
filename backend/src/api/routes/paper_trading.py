@@ -7,12 +7,13 @@ runs itself without either endpoint ever being called.
 """
 
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Annotated, Literal, cast
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,17 +24,25 @@ from src.api.schemas import (
     DeactivatePaperSubscriptionRequest,
     DeactivatePaperSubscriptionResponse,
     EnrollPaperTradingRequest,
+    EnrolPaperPreviewRequest,
+    PaperClosePreviewResponse,
+    PaperEnrolPreviewResponse,
     PaperFillResponse,
     PaperHistoryBackfillResponse,
     PaperLastTick,
     PaperPositionClosedResponse,
     PaperPositionResponse,
+    PaperSettingChange,
     PaperSubscriptionDetailResponse,
+    PaperSymbolHitResponse,
+    PaperSymbolSearchResponse,
     PaperTradingSubscriptionResponse,
     ProcessTickRequest,
     RunDailySignalRequest,
     TodaysPaperPnlResponse,
     UnrealizedPaperPnlResponse,
+    UpdatePaperSettingsRequest,
+    UpdatePaperSettingsResponse,
 )
 from src.brokers.base import FuturesContract
 from src.brokers.futures_contracts import NoFuturesContractError
@@ -60,6 +69,11 @@ from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.user import User
 from src.orchestration.market_data import run_symbol_history_backfill
+from src.orchestration.paper_desk_previews import (
+    preview_close,
+    preview_enrolment,
+    symbol_listing,
+)
 from src.orchestration.paper_subscription_controls import (
     CloseBlockedError,
     CloseResult,
@@ -73,6 +87,7 @@ from src.orchestration.paper_subscription_controls import (
     close_position,
     deactivate_subscription,
     list_subscription_views,
+    update_settings,
 )
 from src.orchestration.paper_trading import (
     enroll_in_paper_trading,
@@ -104,6 +119,18 @@ register_policy(
 register_policy(
     "POST",
     "/api/v1/paper-trading/subscriptions/{subscription_id}/backfill-history",
+    roles=_OPERATOR_ROLES,
+)
+register_policy("GET", "/api/v1/paper-trading/symbols", roles=_OPERATOR_ROLES)
+register_policy("GET", "/api/v1/paper-trading/enrol-preview", roles=_OPERATOR_ROLES)
+register_policy(
+    "GET",
+    "/api/v1/paper-trading/subscriptions/{subscription_id}/close-preview",
+    roles=_OPERATOR_ROLES,
+)
+register_policy(
+    "PATCH",
+    "/api/v1/paper-trading/subscriptions/{subscription_id}/settings",
     roles=_OPERATOR_ROLES,
 )
 register_policy("GET", "/api/v1/paper-trading/pnl/today", roles=list(Role))
@@ -274,7 +301,7 @@ async def enroll_subscription_endpoint(
     provider: AnyMarketDataProvider = Depends(get_market_data_provider),
     current_user: User = Depends(require_role),
 ) -> PaperTradingSubscriptionResponse:
-    listed = await _symbol_listing(provider, body.symbol)
+    listed = await symbol_listing(provider, body.symbol)
     if listed is False:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -423,19 +450,6 @@ async def _future_contract_for(
                 ),
             )
     return contract
-
-
-async def _symbol_listing(provider: AnyMarketDataProvider, symbol: str) -> bool | None:
-    """True/False: a connected broker does/does not list the symbol. None: cannot tell (no broker
-    is connected, or the provider is the generated-data one) -- the subscription is then allowed
-    and its state says why it is not running."""
-    check = getattr(provider, "symbol_listed", None)
-    if check is None:
-        return None
-    try:
-        return bool(await check(symbol))
-    except NoRealDataSourceError:
-        return None
 
 
 def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
@@ -677,6 +691,119 @@ async def _close_every_leg(
     response.legs = [_fill_response(r.fill) for r in outcome.closed]
     response.failures = outcome.failures
     return response
+
+
+@router.get("/symbols")
+async def search_symbols_endpoint(
+    q: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=10, ge=1, le=25),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
+    _current_user: User = Depends(require_role),
+) -> PaperSymbolSearchResponse:
+    """Listed NSE equities and indices matching `q`, from the connected brokers' own instrument
+    lists. With no broker connected there is nothing to search (`available: false`); the desk then
+    takes a typed symbol."""
+    searcher = getattr(provider, "search_symbols", None)
+    if searcher is None:
+        return PaperSymbolSearchResponse(
+            available=False, reason="No broker is connected, so symbols can't be searched."
+        )
+    try:
+        hits = await searcher(q, limit)
+    except NoRealDataSourceError as exc:
+        return PaperSymbolSearchResponse(available=False, reason=str(exc))
+    return PaperSymbolSearchResponse(
+        available=True,
+        symbols=[PaperSymbolHitResponse(symbol=hit.symbol, kind=hit.kind) for hit in hits],
+    )
+
+
+@router.get("/enrol-preview")
+async def enrol_preview_endpoint(
+    body: Annotated[EnrolPaperPreviewRequest, Query()],
+    db: AsyncSession = Depends(get_db),
+    provider: AnyMarketDataProvider = Depends(get_market_data_provider),
+    _current_user: User = Depends(require_role),
+) -> PaperEnrolPreviewResponse:
+    """What enrolling this would do -- whether the symbol is listed, the contract and lot size, the
+    entry it would size, the margin or largest loss against the account -- without enrolling it.
+    `problems` are what the real enrolment would refuse; nothing is created. A GET (the same
+    fields as an enrolment, as query parameters): it changes nothing, so it must not leave a row in
+    the audit trail for every keystroke-debounced preview."""
+    preview = await preview_enrolment(
+        db,
+        provider,
+        symbol=body.symbol,
+        instrument_kind=body.instrument_kind,
+        initial_capital=body.initial_capital,
+        position_size_pct=body.position_size_pct,
+        lots=body.lots,
+        option_strategy=body.option_strategy,
+        spread_width=body.spread_width,
+        strategy_version_id=body.strategy_version_id,
+    )
+    return PaperEnrolPreviewResponse.model_validate(asdict(preview))
+
+
+@router.get("/subscriptions/{subscription_id}/close-preview")
+async def close_preview_endpoint(
+    subscription_id: uuid.UUID,
+    price: float | None = Query(default=None, gt=0),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    _current_user: User = Depends(require_role),
+) -> PaperClosePreviewResponse:
+    """What closing the position would do right now: per leg, the price it would use, the book it
+    would walk, the estimated fill, its costs and result, and why it would be refused. Read-only.
+    `price` is a price the operator would supply (for a one-position subscription), as in the
+    close itself."""
+    try:
+        preview = await preview_close(
+            db,
+            redis,
+            subscription_id,
+            order_book_provider=build_order_book_provider(redis),
+            price=price,
+        )
+    except (SubscriptionNotFoundError, SubscriptionStateError) as exc:
+        raise _control_error(exc) from exc
+    return PaperClosePreviewResponse.model_validate(asdict(preview))
+
+
+@router.patch("/subscriptions/{subscription_id}/settings")
+async def update_settings_endpoint(
+    subscription_id: uuid.UUID,
+    body: UpdatePaperSettingsRequest,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(require_role),
+) -> UpdatePaperSettingsResponse:
+    """Changes the settings that may change after a subscription is added (stop-loss, size, lots,
+    hedge distance, signal, average length; capital only before its first fill). A reason is
+    required and the before and after values are audited. What the subscription trades never
+    changes: switch it off and add a new one for that."""
+    requested = {
+        name: value
+        for name, value in body.model_dump(exclude={"reason"}).items()
+        if value is not None
+    }
+    try:
+        subscription, changes = await update_settings(
+            db,
+            redis,
+            subscription_id,
+            actor=str(current_user.id),
+            reason=body.reason,
+            requested=requested,
+        )
+    except (SubscriptionNotFoundError, SubscriptionStateError) as exc:
+        raise _control_error(exc) from exc
+    return UpdatePaperSettingsResponse(
+        subscription=_subscription_response(subscription),
+        changes=[
+            PaperSettingChange(field=c.field, before=c.before, after=c.after) for c in changes
+        ],
+    )
 
 
 @router.get("/subscriptions/{subscription_id}")

@@ -6,7 +6,7 @@ closed keeps its hedge open.
 
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -27,6 +27,7 @@ from src.engine.paper_trading.depth import (
     depth_key,
     publish_depth,
 )
+from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import OrderBookLevel
 from src.engine.paper_trading.tick_feed import Tick, publish_tick, tick_stream_key
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
@@ -534,7 +535,7 @@ async def test_an_underlying_the_broker_lists_no_options_for_says_so(client, mak
 async def test_the_minimum_days_setting_reaches_the_enrolment_check(
     client, make_user, api, monkeypatch
 ):
-    tomorrow = date.today() + timedelta(days=1)
+    tomorrow = datetime.now(IST).date() + timedelta(days=1)  # the enrolment judges days in IST
     near = [
         OptionContract(
             option_symbol("NIFTY", tomorrow, 24500.0, "CE"),

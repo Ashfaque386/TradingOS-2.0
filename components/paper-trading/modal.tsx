@@ -11,12 +11,14 @@ export function Modal({
   description,
   onClose,
   busy = false,
+  wide = false,
   children,
 }: {
   title: string
   description?: string
   onClose: () => void
   busy?: boolean
+  wide?: boolean
   children: React.ReactNode
 }) {
   const titleId = useId()
@@ -64,7 +66,7 @@ export function Modal({
     >
       <div
         ref={panel}
-        className="pt-modal"
+        className={`pt-modal${wide ? ' pt-modal-wide' : ''}`}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"

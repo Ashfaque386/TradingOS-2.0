@@ -320,6 +320,12 @@ async def _persist_fill(
     return position
 
 
+def equity_entry_quantity(initial_capital: float, position_size_pct: float, price: float) -> int:
+    """Whole shares an equity entry buys: `position_size_pct` of capital, at `price`. The engine
+    and the desk's enrolment preview both size an entry with this."""
+    return int((initial_capital * (position_size_pct / 100.0)) // price)
+
+
 def decide_order(
     subscription: PaperTradingSubscription,
     *,
@@ -345,8 +351,9 @@ def decide_order(
     if position_quantity > 0 and signal_type == "SELL":
         return "sell", position_quantity
     if position_quantity == 0 and signal_type == "BUY":
-        entry_capital = subscription.initial_capital * (subscription.position_size_pct / 100.0)
-        return "buy", int(entry_capital // tick_price)
+        return "buy", equity_entry_quantity(
+            subscription.initial_capital, subscription.position_size_pct, tick_price
+        )
     return None
 
 

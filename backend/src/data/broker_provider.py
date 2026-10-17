@@ -35,6 +35,8 @@ from src.brokers.base import (
     FuturesContract,
     InstrumentNotFoundError,
     OptionContract,
+    SymbolHit,
+    rank_symbol_hits,
 )
 from src.brokers.futures_contracts import resolve_contract
 from src.data import lake
@@ -148,6 +150,24 @@ class BrokerMarketDataProvider:
             if await adapter.has_instrument(symbol):
                 return True
         return False
+
+    async def search_symbols(self, query: str, limit: int = 10) -> list[SymbolHit]:
+        """Listed cash equities and indices matching `query` across the connected brokers (a name
+        both list appears once). Raises `NoRealDataSourceError` when none is connected."""
+        merged: dict[str, SymbolHit] = {}
+        for adapter in self._connected():
+            try:
+                found = await adapter.search_symbols(query, limit)
+            except Exception as exc:  # noqa: BLE001 - one broker failing must not stop the next
+                logger.warning(
+                    "market_data.symbol_search_unavailable",
+                    broker=adapter.broker_name,
+                    error=f"{type(exc).__name__}: {str(exc)[:120]}",
+                )
+                continue
+            for hit in found:
+                merged.setdefault(hit.symbol.upper(), hit)
+        return rank_symbol_hits(merged.values(), query, limit)
 
     # ---- futures ----
 

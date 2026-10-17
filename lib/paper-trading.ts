@@ -439,3 +439,217 @@ export function legsUnrealized(positions: PaperPosition[]): number | null {
   if (open.some((position) => position.unrealized_pnl === null)) return null
   return open.reduce((sum, position) => sum + (position.unrealized_pnl ?? 0), 0)
 }
+
+// ---- Closing: the confirmation an operator types ----
+
+/** What must be typed to confirm a close: the subscription's symbol, and for an administrative
+ * close (no risk gate) a longer phrase, so it cannot be done on autopilot. */
+export function closeConfirmationPhrase(symbol: string, administrative: boolean): string {
+  const name = symbol.trim().toUpperCase()
+  return administrative ? `ADMIN ${name}` : name
+}
+
+export function confirmationMatches(typed: string, phrase: string): boolean {
+  return phrase.length > 0 && typed.trim().toUpperCase() === phrase.toUpperCase()
+}
+
+// ---- The underlying's price, for the payoff chart ----
+
+export const SPOT_STALE_SECONDS = 300
+
+/** An option subscription's own tick is its underlying's (its legs are quoted under their own
+ * names), so the list's `last_tick` is where the underlying is now. `stale` once it is older than
+ * `SPOT_STALE_SECONDS`: shown, but as an old price, not a live one. */
+export function underlyingSpot(
+  sub: Pick<PaperSubscription, 'instrument_kind' | 'last_tick'>,
+): { price: number; ageSeconds: number; stale: boolean } | null {
+  if (sub.instrument_kind !== 'option' || sub.last_tick === null) return null
+  const { price, age_seconds: ageSeconds } = sub.last_tick
+  return { price, ageSeconds, stale: ageSeconds > SPOT_STALE_SECONDS }
+}
+
+// ---- Editing a subscription's settings ----
+
+export type SettingField =
+  | 'stop_loss_pct'
+  | 'position_size_pct'
+  | 'lots'
+  | 'spread_width'
+  | 'sma_window'
+  | 'builtin_strategy'
+  | 'initial_capital'
+
+export const SETTING_LABEL: Record<SettingField, string> = {
+  stop_loss_pct: 'Stop-loss',
+  position_size_pct: 'Size per entry',
+  lots: 'Lots',
+  spread_width: 'Hedge distance',
+  sma_window: 'Average length',
+  builtin_strategy: 'Signal',
+  initial_capital: 'Capital',
+}
+
+type SettingsSource = Pick<
+  PaperSubscription,
+  | 'instrument_kind'
+  | 'option_strategy'
+  | 'stop_loss_pct'
+  | 'position_size_pct'
+  | 'lots'
+  | 'spread_width'
+  | 'sma_window'
+  | 'builtin_strategy'
+  | 'initial_capital'
+>
+
+export type SettingsForm = Record<Exclude<SettingField, 'builtin_strategy'>, string> & {
+  builtin_strategy: 'always_long' | 'sma_crossover'
+}
+
+/** A subscription that has never been in the market: nothing open, no result, no costs. Capital
+ * may change until then; afterwards it is the basis its returns are measured on. (A hint: the
+ * backend decides from the fills themselves.) */
+export function hasTraded(
+  sub: Pick<PaperSubscription, 'open_legs' | 'realized_pnl' | 'costs_total' | 'quantity'>,
+): boolean {
+  return sub.open_legs > 0 || sub.quantity !== 0 || sub.realized_pnl !== 0 || sub.costs_total !== 0
+}
+
+/** The settings that apply to this kind of subscription, in the order they are shown. */
+export function editableSettings(sub: SettingsSource): SettingField[] {
+  const fields: SettingField[] = ['stop_loss_pct']
+  if (sub.instrument_kind === 'equity') fields.push('position_size_pct')
+  else fields.push('lots')
+  if (sub.option_strategy === 'vertical_spread') fields.push('spread_width')
+  fields.push('builtin_strategy', 'sma_window', 'initial_capital')
+  return fields
+}
+
+export function settingsForm(sub: SettingsSource): SettingsForm {
+  return {
+    stop_loss_pct: String(sub.stop_loss_pct),
+    position_size_pct: String(sub.position_size_pct),
+    lots: String(sub.lots),
+    spread_width: String(sub.spread_width),
+    sma_window: String(sub.sma_window),
+    builtin_strategy: sub.builtin_strategy === 'always_long' ? 'always_long' : 'sma_crossover',
+    initial_capital: String(sub.initial_capital),
+  }
+}
+
+export function formatSettingValue(field: SettingField, value: number | string): string {
+  switch (field) {
+    case 'stop_loss_pct':
+    case 'position_size_pct':
+      return `${value}%`
+    case 'spread_width':
+      return `${value} ${Number(value) === 1 ? 'strike' : 'strikes'}`
+    case 'sma_window':
+      return `${value} points`
+    case 'builtin_strategy':
+      return value === 'always_long' ? 'Always long' : 'Moving average'
+    case 'initial_capital':
+      return formatInr(Number(value))
+    default:
+      return String(value)
+  }
+}
+
+/** When a change takes effect, in the words an operator needs before saving it. */
+export function settingEffect(field: SettingField, sub: Pick<PaperSubscription, 'instrument_kind' | 'open_legs'>): string {
+  const holding = sub.open_legs > 0
+  switch (field) {
+    case 'stop_loss_pct':
+      return holding ? 'Applies to the open position from the next price tick.' : 'Applies from its next entry.'
+    case 'position_size_pct':
+      return 'Applies to the next entry. An open position is not resized.'
+    case 'lots':
+      return sub.instrument_kind === 'option'
+        ? 'Applies to the next entry; a structure already planned is dropped and chosen again.'
+        : 'Applies to the next entry. An open position is not resized.'
+    case 'spread_width':
+      return 'Applies to the next entry; a structure already planned is dropped and chosen again.'
+    case 'sma_window':
+    case 'builtin_strategy':
+      return holding
+        ? 'Takes effect with the next daily signal (08:00 IST). Today\'s signal stands. If the new one points the other way, the position is closed on the tick after it.'
+        : 'Takes effect with the next daily signal (08:00 IST). Today\'s signal stands.'
+    case 'initial_capital':
+      return 'Sizes every later entry and its margin check.'
+    default:
+      return ''
+  }
+}
+
+export type PlannedChange = {
+  field: SettingField
+  label: string
+  before: string
+  after: string
+  effect: string
+  /** What is sent: a number, or the signal's name. */
+  value: number | string
+}
+
+const INTEGER_FIELDS: SettingField[] = ['lots', 'spread_width', 'sma_window']
+
+/** The changes a form would make, and what is wrong with it. Mirrors the backend's own limits
+ * (which stay the authority): stop-loss and capital above zero, size above zero up to 100, lots 1
+ * to 1000, hedge distance 1 to 20, average length a whole number above zero. */
+export function planSettingsChange(
+  sub: SettingsSource & Pick<PaperSubscription, 'open_legs'>,
+  form: SettingsForm,
+): { changes: PlannedChange[]; errors: Partial<Record<SettingField, string>> } {
+  const changes: PlannedChange[] = []
+  const errors: Partial<Record<SettingField, string>> = {}
+  const current = settingsForm(sub)
+  for (const field of editableSettings(sub)) {
+    if (form[field] === current[field]) continue
+    let value: number | string
+    if (field === 'builtin_strategy') {
+      value = form.builtin_strategy
+    } else {
+      const text = form[field].trim()
+      const parsed = Number(text)
+      if (text === '' || Number.isNaN(parsed)) {
+        errors[field] = 'Enter a number.'
+        continue
+      }
+      if (INTEGER_FIELDS.includes(field) && !Number.isInteger(parsed)) {
+        errors[field] = 'Use a whole number.'
+        continue
+      }
+      const limits: Partial<Record<SettingField, [number, number]>> = {
+        position_size_pct: [Number.MIN_VALUE, 100],
+        lots: [1, 1000],
+        spread_width: [1, 20],
+        sma_window: [1, Number.MAX_SAFE_INTEGER],
+      }
+      const [low, high] = limits[field] ?? [Number.MIN_VALUE, Number.MAX_SAFE_INTEGER]
+      if (parsed < low || parsed > high) {
+        errors[field] =
+          field === 'position_size_pct'
+            ? 'Use more than 0 and at most 100.'
+            : field === 'lots'
+              ? 'Use 1 to 1000.'
+              : field === 'spread_width'
+                ? 'Use 1 to 20.'
+                : 'Use more than 0.'
+        continue
+      }
+      value = parsed
+    }
+    // A number typed as `5.0` is the same setting as `5`: compare what is sent, not the text.
+    const before = field === 'builtin_strategy' ? current[field] : Number(current[field])
+    if (value === before) continue
+    changes.push({
+      field,
+      label: SETTING_LABEL[field],
+      before: formatSettingValue(field, before),
+      after: formatSettingValue(field, value),
+      effect: settingEffect(field, sub),
+      value,
+    })
+  }
+  return { changes, errors }
+}

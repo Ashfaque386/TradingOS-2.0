@@ -19,7 +19,7 @@ without ever sending it, for a broker with no sandbox to send it to.
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
@@ -258,6 +258,41 @@ class BrokerQuote:
     exchange_time: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SymbolHit:
+    """One thing a broker lists that a paper subscription can trade: a cash equity or an index."""
+
+    symbol: str
+    kind: Literal["equity", "index"]
+
+
+# The indices a subscription can be on (their futures and options are what the engine trades).
+SEARCHABLE_INDICES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
+
+
+def rank_symbol_hits(hits: Iterable[SymbolHit], query: str, limit: int) -> list[SymbolHit]:
+    """The hits that match `query` (case-insensitive), best first: an exact match, then names that
+    start with it, then names that contain it; indices before equities, then shorter names, then
+    alphabetically. At most `limit`; nothing for an empty query."""
+    wanted = query.strip().upper()
+    if not wanted or limit <= 0:
+        return []
+    scored: list[tuple[int, int, int, str, SymbolHit]] = []
+    for hit in hits:
+        name = hit.symbol.upper()
+        if name == wanted:
+            rank = 0
+        elif name.startswith(wanted):
+            rank = 1
+        elif wanted in name:
+            rank = 2
+        else:
+            continue
+        scored.append((rank, 0 if hit.kind == "index" else 1, len(name), name, hit))
+    scored.sort(key=lambda row: row[:4])
+    return [row[4] for row in scored[:limit]]
+
+
 def _exchange_time(row: dict[str, Any], broker: str) -> datetime | None:
     """Kite sends `timestamp` as `YYYY-MM-DD HH:MM:SS` with no zone (NSE time, so IST). Upstox's
     equivalent fields are documented inconsistently (the published example's `timestamp` does not
@@ -491,3 +526,6 @@ class BrokerAdapter(Protocol):
         self, symbol: str, interval: CandleInterval, start: date, end: date
     ) -> list[Candle]: ...
     async def has_instrument(self, symbol: str) -> bool: ...
+    async def search_symbols(self, query: str, limit: int = 10) -> list[SymbolHit]:
+        """Listed cash equities and indices whose name matches `query`, best first."""
+        ...

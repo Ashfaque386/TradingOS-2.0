@@ -58,9 +58,11 @@ flows named in that pass and has grown since:
   real backend. `backend/scripts/seed_e2e_paper_desk.py` writes what the engine
   would have left (positions, fills with costs, a switched-off subscription that
   still holds shares, a credit spread); nothing is priced, so the spec checks the
-  desk says so. It also drives a close (refused for want of a real price, then
-  cleared administratively), adding and switching a subscription off and on, and
-  a RiskManager seeing the desk with no controls.
+  desk says so. It also drives a close (the estimate says there is no price, the
+  button waits for the typed confirmation, then an administrative close clears
+  it), adding a subscription with the symbol search saying no broker is
+  connected, switching it off and on, editing a subscription's settings, and a
+  RiskManager seeing the desk with no controls.
 
 ## Why not `docker compose up`
 

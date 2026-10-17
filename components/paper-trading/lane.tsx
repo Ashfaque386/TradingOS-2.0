@@ -21,9 +21,11 @@ import {
   groupFills,
   legsUnrealized,
   openLegs,
+  payoffAt,
   payoffSummary,
   subscriptionName,
   tone,
+  underlyingSpot,
 } from '@/lib/paper-trading'
 import { PayoffChart } from './payoff-chart'
 
@@ -46,6 +48,7 @@ export function Lane({
   onDeactivate,
   onClose,
   onActivate,
+  onEditSettings,
 }: {
   sub: PaperSubscription
   expanded: boolean
@@ -56,6 +59,7 @@ export function Lane({
   onDeactivate: () => void
   onClose: () => void
   onActivate: () => void
+  onEditSettings: () => void
 }) {
   const [tab, setTab] = useState<Tab>('legs')
   const [positions, setPositions] = useState<PaperPosition[] | null>(null)
@@ -147,7 +151,7 @@ export function Lane({
           {tab === 'legs' && <LegsTab sub={sub} positions={positions} now={now} />}
           {tab === 'payoff' && <PayoffTab positions={positions} sub={sub} />}
           {tab === 'costs' && <CostsTab sub={sub} fills={fills} now={now} />}
-          {tab === 'settings' && <SettingsTab sub={sub} countdown={countdown} />}
+          {tab === 'settings' && <SettingsTab sub={sub} countdown={countdown} canManage={canManage} onEdit={onEditSettings} />}
           {canManage && (
             <div className="pt-actions">
               {sub.open_legs > 0 && <button type="button" className="button-danger" onClick={onClose}>Close position</button>}
@@ -214,7 +218,8 @@ function LegsTab({ sub, positions, now }: { sub: PaperSubscription; positions: P
 
 function PayoffTab({ positions, sub }: { positions: PaperPosition[] | null; sub: PaperSubscription }) {
   const legs = useMemo(() => openLegs(positions ?? []), [positions])
-  const summary = useMemo(() => payoffSummary(legs), [legs])
+  const spot = underlyingSpot(sub)
+  const summary = useMemo(() => payoffSummary(legs, spot?.price ?? null), [legs, spot?.price])
   if (positions === null) return <p className="pt-muted">Loading…</p>
   if (legs.length === 0) {
     return <p className="pt-muted" style={{ fontSize: '.72rem' }}>The payoff shows once it holds legs. {OPTION_STRATEGY_LABEL[sub.option_strategy ?? 'long_option']} is {sub.option_strategy === 'vertical_spread' ? 'capped on both sides' : 'limited to the premium paid'}.</p>
@@ -224,7 +229,15 @@ function PayoffTab({ positions, sub }: { positions: PaperPosition[] | null; sub:
   }
   return (
     <>
-      <PayoffChart summary={summary} />
+      <PayoffChart summary={summary} spot={spot} />
+      {spot && (
+        <p className="pt-spot-line">
+          {sub.symbol} is at <b className="pt-num">{formatInr(spot.price, { decimals: 2 })}</b>
+          <span className="pt-muted"> ({formatAge(spot.ageSeconds)}{spot.stale ? ', an old price' : ''}). Held to expiry from here it would be worth{' '}</span>
+          <b className={`pt-num pt-${tone(payoffAt(legs, spot.price))}`}>{formatInr(payoffAt(legs, spot.price), { signed: true })}</b>
+          <span className="pt-muted"> before costs.</span>
+        </p>
+      )}
       <p className="pt-muted" style={{ marginTop: '.5rem', fontSize: '.6rem' }}>
         At expiry, from what each leg cost, before trading costs. Value before expiry also depends on time and volatility, which this does not model.
       </p>
@@ -290,7 +303,17 @@ function CostsTab({ sub, fills, now }: { sub: PaperSubscription; fills: PaperFil
   )
 }
 
-function SettingsTab({ sub, countdown }: { sub: PaperSubscription; countdown: ReturnType<typeof expiryCountdown> }) {
+function SettingsTab({
+  sub,
+  countdown,
+  canManage,
+  onEdit,
+}: {
+  sub: PaperSubscription
+  countdown: ReturnType<typeof expiryCountdown>
+  canManage: boolean
+  onEdit: () => void
+}) {
   const rows: [string, string][] = [
     ['Capital', formatInr(sub.initial_capital)],
     ['Stop-loss', `${sub.stop_loss_pct}%${sub.instrument_kind === 'option' ? ' of the premium' : ''}`],
@@ -306,13 +329,20 @@ function SettingsTab({ sub, countdown }: { sub: PaperSubscription; countdown: Re
       : []),
   ]
   return (
-    <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.45rem 1.5rem', fontSize: '.68rem' }}>
-      {rows.map(([label, value]) => (
-        <div key={label} style={{ display: 'contents' }}>
-          <dt className="pt-muted">{label}</dt>
-          <dd style={{ color: '#e2e8f0', overflowWrap: 'anywhere' }}>{value}</dd>
+    <>
+      <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '.45rem 1.5rem', fontSize: '.68rem' }}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ display: 'contents' }}>
+            <dt className="pt-muted">{label}</dt>
+            <dd style={{ color: '#e2e8f0', overflowWrap: 'anywhere' }}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {canManage && (
+        <div className="pt-actions">
+          <button type="button" className="button-secondary" onClick={onEdit}>Edit settings</button>
         </div>
-      ))}
-    </dl>
+      )}
+    </>
   )
 }

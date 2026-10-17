@@ -54,9 +54,11 @@ test.describe('paper-trading desk', () => {
     await expect(spread).toContainText('+₹2,500')
     await expect(spread).toContainText('−₹2,500')
     await expect(spread).toContainText('24450')
+    // Nothing prices the underlying here, so no "now" line is drawn or described.
+    await expect(spread.locator('.pt-spot-line')).toHaveCount(0)
   })
 
-  test('closing an unwatched position needs a reason, and with no real price the close refuses', async ({ page }) => {
+  test('closing an unwatched position: says what it would do, and asks to be confirmed', async ({ page }) => {
     await login(page, E2E_USERS.admin)
     await page.goto('/paper-trading')
 
@@ -64,33 +66,51 @@ test.describe('paper-trading desk', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toContainText(`Close ${seeded.loose}`)
 
-    // No reason: refused here, before any request.
-    await dialog.getByRole('button', { name: 'Close position' }).click()
-    await expect(dialog.getByRole('alert')).toContainText('at least 3 characters')
+    // The estimate says why it cannot close yet (no real price was ever published) instead of
+    // letting the operator find out by trying.
+    const closeButton = dialog.getByRole('button', { name: 'Close position' })
+    await expect(dialog.getByText(/no price has ever been published/)).toBeVisible()
+    await expect(closeButton).toBeDisabled()
 
-    // With a reason but no real price anywhere, the engine refuses rather than inventing one.
+    // Even confirmed and explained, a normal close stays refused while there is nothing to close on.
+    await dialog.getByLabel(`Type ${seeded.loose} to confirm`).fill(seeded.loose.toLowerCase())
     await dialog.getByLabel('Reason').fill('e2e cleanup')
-    await dialog.getByRole('button', { name: 'Close position' }).click()
-    await expect(dialog.getByRole('alert')).toBeVisible()
-    await expect(dialog).toBeVisible()
+    await expect(closeButton).toBeDisabled()
+    await expect(dialog).toContainText('see the estimate')
 
-    // The administrator can clear it at a price they state, and it is audited as administrative.
+    // A price the operator supplies is used as the reference, and shown as theirs. (Whether a
+    // normal close can then fill depends on whether there is an order book to walk: this test
+    // environment generates one, a real session needs the broker's, so that is not asserted.)
     await dialog.getByLabel(/Price/).fill('205')
+    await expect(dialog.locator('.pt-estimate').getByText(/supplied/)).toBeVisible()
+
+    // The administrator can clear it at a price they state, with a longer confirmation.
     await dialog.getByText('Administrative close').click()
-    await dialog.getByRole('button', { name: 'Close position' }).click()
+    await expect(dialog.getByLabel(`Type ADMIN ${seeded.loose} to confirm`)).toBeVisible()
+    await expect(closeButton).toBeDisabled() // the confirmation typed was for the other kind of close
+    await dialog.getByLabel(`Type ADMIN ${seeded.loose} to confirm`).fill(`admin ${seeded.loose}`)
+    await expect(dialog).toContainText('no costs')
+    await closeButton.click()
     await expect(dialog).toBeHidden()
     await expect(page.getByRole('status').filter({ hasText: `Closed ${seeded.loose}` })).toBeVisible()
     await expect(page.getByRole('alert').filter({ hasText: seeded.loose })).toHaveCount(0)
   })
 
-  test('adds a subscription and switches it off', async ({ page }) => {
+  test('adds a subscription: the symbol is checked as it is typed, and it can be added and switched off', async ({ page }) => {
     await login(page, E2E_USERS.admin)
     await page.goto('/paper-trading')
 
     await page.getByRole('button', { name: 'Add subscription' }).first().click()
     const dialog = page.getByRole('dialog', { name: 'Add a paper subscription' })
     await dialog.getByLabel('Strategy').selectOption({ label: seeded.strategy_name })
-    await dialog.getByLabel('Symbol').fill('E2EADDED')
+    await dialog.getByRole('combobox', { name: 'Symbol' }).fill('E2EADDED')
+
+    // No broker is connected here: the search says so and the typed symbol is used as typed; the
+    // preview says it cannot check the symbol or price it, and still lets it be added.
+    await expect(dialog.getByRole('status')).toContainText(/no broker is connected/i)
+    await expect(dialog.getByText("Can't be checked: no broker")).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Add subscription' })).toBeEnabled()
+
     await dialog.getByRole('button', { name: 'Add subscription' }).click()
     await expect(dialog).toBeHidden()
 
@@ -109,12 +129,51 @@ test.describe('paper-trading desk', () => {
     await expect(lane.getByText('Off', { exact: true })).toBeHidden()
   })
 
+  test('changes a subscription\'s settings: shows what will change and when, and keeps capital fixed once it has traded', async ({ page }) => {
+    await login(page, E2E_USERS.admin)
+    await page.goto('/paper-trading')
+
+    const lane = page.getByTestId(`lane-${seeded.held}`)
+    await lane.getByRole('button', { name: new RegExp(seeded.held) }).click()
+    await lane.getByRole('tab', { name: 'Settings' }).click()
+    await expect(lane).toContainText('3%')
+    await lane.getByRole('button', { name: 'Edit settings' }).click()
+
+    const dialog = page.getByRole('dialog', { name: `Settings for ${seeded.held}` })
+    const save = dialog.getByRole('button', { name: 'Save settings' })
+    await expect(save).toBeDisabled()
+    // It has traded (it holds shares and has paid costs), so its capital is not editable.
+    await expect(dialog.getByLabel('Capital (₹)')).toHaveAttribute('readonly', '')
+
+    // A value the backend would refuse is caught here, beside the field.
+    await dialog.getByLabel('Size per entry (%)').fill('150')
+    await expect(dialog.getByText('Use more than 0 and at most 100.')).toBeVisible()
+    await expect(save).toBeDisabled()
+
+    await dialog.getByLabel('Size per entry (%)').fill('5')
+    await dialog.getByLabel('Stop-loss (%)').fill('6')
+    const changes = dialog.getByRole('region', { name: 'What will change' })
+    await expect(changes).toContainText('3% → 6%')
+    await expect(changes).toContainText('open position from the next price tick')
+    await expect(save).toBeDisabled() // a reason is still needed
+
+    await dialog.getByLabel('Reason').fill('wider stop after review')
+    await save.click()
+    await expect(dialog).toBeHidden()
+    await expect(page.getByRole('status').filter({ hasText: 'stop-loss 3% → 6%' })).toBeVisible()
+    await expect(lane).toContainText('6%')
+  })
+
   test('a risk manager sees the desk but has no controls', async ({ page }) => {
     await login(page, E2E_USERS.risk)
     await page.goto('/paper-trading')
     await expect(page.getByRole('heading', { name: 'Paper desk' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Add subscription' })).toHaveCount(0)
-    await page.getByTestId(`lane-${seeded.held}`).getByRole('button', { name: new RegExp(seeded.held) }).click()
+    const lane = page.getByTestId(`lane-${seeded.held}`)
+    await lane.getByRole('button', { name: new RegExp(seeded.held) }).click()
     await expect(page.getByRole('button', { name: 'Switch off' })).toHaveCount(0)
+    await lane.getByRole('tab', { name: 'Settings' }).click()
+    await expect(lane.getByText('Capital', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Edit settings' })).toHaveCount(0)
   })
 })

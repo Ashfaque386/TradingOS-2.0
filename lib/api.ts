@@ -492,6 +492,130 @@ export const closePaperPosition = (
   body,
 )
 
+// ---- Paper desk: previews and settings ----
+export type PaperSymbolHit = { symbol: string; kind: 'equity' | 'index' }
+// `available: false`: nothing to search (no broker connected); the caller types a symbol.
+export type PaperSymbolSearch = { available: boolean; reason: string | null; symbols: PaperSymbolHit[] }
+
+export type PaperOptionLegPreview = {
+  symbol: string
+  side: 'buy' | 'sell'
+  option_type: 'CE' | 'PE'
+  strike: number
+  quantity: number
+  price: number | null
+}
+
+export type PaperOptionScenario = {
+  signal: 'BUY' | 'SELL'
+  view: string
+  legs: PaperOptionLegPreview[]
+  // null: a leg has no price, so the largest loss is unknown (not zero)
+  max_loss: number | null
+  fits: boolean | null
+  note: string | null
+}
+
+export type PaperEnrolPreview = {
+  symbol: string
+  instrument_kind: PaperInstrumentKind
+  listing: 'listed' | 'not_listed' | 'unknown'
+  price: number | null
+  price_symbol: string | null
+  equity: { entry_capital: number; shares: number | null; notional: number | null } | null
+  future: {
+    contract: string
+    expiry: string
+    rolls_on: string
+    lot_size: number
+    lots: number
+    quantity: number
+    notional: number | null
+    margin: number | null
+    margin_limit: number
+    margin_pct: number
+    fits: boolean | null
+  } | null
+  option: {
+    expiry: string
+    lot_size: number | null
+    lots: number
+    strategy: string
+    spread_width: number
+    limit: number
+  } | null
+  scenarios: PaperOptionScenario[]
+  problems: string[] // the real enrolment would refuse
+  warnings: string[] // it would allow, but the operator should know
+}
+
+export type PaperCloseLegPreview = {
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  avg_cost: number
+  reference_price: number | null
+  reference_age_seconds: number | null
+  reference_source: string | null
+  book_age_seconds: number | null
+  // `real` (the broker's live depth) or `synthetic` (a generated book: a demo or test setup)
+  book_source: string | null
+  est_avg_price: number | null
+  est_filled: number
+  est_remaining: number
+  est_costs: number | null
+  est_gross_pnl: number | null
+  problem: string | null
+}
+
+export type PaperClosePreview = {
+  subscription_id: string
+  symbol: string
+  market_open: boolean
+  legs: PaperCloseLegPreview[]
+  blockers: string[]
+  notes: string[]
+  est_costs_total: number | null
+  est_gross_pnl: number | null
+  can_close: boolean
+}
+
+export type PaperSettingsRequest = {
+  reason: string
+  stop_loss_pct?: number
+  position_size_pct?: number
+  lots?: number
+  spread_width?: number
+  sma_window?: number
+  builtin_strategy?: 'always_long' | 'sma_crossover'
+  initial_capital?: number
+}
+
+export type PaperSettingChange = { field: string; before: number | string; after: number | string }
+
+export const searchPaperSymbols = (query: string, limit = 8) =>
+  apiGet<PaperSymbolSearch>(
+    `/api/v1/paper-trading/symbols?q=${encodeURIComponent(query)}&limit=${limit}`,
+  )
+// A GET with the enrolment's own fields as query parameters: it changes nothing, so it leaves no
+// audit row (a POST would write one for every preview).
+export const previewPaperEnrolment = (body: Omit<EnrolPaperRequest, 'strategy_version_id'> & { strategy_version_id?: string }) => {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(body)) {
+    if (value !== undefined) query.set(key, String(value))
+  }
+  return apiGet<PaperEnrolPreview>(`/api/v1/paper-trading/enrol-preview?${query.toString()}`)
+}
+export const previewPaperClose = (subscriptionId: string, price?: number) =>
+  apiGet<PaperClosePreview>(
+    `/api/v1/paper-trading/subscriptions/${subscriptionId}/close-preview${price !== undefined ? `?price=${price}` : ''}`,
+  )
+export const updatePaperSettings = (subscriptionId: string, body: PaperSettingsRequest) =>
+  apiPatch<{ subscription: { id: string }; changes: PaperSettingChange[] }>(
+    `/api/v1/paper-trading/subscriptions/${subscriptionId}/settings`,
+    body,
+  )
+
 // ---- Orchestration runs ----
 export type TaskSummary = {
   id: string

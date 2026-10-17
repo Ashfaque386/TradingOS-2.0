@@ -37,6 +37,7 @@ import httpx
 
 from src.brokers.base import (
     QUOTE_BATCH_SIZE,
+    SEARCHABLE_INDICES,
     BrokerCredentials,
     BrokerOrder,
     BrokerOrderResult,
@@ -52,10 +53,12 @@ from src.brokers.base import (
     OrderRequest,
     OrderSide,
     OrderType,
+    SymbolHit,
     broker_request_error,
     broker_unreachable,
     parse_candle,
     quote_from_row,
+    rank_symbol_hits,
 )
 from src.brokers.upstox_instruments import (
     InstrumentResolver,
@@ -272,6 +275,12 @@ class UpstoxAdapter:
         except UpstoxInstrumentNotFoundError:
             return False
         return True
+
+    async def search_symbols(self, query: str, limit: int = 10) -> list[SymbolHit]:
+        equities, indices = await self._instruments.listed_names()
+        hits = [SymbolHit(symbol, "equity") for symbol in equities]
+        hits += [SymbolHit(name, "index") for name in SEARCHABLE_INDICES if name in indices]
+        return rank_symbol_hits(hits, query, limit)
 
     async def _candles_at(self, path: str) -> list[Candle]:
         data = await self._request("GET", path)

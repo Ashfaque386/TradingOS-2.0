@@ -10,7 +10,9 @@ const PAD = { left: 8, right: 8, top: 12, bottom: 24 }
 /** The at-expiry payoff of the held option legs (before costs): the line, the zero line, the
  * break-evens and where the underlying is now. Drawn by hand: the curve is a few straight
  * segments, and a chart library would hide the kinks that matter. */
-export function PayoffChart({ summary, spot = null }: { summary: PayoffSummary; spot?: number | null }) {
+export type Spot = { price: number; ageSeconds: number; stale: boolean }
+
+export function PayoffChart({ summary, spot = null }: { summary: PayoffSummary; spot?: Spot | null }) {
   const { curve } = summary
   if (curve.length < 2) return null
   const xs = curve.map((p) => p.spot)
@@ -23,7 +25,7 @@ export function PayoffChart({ summary, spot = null }: { summary: PayoffSummary; 
   const zero = y(0)
   const line = curve.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.spot).toFixed(1)},${y(p.payoff).toFixed(1)}`).join(' ')
   const area = `${line} L${x(xMax).toFixed(1)},${zero.toFixed(1)} L${x(xMin).toFixed(1)},${zero.toFixed(1)} Z`
-  const spotVisible = spot !== null && spot >= xMin && spot <= xMax
+  const spotVisible = spot !== null && spot.price >= xMin && spot.price <= xMax
   const description =
     `Payoff at expiry: best ${summary.maxProfit === null ? 'unlimited' : formatInr(summary.maxProfit, { signed: true })}, ` +
     `worst ${summary.maxLoss === null ? 'unlimited' : formatInr(summary.maxLoss, { signed: true })}` +
@@ -50,9 +52,17 @@ export function PayoffChart({ summary, spot = null }: { summary: PayoffSummary; 
         ))}
         {spotVisible && (
           <g>
-            <line x1={x(spot)} x2={x(spot)} y1={PAD.top} y2={H - PAD.bottom} stroke="#22d3ee" strokeWidth="1.5" />
-            <text x={x(spot)} y={PAD.top - 2} textAnchor="middle" fill="#22d3ee" fontSize="10" fontFamily="JetBrains Mono, monospace">
-              now {Math.round(spot)}
+            <line
+              x1={x(spot.price)}
+              x2={x(spot.price)}
+              y1={PAD.top}
+              y2={H - PAD.bottom}
+              stroke={spot.stale ? '#64748b' : '#22d3ee'}
+              strokeWidth="1.5"
+              strokeDasharray={spot.stale ? '4 3' : undefined}
+            />
+            <text x={x(spot.price)} y={PAD.top - 2} textAnchor="middle" fill={spot.stale ? '#94a3b8' : '#22d3ee'} fontSize="10" fontFamily="JetBrains Mono, monospace">
+              {spot.stale ? 'last' : 'now'} {Math.round(spot.price)}
             </text>
           </g>
         )}

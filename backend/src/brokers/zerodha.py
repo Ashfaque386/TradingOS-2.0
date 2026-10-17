@@ -59,6 +59,7 @@ import httpx
 
 from src.brokers.base import (
     QUOTE_BATCH_SIZE,
+    SEARCHABLE_INDICES,
     BrokerCredentials,
     BrokerOrder,
     BrokerOrderResult,
@@ -75,6 +76,7 @@ from src.brokers.base import (
     OrderRequest,
     OrderSide,
     OrderType,
+    SymbolHit,
     broker_request_error,
     broker_unreachable,
     futures_symbol,
@@ -82,6 +84,7 @@ from src.brokers.base import (
     parse_candle,
     parse_option_symbol,
     quote_from_row,
+    rank_symbol_hits,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -116,6 +119,8 @@ _NFO_INSTRUMENTS_CACHE_TTL_SECONDS = 900
 _nfo_instruments_cache: list[dict[str, Any]] | None = None
 _nfo_instruments_cache_at: float = 0.0
 # The option index derived from that dump: (the rows it was built from, the index).
+# The NSE cash equities among the tokens above (the rest are indices), refreshed with them.
+_nse_equity_symbols: frozenset[str] = frozenset()
 _nfo_option_index: tuple[list[dict[str, Any]], dict[tuple[str, date, float, str], Any]] | None = (
     None
 )
@@ -388,7 +393,7 @@ class ZerodhaKiteAdapter:
 
     async def _nse_tokens(self) -> dict[str, str]:
         """tradingsymbol -> instrument_token for NSE cash equities and NSE indices."""
-        global _nse_token_cache, _nse_token_cache_at
+        global _nse_token_cache, _nse_token_cache_at, _nse_equity_symbols
         now = time.monotonic()
         if (
             _nse_token_cache is not None
@@ -411,13 +416,17 @@ class ZerodhaKiteAdapter:
                 resp.status_code, f"zerodha GET /instruments/NSE: {resp.text[:200]}"
             )
         tokens: dict[str, str] = {}
+        equities: set[str] = set()
         for row in csv.DictReader(io.StringIO(resp.text)):
             symbol = (row.get("tradingsymbol") or "").upper()
             token = row.get("instrument_token")
             is_equity = row.get("segment") == "NSE" and row.get("instrument_type") == "EQ"
             if symbol and token and (is_equity or row.get("segment") == "INDICES"):
                 tokens.setdefault(symbol, token)
+                if is_equity:
+                    equities.add(symbol)
         _nse_token_cache = tokens
+        _nse_equity_symbols = frozenset(equities)
         _nse_token_cache_at = now
         return tokens
 
@@ -438,6 +447,16 @@ class ZerodhaKiteAdapter:
         except InstrumentNotFoundError:
             return False
         return True
+
+    async def search_symbols(self, query: str, limit: int = 10) -> list[SymbolHit]:
+        tokens = await self._nse_tokens()
+        hits = [SymbolHit(symbol, "equity") for symbol in _nse_equity_symbols]
+        hits += [
+            SymbolHit(name, "index")
+            for name in SEARCHABLE_INDICES
+            if _INDEX_TRADINGSYMBOLS.get(name) in tokens
+        ]
+        return rank_symbol_hits(hits, query, limit)
 
     async def get_historical_candles(
         self, symbol: str, interval: CandleInterval, start: date, end: date

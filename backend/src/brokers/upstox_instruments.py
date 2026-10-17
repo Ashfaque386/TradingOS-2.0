@@ -71,6 +71,8 @@ class UpstoxInstrumentNotFoundError(InstrumentNotFoundError):
 class InstrumentResolver(Protocol):
     async def resolve(self, symbol: str) -> str: ...
 
+    async def listed_names(self) -> tuple[list[str], set[str]]: ...
+
     async def futures_for(self, underlying: str) -> list[FuturesContract]: ...
 
     async def options_for(self, underlying: str) -> list[OptionContract]: ...
@@ -227,6 +229,11 @@ class UpstoxInstruments:
         if key is None:
             raise UpstoxInstrumentNotFoundError(symbol)
         return key
+
+    async def listed_names(self) -> tuple[list[str], set[str]]:
+        """(cash equity trading symbols, index names) in the current instrument file."""
+        index = await self._current_index()
+        return list(index.equities), set(index.indices)
 
     async def options_for(self, underlying: str) -> list[OptionContract]:
         """The underlying's listed option contracts, every expiry and strike."""

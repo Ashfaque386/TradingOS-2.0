@@ -31,7 +31,7 @@ from typing import Literal
 import pandas as pd
 import structlog
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
@@ -625,6 +625,111 @@ async def deactivate_subscription(
     return DeactivationResult(
         subscription=subscription, closed=closed, left_unmanaged_quantity=left_unmanaged
     )
+
+
+# What may be changed after a subscription is added. The symbol, the kind of instrument, the
+# strategy version and the option structure define *what* is being traded and stay fixed (switch
+# off and add a new subscription to change them).
+EDITABLE_SETTINGS = (
+    "stop_loss_pct",
+    "position_size_pct",
+    "lots",
+    "spread_width",
+    "sma_window",
+    "builtin_strategy",
+    "initial_capital",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SettingChange:
+    field: str
+    before: float | int | str
+    after: float | int | str
+
+
+def plan_settings_change(
+    subscription: PaperTradingSubscription,
+    requested: dict[str, float | int | str],
+    *,
+    has_fills: bool,
+) -> list[SettingChange]:
+    """The changes `requested` would make, or the reason it cannot be made. Only what differs from
+    the current value counts. A setting that does not apply to this kind of subscription, or
+    capital once it has traded (it is the basis its returns and drawdown are measured on), is
+    refused rather than quietly ignored."""
+    unknown = sorted(set(requested) - set(EDITABLE_SETTINGS))
+    if unknown:
+        raise SubscriptionStateError(f"{', '.join(unknown)} cannot be changed after it is added")
+    kind = subscription.instrument_kind
+    not_applicable = {
+        "position_size_pct": kind != "equity",
+        "lots": kind == "equity",
+        "spread_width": subscription.option_strategy != "vertical_spread",
+    }
+    changes: list[SettingChange] = []
+    for name, value in requested.items():
+        if not_applicable.get(name):
+            raise SubscriptionStateError(
+                f"{name} does not apply to a {subscription.option_strategy or kind} subscription"
+            )
+        before = getattr(subscription, name)
+        if before == value:
+            continue
+        if name == "initial_capital" and has_fills:
+            raise SubscriptionStateError(
+                "capital cannot be changed once the subscription has traded: its returns and "
+                "drawdown are measured against it. Switch it off and add a new one."
+            )
+        changes.append(SettingChange(name, before, value))
+    if not changes:
+        raise SubscriptionStateError("nothing to change: every value is already what it is")
+    return changes
+
+
+async def update_settings(
+    db: AsyncSession,
+    redis: Redis,
+    subscription_id: uuid.UUID,
+    *,
+    actor: str,
+    reason: str,
+    requested: dict[str, float | int | str],
+) -> tuple[PaperTradingSubscription, list[SettingChange]]:
+    subscription = await _load(db, subscription_id)
+    fills = (
+        await db.execute(
+            select(func.count())
+            .select_from(PaperFill)
+            .where(PaperFill.subscription_id == subscription.id)
+        )
+    ).scalar_one()
+    changes = plan_settings_change(subscription, requested, has_fills=fills > 0)
+    for change in changes:
+        setattr(subscription, change.field, change.after)
+    if subscription.is_option and {c.field for c in changes} & {"lots", "spread_width"}:
+        # A plan chosen under the old size would be entered under it. (Imported here:
+        # paper_options already imports this module.)
+        from src.orchestration.paper_options import clear_plan
+
+        await clear_plan(redis, subscription.id)
+    held = await open_positions(db, subscription)
+    await write_audit_entry(
+        db,
+        actor=actor,
+        action="paper_trading.subscription_settings_changed",
+        entity_type="paper_trading_subscription",
+        entity_id=str(subscription.id),
+        details={
+            "symbol": subscription.symbol,
+            "reason": reason,
+            "changes": {c.field: {"before": c.before, "after": c.after} for c in changes},
+            "open_legs": len(held),
+        },
+    )
+    await db.commit()
+    await db.refresh(subscription)
+    return subscription, changes
 
 
 async def activate_subscription(

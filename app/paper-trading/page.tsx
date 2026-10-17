@@ -5,7 +5,7 @@ import { Plus, RefreshCw } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Attention } from '@/components/paper-trading/attention'
-import { CloseDialog, DeactivateDialog, EnrolDialog, activate } from '@/components/paper-trading/dialogs'
+import { CloseDialog, DeactivateDialog, EnrolDialog, SettingsDialog, activate } from '@/components/paper-trading/dialogs'
 import { Ledger } from '@/components/paper-trading/ledger'
 import { Lane } from '@/components/paper-trading/lane'
 import {
@@ -34,6 +34,7 @@ type Dialog =
   | { kind: 'enrol' }
   | { kind: 'deactivate'; sub: PaperSubscription }
   | { kind: 'close'; sub: PaperSubscription }
+  | { kind: 'settings'; sub: PaperSubscription }
   | null
 
 export default function PaperTradingPage() {
@@ -205,6 +206,7 @@ export default function PaperTradingPage() {
               onDeactivate={() => setDialog({ kind: 'deactivate', sub })}
               onClose={() => setDialog({ kind: 'close', sub })}
               onActivate={() => void switchOn(sub)}
+              onEditSettings={() => setDialog({ kind: 'settings', sub })}
             />
           ))}
         </section>
@@ -221,6 +223,13 @@ export default function PaperTradingPage() {
       )}
       {dialog?.kind === 'deactivate' && (
         <DeactivateDialog sub={dialog.sub} onClose={() => setDialog(null)} onDone={() => afterChange(`${dialog.sub.symbol} is switched off.`)} />
+      )}
+      {dialog?.kind === 'settings' && (
+        <SettingsDialog
+          sub={dialog.sub}
+          onClose={() => setDialog(null)}
+          onDone={(summary) => afterChange(`${dialog.sub.symbol} settings saved: ${summary}.`)}
+        />
       )}
       {dialog?.kind === 'close' && (
         <CloseDialog

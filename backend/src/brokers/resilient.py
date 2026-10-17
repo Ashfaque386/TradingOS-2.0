@@ -33,6 +33,7 @@ from src.brokers.base import (
     OptionChainEntry,
     OptionContract,
     OrderRequest,
+    SymbolHit,
 )
 from src.core.config import get_settings
 from src.engine.risk.circuit_breaker import BrokerCircuitBreaker
@@ -121,3 +122,6 @@ class ResilientBrokerAdapter:
 
     async def has_instrument(self, symbol: str) -> bool:
         return await self._breaker.call(lambda: self._adapter.has_instrument(symbol))
+
+    async def search_symbols(self, query: str, limit: int = 10) -> list[SymbolHit]:
+        return await self._breaker.call(lambda: self._adapter.search_symbols(query, limit))

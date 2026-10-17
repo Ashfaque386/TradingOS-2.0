@@ -211,6 +211,10 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         X,
         "tests/test_paper_subscription_controls.py::test_closing_a_flat_subscription_is_refused",
     ),
+    ("PATCH", "/paper-trading/subscriptions/{subscription_id}/settings"): (
+        X,
+        "tests/test_paper_desk_previews.py::test_the_settings_route_refuses_a_no_op_a_short_reason_and_bad_values",
+    ),
     ("POST", "/paper-trading/daily-signal-run"): (
         N,
         "runs signal generation and reports the outcome",

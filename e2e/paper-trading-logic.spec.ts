@@ -1,18 +1,26 @@
 import { expect, test } from '@playwright/test'
 import {
   attentionItems,
+  closeConfirmationPhrase,
+  confirmationMatches,
   costLines,
   daysToExpiry,
   earliestLegExpiry,
   describeContract,
+  editableSettings,
   expiryCountdown,
   formatInr,
+  formatSettingValue,
   groupFills,
+  hasTraded,
   legsUnrealized,
   parseOptionSymbol,
   payoffAt,
   payoffSummary,
+  planSettingsChange,
+  settingsForm,
   tone,
+  underlyingSpot,
   waterfall,
 } from '../lib/paper-trading'
 import type { PaperFill, PaperPosition, PaperSubscription } from '../lib/api'
@@ -236,5 +244,115 @@ test.describe('fills and legs', () => {
     expect(earliestLegExpiry([leg(PUT_HIGH, -50), leg(nearer, 50)])).toBe('2026-10-20')
     expect(earliestLegExpiry([leg(PUT_HIGH, -50), leg(nearer, 0)])).toBe('2026-10-27') // a flat leg does not count
     expect(earliestLegExpiry([])).toBeNull()
+  })
+})
+
+test.describe('confirming a close', () => {
+  test('the phrase is the symbol, and a longer one for an administrative close', () => {
+    expect(closeConfirmationPhrase(' nifty ', false)).toBe('NIFTY')
+    expect(closeConfirmationPhrase('nifty', true)).toBe('ADMIN NIFTY')
+  })
+
+  test('typing it matches ignoring case and spaces, and nothing else does', () => {
+    expect(confirmationMatches('  nifty ', 'NIFTY')).toBe(true)
+    expect(confirmationMatches('NIFT', 'NIFTY')).toBe(false)
+    expect(confirmationMatches('NIFTY', 'ADMIN NIFTY')).toBe(false)
+    expect(confirmationMatches('', '')).toBe(false) // an empty phrase never confirms anything
+  })
+})
+
+test.describe('the underlying on the payoff chart', () => {
+  const tick = (age: number) => ({ price: 24520, age_seconds: age, source: 'zerodha' })
+
+  test('an option subscription reads its underlying from its own tick', () => {
+    expect(underlyingSpot(sub({ instrument_kind: 'option', last_tick: tick(3) }))).toEqual({
+      price: 24520,
+      ageSeconds: 3,
+      stale: false,
+    })
+  })
+
+  test('an old price is still shown, but as old', () => {
+    expect(underlyingSpot(sub({ instrument_kind: 'option', last_tick: tick(301) }))?.stale).toBe(true)
+    expect(underlyingSpot(sub({ instrument_kind: 'option', last_tick: tick(300) }))?.stale).toBe(false)
+  })
+
+  test('another kind of subscription, or one never priced, has none', () => {
+    expect(underlyingSpot(sub({ instrument_kind: 'future', last_tick: tick(1) }))).toBeNull()
+    expect(underlyingSpot(sub({ instrument_kind: 'option', last_tick: null }))).toBeNull()
+  })
+})
+
+test.describe('editing settings', () => {
+  const equity = sub({ instrument_kind: 'equity' })
+  const spread = sub({ instrument_kind: 'option', option_strategy: 'vertical_spread', stop_loss_pct: 50, spread_width: 2, lots: 1 })
+
+  test('each kind is offered the settings that apply to it', () => {
+    expect(editableSettings(equity)).toEqual(['stop_loss_pct', 'position_size_pct', 'builtin_strategy', 'sma_window', 'initial_capital'])
+    expect(editableSettings(sub({ instrument_kind: 'future' }))).toEqual(['stop_loss_pct', 'lots', 'builtin_strategy', 'sma_window', 'initial_capital'])
+    expect(editableSettings(spread)).toContain('spread_width')
+    expect(editableSettings(sub({ instrument_kind: 'option', option_strategy: 'long_option' }))).not.toContain('spread_width')
+  })
+
+  test('only values that differ are changes, and 5.0 is the same as 5', () => {
+    const form = { ...settingsForm(equity), stop_loss_pct: '6', position_size_pct: '5.0' }
+
+    const { changes, errors } = planSettingsChange(equity, form)
+
+    expect(errors).toEqual({})
+    expect(changes.map((c) => [c.field, c.before, c.after, c.value])).toEqual([['stop_loss_pct', '3%', '6%', 6]])
+  })
+
+  test('nothing changed is no changes', () => {
+    expect(planSettingsChange(equity, settingsForm(equity)).changes).toEqual([])
+  })
+
+  test('values outside the backend limits are errors, not changes', () => {
+    const bad = (field: string, value: string) =>
+      planSettingsChange(spread, { ...settingsForm(spread), [field]: value } as ReturnType<typeof settingsForm>)
+
+    expect(bad('stop_loss_pct', '0').errors.stop_loss_pct).toBeDefined()
+    expect(bad('stop_loss_pct', 'abc').errors.stop_loss_pct).toBe('Enter a number.')
+    expect(bad('spread_width', '21').errors.spread_width).toBe('Use 1 to 20.')
+    expect(bad('lots', '1.5').errors.lots).toBe('Use a whole number.')
+    expect(bad('lots', '1001').errors.lots).toBe('Use 1 to 1000.')
+    expect(planSettingsChange(equity, { ...settingsForm(equity), position_size_pct: '101' }).errors.position_size_pct).toBeDefined()
+    expect(planSettingsChange(equity, { ...settingsForm(equity), position_size_pct: '100' }).errors).toEqual({})
+    expect(planSettingsChange(equity, { ...settingsForm(equity), sma_window: '0' }).errors.sma_window).toBeDefined()
+  })
+
+  test('switching the signal is a change that is sent by name', () => {
+    const { changes } = planSettingsChange(equity, { ...settingsForm(equity), builtin_strategy: 'always_long' })
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ field: 'builtin_strategy', before: 'Moving average', after: 'Always long', value: 'always_long' })
+  })
+
+  test('each change says when it takes effect, and what holding a position adds', () => {
+    const holding = sub({ instrument_kind: 'equity', open_legs: 1 })
+    const form = { ...settingsForm(holding), stop_loss_pct: '5', sma_window: '20' }
+
+    const effects = Object.fromEntries(planSettingsChange(holding, form).changes.map((c) => [c.field, c.effect]))
+
+    expect(effects.stop_loss_pct).toContain('open position from the next price tick')
+    expect(effects.sma_window).toContain('next daily signal (08:00 IST)')
+    expect(effects.sma_window).toContain('closed on the tick after it')
+    const flat = planSettingsChange(equity, { ...settingsForm(equity), sma_window: '20' }).changes[0]
+    expect(flat.effect).not.toContain('closed on the tick')
+  })
+
+  test('capital is fixed once a subscription has been in the market', () => {
+    expect(hasTraded(sub())).toBe(false)
+    expect(hasTraded(sub({ open_legs: 1 }))).toBe(true)
+    expect(hasTraded(sub({ realized_pnl: -5 }))).toBe(true)
+    expect(hasTraded(sub({ costs_total: 12 }))).toBe(true)
+  })
+
+  test('values are written the way an operator reads them', () => {
+    expect(formatSettingValue('stop_loss_pct', 6)).toBe('6%')
+    expect(formatSettingValue('spread_width', 1)).toBe('1 strike')
+    expect(formatSettingValue('spread_width', 3)).toBe('3 strikes')
+    expect(formatSettingValue('initial_capital', 250000)).toBe('₹2,50,000')
+    expect(formatSettingValue('builtin_strategy', 'always_long')).toBe('Always long')
   })
 })

@@ -610,6 +610,112 @@ class EnrollPaperTradingRequest(BaseModel):
     spread_width: int = Field(default=2, ge=1, le=20)
 
 
+class EnrolPaperPreviewRequest(EnrollPaperTradingRequest):
+    """The same fields as an enrolment, so a preview is of exactly what would be sent; the strategy
+    version is optional (given, it also checks for an active duplicate)."""
+
+    strategy_version_id: uuid.UUID | None = None  # type: ignore[assignment]
+
+
+class PaperSymbolHitResponse(BaseModel):
+    symbol: str
+    kind: Literal["equity", "index"]
+
+
+class PaperSymbolSearchResponse(BaseModel):
+    # False when there is nothing to search (no broker connected): the caller types a symbol.
+    available: bool
+    reason: str | None = None
+    symbols: list[PaperSymbolHitResponse] = []
+
+
+class PaperOptionLegPreview(BaseModel):
+    symbol: str
+    side: Literal["buy", "sell"]
+    option_type: Literal["CE", "PE"]
+    strike: float
+    quantity: int
+    price: float | None
+
+
+class PaperOptionScenarioPreview(BaseModel):
+    signal: Literal["BUY", "SELL"]
+    view: str
+    legs: list[PaperOptionLegPreview]
+    max_loss: float | None
+    fits: bool | None
+    note: str | None = None
+
+
+class PaperEnrolPreviewResponse(BaseModel):
+    symbol: str
+    instrument_kind: Literal["equity", "future", "option"]
+    listing: Literal["listed", "not_listed", "unknown"]
+    price: float | None = None
+    price_symbol: str | None = None
+    equity: dict[str, float | int | None] | None = None
+    future: dict[str, float | int | str | bool | None] | None = None
+    option: dict[str, float | int | str | None] | None = None
+    scenarios: list[PaperOptionScenarioPreview] = []
+    problems: list[str] = []
+    warnings: list[str] = []
+
+
+class PaperCloseLegPreview(BaseModel):
+    symbol: str
+    side: Literal["buy", "sell"]
+    quantity: int
+    avg_cost: float
+    reference_price: float | None = None
+    reference_age_seconds: float | None = None
+    reference_source: str | None = None
+    book_age_seconds: float | None = None
+    book_source: str | None = None
+    est_avg_price: float | None = None
+    est_filled: int = 0
+    est_remaining: int = 0
+    est_costs: float | None = None
+    est_gross_pnl: float | None = None
+    problem: str | None = None
+
+
+class PaperClosePreviewResponse(BaseModel):
+    subscription_id: uuid.UUID
+    symbol: str
+    market_open: bool
+    legs: list[PaperCloseLegPreview]
+    blockers: list[str] = []
+    notes: list[str] = []
+    est_costs_total: float | None = None
+    est_gross_pnl: float | None = None
+    can_close: bool
+
+
+class UpdatePaperSettingsRequest(BaseModel):
+    """Only the fields sent are changed; a field left out (or null) is left alone. The bounds are
+    the enrolment's own."""
+
+    reason: str = Field(min_length=3, max_length=500)
+    stop_loss_pct: float | None = Field(default=None, gt=0)
+    position_size_pct: float | None = Field(default=None, gt=0, le=100)
+    lots: int | None = Field(default=None, ge=1, le=1000)
+    spread_width: int | None = Field(default=None, ge=1, le=20)
+    sma_window: int | None = Field(default=None, gt=0)
+    builtin_strategy: EngineBuiltinStrategy | None = None
+    initial_capital: float | None = Field(default=None, gt=0)
+
+
+class PaperSettingChange(BaseModel):
+    field: str
+    before: float | int | str
+    after: float | int | str
+
+
+class UpdatePaperSettingsResponse(BaseModel):
+    subscription: "PaperTradingSubscriptionResponse"
+    changes: list[PaperSettingChange]
+
+
 class PaperTradingSubscriptionResponse(BaseModel):
     id: uuid.UUID
     strategy_version_id: uuid.UUID
