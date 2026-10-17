@@ -14,7 +14,9 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   workers: 1,
-  reporter: [['list']],
+  // In CI the `github` reporter also writes each failure (spec name and error) as a run
+  // annotation, which shows on the run page without signing in to read the job log.
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3010',
     trace: 'retain-on-failure',
