@@ -15,6 +15,7 @@ import {
   Settings,
   ChevronRight,
   MessageSquare,
+  Landmark,
 } from 'lucide-react'
 
 // Kept in sync by hand with components/shell/mobile-nav.tsx's own
@@ -27,6 +28,7 @@ const NAV_ITEMS = [
   { label: 'Strategies', icon: Beaker, href: '/strategies' },
   { label: 'Backtests', icon: BarChart3, href: '/backtests' },
   { label: 'Orders & Trades', icon: ArrowLeftRight, href: '/orders' },
+  { label: 'Paper Desk', icon: Landmark, href: '/paper-trading' },
   { label: 'Portfolio', icon: PieChart, href: '/portfolio' },
   { label: 'Market Analysis', icon: Activity, href: '/analysis' },
   { label: 'Investor Reports', icon: FileText, href: '/investor-reports' },

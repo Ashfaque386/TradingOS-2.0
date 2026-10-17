@@ -953,3 +953,105 @@ async def test_the_expiry_sweep_job_uses_the_configured_squareoff_window(
     await run()
     assert await _quantities(db_session_factory, subscription) == {in_three_days: 0}
     await redis.delete(depth_key(in_three_days), tick_stream_key(in_three_days))
+
+
+# ---- marks on the positions endpoint (the paper-trading desk reads them) ----
+
+
+async def test_an_open_leg_carries_its_mark_its_age_and_its_unrealized_pnl(
+    client, make_user, api, db_session_factory, redis
+):
+    headers, subscription_id = await _enrol_and_hold(
+        client, make_user, db_session_factory, "optmark1@example.com"
+    )
+    await _quote(redis, HEDGE, 25.0, book=False)  # bought 65 at 20
+    await _quote(redis, SOLD, 50.0, book=False)  # sold 65 at 60
+
+    resp = await client.get(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/positions", headers=headers
+    )
+
+    legs = {p["symbol"]: p for p in resp.json()}
+    assert legs[HEDGE]["mark_price"] == 25.0
+    assert legs[HEDGE]["unrealized_pnl"] == pytest.approx(65 * (25.0 - 20.0))
+    assert legs[SOLD]["mark_price"] == 50.0
+    assert legs[SOLD]["unrealized_pnl"] == pytest.approx(-65 * (50.0 - 60.0))  # short: a gain
+    assert 0 <= legs[HEDGE]["mark_age_seconds"] < 30
+
+
+async def test_a_flat_leg_has_no_mark_even_if_the_contract_still_ticks(
+    client, make_user, api, db_session_factory, redis
+):
+    headers, subscription_id = await _enrol_and_hold(
+        client, make_user, db_session_factory, "optmark2@example.com"
+    )
+    await _quote(redis, OTHER, 90.0, book=False)  # a leg closed earlier, still quoted
+
+    resp = await client.get(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/positions", headers=headers
+    )
+
+    flat = next(p for p in resp.json() if p["symbol"] == OTHER)
+    assert flat["quantity"] == 0
+    assert flat["mark_price"] is None and flat["unrealized_pnl"] is None
+
+
+async def test_an_open_leg_never_priced_is_unknown_not_zero(
+    client, make_user, api, db_session_factory, redis
+):
+    headers, subscription_id = await _enrol_and_hold(
+        client, make_user, db_session_factory, "optmark3@example.com"
+    )
+    await _quote(redis, HEDGE, 25.0, book=False)  # the sold leg has never had a tick
+
+    resp = await client.get(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/positions", headers=headers
+    )
+
+    sold = next(p for p in resp.json() if p["symbol"] == SOLD)
+    assert sold["quantity"] == -65
+    assert sold["mark_price"] is None and sold["mark_age_seconds"] is None
+    assert sold["unrealized_pnl"] is None
+
+
+async def test_a_mark_that_is_old_says_how_old(client, make_user, api, db_session_factory, redis):
+    headers, subscription_id = await _enrol_and_hold(
+        client, make_user, db_session_factory, "optmark4@example.com"
+    )
+    await publish_tick(redis, Tick(HEDGE, 25.0, _now_ms() - 600_000, "real"))  # ten minutes ago
+
+    resp = await client.get(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/positions", headers=headers
+    )
+
+    hedge = next(p for p in resp.json() if p["symbol"] == HEDGE)
+    assert hedge["mark_age_seconds"] >= 590 and hedge["mark_price"] == 25.0
+
+
+async def test_the_other_position_endpoints_carry_no_mark(
+    client, make_user, api, db_session_factory, redis
+):
+    _use(_Provider())
+    headers = await _headers(client, make_user, "optmark5@example.com")
+    enrolled = await _enrol(
+        client,
+        headers,
+        await _version_id(client, headers),
+        instrument_kind="equity",
+        symbol="RELIANCE",
+    )
+    subscription_id = uuid.UUID(enrolled.json()["id"])
+    async with db_session_factory() as db:
+        db.add(
+            PaperPosition(
+                subscription_id=subscription_id, symbol="RELIANCE", quantity=10, avg_cost=1500.0
+            )
+        )
+        await db.commit()
+
+    single = await client.get(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/position", headers=headers
+    )
+
+    assert single.status_code == 200
+    assert single.json()["mark_price"] is None  # only the legs listing prices a position

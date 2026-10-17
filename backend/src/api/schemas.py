@@ -640,6 +640,12 @@ class PaperPositionResponse(BaseModel):
     realized_pnl: float
     costs_total: float = 0.0
     net_realized_pnl: float = 0.0
+    # Only on `GET .../positions`, and only for an open position: the last price published for
+    # this contract, how old it is, and the unrealized P&L off it. `None` (not 0) when it has
+    # never been priced -- an unpriced leg's value is unknown, not zero.
+    mark_price: float | None = None
+    mark_age_seconds: float | None = None
+    unrealized_pnl: float | None = None
 
 
 class PaperLastTick(BaseModel):

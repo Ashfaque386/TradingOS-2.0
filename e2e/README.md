@@ -52,6 +52,15 @@ flows named in that pass and has grown since:
   confirm step and checking each task's resulting status server-side, backing
   out with "Keep it", and a cancel that lost a race being reported rather
   than ignored.
+- `paper-trading-logic.spec.ts` -- the paper desk's pure logic (cost waterfall,
+  option payoff, expiry in IST, what needs attention). No browser or backend.
+- `paper-trading-desk.spec.ts` -- the paper desk (`/paper-trading`) against the
+  real backend. `backend/scripts/seed_e2e_paper_desk.py` writes what the engine
+  would have left (positions, fills with costs, a switched-off subscription that
+  still holds shares, a credit spread); nothing is priced, so the spec checks the
+  desk says so. It also drives a close (refused for want of a real price, then
+  cleared administratively), adding and switching a subscription off and on, and
+  a RiskManager seeing the desk with no controls.
 
 ## Why not `docker compose up`
 

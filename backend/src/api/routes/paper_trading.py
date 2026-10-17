@@ -728,10 +728,13 @@ def _position_response(position: PaperPosition) -> PaperPositionResponse:
 async def list_positions_endpoint(
     subscription_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     _current_user: User = Depends(require_role),
 ) -> list[PaperPositionResponse]:
     """Every position the subscription has ever held a leg in (one for equity and futures, one per
-    contract for an option strategy), flat ones included so their realized P&L and costs show."""
+    contract for an option strategy), flat ones included so their realized P&L and costs show.
+    An open leg also carries its mark: the last price published for it, how old that is, and the
+    unrealized P&L off it (all `None` if it has never been priced)."""
     if await db.get(PaperTradingSubscription, subscription_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Subscription not found")
     rows = (
@@ -745,7 +748,18 @@ async def list_positions_endpoint(
         .scalars()
         .all()
     )
-    return [_position_response(position) for position in rows]
+    now = datetime.now(UTC).timestamp()
+    responses = []
+    for position in rows:
+        response = _position_response(position)
+        if position.quantity != 0:
+            tick = await get_latest_tick(redis, position.symbol)
+            if tick is not None:
+                response.mark_price = tick.price
+                response.mark_age_seconds = max(0.0, now - tick.timestamp_ms / 1000.0)
+                response.unrealized_pnl = (tick.price - position.avg_cost) * position.quantity
+        responses.append(response)
+    return responses
 
 
 @router.get("/subscriptions/{subscription_id}/fills")

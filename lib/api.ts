@@ -321,7 +321,10 @@ export const resetKillSwitch = (mode: KillSwitchMode, reason?: string) =>
 
 export type TodaysPaperPnl = {
   as_of_date: string
+  // Gross of costs (the price difference only); `net_realized_pnl` is after the fills' costs.
   realized_pnl: number
+  costs_total: number
+  net_realized_pnl: number
   fill_count: number
 }
 export const getTodaysPaperPnl = () => apiGet<TodaysPaperPnl>('/api/v1/paper-trading/pnl/today')
@@ -337,6 +340,157 @@ export type UnrealizedPaperPnl = {
 }
 export const getUnrealizedPaperPnl = () =>
   apiGet<UnrealizedPaperPnl>('/api/v1/paper-trading/pnl/unrealized')
+
+// ---- Paper-trading desk: subscriptions, legs, fills, controls ----
+export type PaperInstrumentKind = 'equity' | 'future' | 'option'
+// Derived by the backend: inactive; else awaiting_history (too little real price history to
+// signal); else halted_no_data (no real price feed, or a futures contract past expiry); else active.
+export type PaperState = 'active' | 'awaiting_history' | 'halted_no_data' | 'inactive'
+export type PaperOptionStrategy = 'long_option' | 'vertical_spread'
+
+export type PaperLastTick = { price: number; age_seconds: number; source: string }
+
+export type PaperSubscription = {
+  id: string
+  strategy_version_id: string
+  symbol: string
+  builtin_strategy: string
+  sma_window: number
+  initial_capital: number
+  stop_loss_pct: number
+  position_size_pct: number
+  is_active: boolean
+  instrument_kind: PaperInstrumentKind
+  contract_symbol: string | null
+  contract_expiry: string | null
+  lot_size: number | null
+  lots: number
+  option_strategy: PaperOptionStrategy | null
+  spread_width: number
+  open_legs: number
+  state: PaperState
+  state_reason: string | null
+  created_at: string
+  created_by: string | null
+  deactivated_at: string | null
+  deactivated_by: string | null
+  deactivation_reason: string | null
+  // equity/future: the one position; an option strategy holds legs (these are 0 across legs)
+  quantity: number
+  avg_cost: number
+  // gross of costs; net = realized_pnl - costs_total
+  realized_pnl: number
+  costs_total: number
+  net_realized_pnl: number
+  // false for an open position on an inactive subscription: nothing watches its stop-loss
+  managed: boolean
+  last_tick: PaperLastTick | null
+  unrealized_pnl: number | null
+}
+
+export type PaperPosition = {
+  subscription_id: string
+  symbol: string
+  quantity: number
+  avg_cost: number
+  realized_pnl: number
+  costs_total: number
+  net_realized_pnl: number
+  // open legs only; null = never priced (unknown, not zero)
+  mark_price: number | null
+  mark_age_seconds: number | null
+  unrealized_pnl: number | null
+}
+
+export type PaperCostBreakdown = {
+  segment?: string
+  product?: string
+  turnover?: number
+  brokerage?: number
+  stt?: number
+  exchange_txn_charges?: number
+  sebi_fee?: number
+  stamp_duty?: number
+  gst?: number
+}
+
+export type PaperFill = {
+  id: string
+  subscription_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  order_group_id: string
+  leg_index: number
+  requested_quantity: number
+  filled_quantity: number
+  avg_fill_price: number | null
+  fully_filled: boolean
+  realized_pnl: number
+  costs_total: number
+  costs_breakdown: PaperCostBreakdown | null
+  // real: a real tick on the broker's real depth; mixed: a generated book; supplied: an operator's price
+  data_source: string
+  created_at: string
+}
+
+export type PaperClosed = {
+  fill: PaperFill
+  position: PaperPosition
+  closed: boolean
+  remaining_quantity: number
+  price: number
+  price_basis: string
+  data_source: string
+  administrative: boolean
+  legs: PaperFill[]
+  failures: string[]
+}
+
+export type EnrolPaperRequest = {
+  strategy_version_id: string
+  symbol: string
+  instrument_kind: PaperInstrumentKind
+  builtin_strategy?: 'always_long' | 'sma_crossover'
+  sma_window?: number
+  initial_capital?: number
+  stop_loss_pct?: number
+  position_size_pct?: number
+  lots?: number
+  option_strategy?: PaperOptionStrategy
+  spread_width?: number
+}
+
+export const listPaperSubscriptions = (filters: { active?: boolean; state?: PaperState } = {}) => {
+  const query = new URLSearchParams()
+  if (filters.active !== undefined) query.set('active', String(filters.active))
+  if (filters.state) query.set('state', filters.state)
+  const suffix = query.toString()
+  return apiGet<PaperSubscription[]>(
+    `/api/v1/paper-trading/subscriptions${suffix ? `?${suffix}` : ''}`,
+  )
+}
+export const enrolPaperSubscription = (body: EnrolPaperRequest) =>
+  apiPost<{ id: string; symbol: string }>('/api/v1/paper-trading/subscriptions', body)
+export const listPaperPositions = (subscriptionId: string) =>
+  apiGet<PaperPosition[]>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/positions`)
+export const listPaperFills = (subscriptionId: string) =>
+  apiGet<PaperFill[]>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/fills`)
+export const deactivatePaperSubscription = (
+  subscriptionId: string,
+  body: { reason: string; on_open_position?: 'close' | 'leave_unmanaged'; close_price?: number },
+) => apiPost<{ left_unmanaged_quantity: number }>(
+  `/api/v1/paper-trading/subscriptions/${subscriptionId}/deactivate`,
+  body,
+)
+export const activatePaperSubscription = (subscriptionId: string) =>
+  apiPost<{ id: string }>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/activate`)
+export const closePaperPosition = (
+  subscriptionId: string,
+  body: { reason: string; price?: number; administrative?: boolean },
+) => apiPost<PaperClosed>(
+  `/api/v1/paper-trading/subscriptions/${subscriptionId}/close-position`,
+  body,
+)
 
 // ---- Orchestration runs ----
 export type TaskSummary = {
