@@ -91,6 +91,27 @@ function Remove-ComposeContainer {
     Invoke-DockerCommand -DockerArgs @('compose', 'rm', '-f', $Service) | Out-Null
 }
 
+# Optional root certificate for image builds behind a TLS-intercepting antivirus/proxy (Norton
+# Web/Mail Shield, a corporate proxy): pip/pnpm inside the build then trust what that proxy
+# re-signs npm/PyPI with. docker-compose.yml passes it to the Dockerfiles as the `extra_ca` build
+# secret (never stored in an image layer). Same lookup as scripts/docker-up.js: the EXTRA_CA_PEM
+# environment variable, else the file EXTRA_CA_FILE names, else .local/extra-ca.pem (git-ignored).
+# None of them set is the normal case and changes nothing.
+function Set-ExtraCaSecret {
+    if ($env:EXTRA_CA_PEM) { return }
+    $file = $env:EXTRA_CA_FILE
+    if (-not $file) { $file = Join-Path (Split-Path -Parent $PSScriptRoot) '.local\extra-ca.pem' }
+    if (-not (Test-Path -LiteralPath $file)) { return }
+    $pem = (Get-Content -LiteralPath $file -Raw) -replace "`r`n", "`n"
+    if ($pem -notmatch 'BEGIN CERTIFICATE') {
+        Write-Host "[docker:up] $file is not a PEM certificate - ignoring it"
+        return
+    }
+    Write-Host "[docker:up] build will also trust the certificate in $file"
+    [Environment]::SetEnvironmentVariable('EXTRA_CA_PEM', $pem)
+}
+Set-ExtraCaSecret
+
 $ports = @{}
 foreach ($service in $Services) {
     $envValue = [Environment]::GetEnvironmentVariable($service.EnvVar)
