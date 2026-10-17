@@ -93,3 +93,16 @@ backend/data_lake_backups/
 # builds, read by scripts/docker-up.js).
 /.local/*
 !/.local/.gitkeep
+
+# Other AI coding tools' per-tool config folders (each held a copy of the frontend-design skill).
+# Local tool state, not project content; the project's own dot-files (.github, .gitignore,
+# .dockerignore, .gitattributes, .gitleaks*, .pre-commit-config.yaml, .env.example) stay tracked.
+/.agents/
+/.aider-desk/
+/.codestudio/
+/.commandcode/
+/.continue/
+/.cortex/
+/.devin/
+/.grok/
+/.hermes/
