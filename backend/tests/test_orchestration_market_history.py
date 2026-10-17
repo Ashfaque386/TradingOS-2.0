@@ -259,3 +259,39 @@ async def test_every_repair_leaves_a_provenance_row(db_session_factory, root):
     rows = await _provenance(db_session_factory)
     assert sorted(r.details["symbol"] for r in rows) == ["A", "B"]
     assert {r.pipeline for r in rows} == {"history_gap_repair"}
+
+
+async def test_a_repair_of_a_symbol_with_real_history_leaves_its_other_rows_alone(
+    db_session_factory, root
+):
+    """Replacing a symbol's generated rows belongs to the explicit full backfill. A routine
+    repair must never delete anything: a transient provider hiccup is not a reason to."""
+    lake.write_daily_bars(root, "INFY", _frame(date(2026, 6, 1), md.MIN_HISTORY_ROWS + 20))
+    lake.write_daily_bars(root, "INFY", _frame(date(2026, 1, 5), 3, source="synthetic"))
+    provider = _Provider({"INFY": _frame(AS_OF - timedelta(days=4), 3)})
+
+    async with db_session_factory() as db:
+        rows = await md.run_history_gap_repair(
+            db, provider=provider, root=root, symbols=["INFY"], as_of=AS_OF
+        )
+
+    assert rows[0].details["unreal_rows_removed"] == 0
+    kept = lake.read_daily_bars(root, "INFY", date(2026, 1, 1), date(2026, 1, 31), real_only=False)
+    assert len(kept) == 3  # the generated rows are still there (and still never read as real)
+
+
+async def test_the_repair_window_is_a_full_week_when_history_is_current(db_session_factory, root):
+    newest = AS_OF - timedelta(days=1)  # Thursday: yesterday's bar is already stored
+    history = _frame(date(2026, 1, 5), md.MIN_HISTORY_ROWS + 10)
+    history.index = pd.bdate_range(end=newest, periods=len(history))
+    lake.write_daily_bars(root, "INFY", history)
+    provider = _Provider({"INFY": _frame(newest, 1)})
+
+    async with db_session_factory() as db:
+        await md.run_history_gap_repair(
+            db, provider=provider, root=root, symbols=["INFY"], as_of=AS_OF
+        )
+
+    _, start, end = provider.calls[0]
+    assert end == AS_OF
+    assert (end - start).days == md.REPAIR_WINDOW_DAYS == 7  # not 3 (the gap + 2): a week

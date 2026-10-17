@@ -163,3 +163,15 @@ def test_purge_with_nothing_stored_or_nothing_unreal_removes_nothing(root):
     lake.write_daily_bars(root, "INFY", _bars(["2026-09-01"], source="zerodha"))
     assert lake.purge_unreal_daily_rows(root, "INFY") == 0
     assert len(_all(root, "INFY", real_only=True)) == 1
+
+
+def test_a_read_that_does_not_ask_for_real_only_returns_every_stored_row(root):
+    """Callers that predate sources (the dashboards, the freshness checks) call read_daily_bars
+    with no flag: they must keep seeing every row, so `real_only` has to default to off."""
+    lake.write_daily_bars(root, "INFY", _bars(["2026-09-01"]))  # untagged
+    lake.write_daily_bars(root, "INFY", _bars(["2026-09-02"], source="synthetic"))
+    lake.write_daily_bars(root, "INFY", _bars(["2026-09-03"], source="zerodha"))
+
+    everything = lake.read_daily_bars(root, "INFY", date(2026, 1, 1), date(2026, 12, 31))
+
+    assert len(everything) == 3

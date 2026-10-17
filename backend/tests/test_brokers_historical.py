@@ -449,3 +449,18 @@ async def test_upstox_end_before_start_is_refused():
         await _upstox(_Upstox(), now=AFTER_CLOSE).get_historical_candles(
             "INFY", "day", date(2026, 10, 15), date(2026, 10, 14)
         )
+
+
+async def test_candles_come_back_oldest_first_whatever_order_the_api_used():
+    shuffled = [DAY_CANDLES[1], DAY_CANDLES[0], ["2026-10-16T00:00:00+0530", 1, 2, 0.5, 1.5, 1]]
+    handler = _Kite({"408065": shuffled})
+
+    candles = await _kite(handler).get_historical_candles(
+        "INFY", "day", date(2026, 10, 14), date(2026, 10, 16)
+    )
+
+    assert [c.timestamp.date().isoformat() for c in candles] == [
+        "2026-10-14",
+        "2026-10-15",
+        "2026-10-16",
+    ]
