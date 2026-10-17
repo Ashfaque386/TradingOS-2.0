@@ -5,16 +5,30 @@
   "schemaVersion": 39,
   "version": 1,
   "timezone": "browser",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "refresh": "30s",
-  "tags": ["tradingos", "phase-11"],
+  "tags": [
+    "tradingos",
+    "phase-11"
+  ],
   "panels": [
     {
       "id": 1,
       "title": "Backend up (market-hours-downtime source metric)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "up{job=\"tradingos-backend\"}",
@@ -25,14 +39,36 @@
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
-            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
           ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "value": null, "color": "red" },
-              { "value": 1, "color": "green" }
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 1,
+                "color": "green"
+              }
             ]
           }
         },
@@ -43,8 +79,16 @@
       "id": 2,
       "title": "Trading holiday gauge",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "tradingos_trading_holiday",
@@ -55,8 +99,24 @@
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "TRADING DAY", "color": "green" } } },
-            { "type": "value", "options": { "1": { "text": "HOLIDAY/WEEKEND", "color": "blue" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "TRADING DAY",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "HOLIDAY/WEEKEND",
+                  "color": "blue"
+                }
+              }
+            }
           ]
         },
         "overrides": []
@@ -66,8 +126,16 @@
       "id": 3,
       "title": "Order dispatch budget breaches (10m)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "sum(increase(tradingos_order_dispatch_budget_breached_total[10m]))",
@@ -80,8 +148,14 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "value": null, "color": "green" },
-              { "value": 1, "color": "red" }
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 1,
+                "color": "red"
+              }
             ]
           }
         },
@@ -92,8 +166,16 @@
       "id": 4,
       "title": "LLM tokens/sec (5m rate)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "sum(rate(tradingos_llm_token_usage_total[5m]))",
@@ -104,10 +186,18 @@
     },
     {
       "id": 5,
-      "title": "WS / tick-relay latency (p50 / p95)",
+      "title": "WS / tick-relay latency (p50 / p95) -- idle until a broker WebSocket feed exists",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.5, sum(rate(tradingos_ws_latency_seconds_bucket[5m])) by (le))",
@@ -121,7 +211,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       }
     },
@@ -129,8 +221,16 @@
       "id": 6,
       "title": "Order dispatch latency by broker (p95) vs budget",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum(rate(tradingos_order_dispatch_latency_seconds_bucket[5m])) by (le, broker))",
@@ -144,7 +244,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       }
     },
@@ -152,8 +254,16 @@
       "id": 7,
       "title": "Agent (LangGraph) node duration (p95, by node)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum(rate(tradingos_agent_node_duration_seconds_bucket[5m])) by (le, node))",
@@ -162,7 +272,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       }
     },
@@ -170,8 +282,16 @@
       "id": 8,
       "title": "LLM token usage rate, by provider / token type",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "sum(rate(tradingos_llm_token_usage_total[5m])) by (provider, token_type)",
@@ -179,6 +299,138 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 9,
+      "title": "Paper ticks: age when drained / time to decision (p50, p95)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(tradingos_paper_tick_age_seconds_bucket[5m])) by (le))",
+          "legendFormat": "age p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tradingos_paper_tick_age_seconds_bucket[5m])) by (le))",
+          "legendFormat": "age p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tradingos_paper_tick_to_decision_seconds_bucket[5m])) by (le))",
+          "legendFormat": "decision p95",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "Batched quote call duration (p95, by broker / outcome)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tradingos_paper_quote_fetch_seconds_bucket[5m])) by (le, broker, outcome))",
+          "legendFormat": "{{broker}} {{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "title": "Exchange-stamped quote lag (p50 / p95, by broker)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(tradingos_paper_quote_exchange_lag_seconds_bucket[5m])) by (le, broker))",
+          "legendFormat": "{{broker}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tradingos_paper_quote_exchange_lag_seconds_bucket[5m])) by (le, broker))",
+          "legendFormat": "{{broker}} p95",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "title": "Ticks skipped as stale / quotes with no usable exchange stamp (per 5m)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(tradingos_paper_ticks_skipped_stale_total[5m]))",
+          "legendFormat": "stale ticks skipped",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(tradingos_paper_quote_exchange_lag_unusable_total[5m])) by (broker, reason)",
+          "legendFormat": "{{broker}} {{reason}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     }
   ]
 }

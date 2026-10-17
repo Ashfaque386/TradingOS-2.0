@@ -21,11 +21,13 @@ without ever sending it, for a broker with no sandbox to send it to.
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from src.engine.risk.circuit_breaker import BrokerServerError
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class OrderSide(StrEnum):
@@ -250,6 +252,25 @@ class BrokerQuote:
     depth_bids: tuple[DepthLevel, ...] = ()
     depth_asks: tuple[DepthLevel, ...] = ()
     open_interest: float | None = None
+    # When the exchange stamped this quote, where the broker says so unambiguously (Kite's
+    # `timestamp`, "the exchange timestamp of the quote packet"). `timestamp` above is when we
+    # received it. `None` for a broker whose equivalent is not verified: never guessed.
+    exchange_time: datetime | None = None
+
+
+def _exchange_time(row: dict[str, Any], broker: str) -> datetime | None:
+    """Kite sends `timestamp` as `YYYY-MM-DD HH:MM:SS` with no zone (NSE time, so IST). Upstox's
+    equivalent fields are documented inconsistently (the published example's `timestamp` does not
+    match its own `last_trade_time`), so Upstox gets `None` until a real payload settles it."""
+    if broker != "zerodha":
+        return None
+    raw = row.get("timestamp")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_IST)
+    except ValueError:
+        return None
 
 
 def _depth_levels(raw: Any) -> tuple[DepthLevel, ...]:
@@ -286,6 +307,7 @@ def quote_from_row(symbol: str, row: dict[str, Any], *, broker: str) -> BrokerQu
         depth_bids=bids,
         depth_asks=asks,
         open_interest=float(open_interest) if open_interest else None,
+        exchange_time=_exchange_time(row, broker),
     )
 
 

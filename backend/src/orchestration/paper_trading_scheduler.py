@@ -64,7 +64,11 @@ from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.latency_guard import WebSocketLatencyGuard
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.observability.correlation import with_job_correlation_id
-from src.observability.metrics import ws_latency_seconds
+from src.observability.metrics import (
+    paper_tick_age_seconds,
+    paper_tick_to_decision_seconds,
+    paper_ticks_skipped_stale_total,
+)
 from src.orchestration.paper_futures import run_futures_roll
 from src.orchestration.paper_options import (
     OptionContractsFn,
@@ -77,10 +81,10 @@ from src.orchestration.paper_trading import process_tick, run_daily_signal_gener
 
 logger = structlog.get_logger(__name__)
 
-# Module-level: one guard shared across every drain-job tick, matching
-# Build Spec §8's own framing of a single tick-relay health signal, not a
-# per-symbol one -- Phase 6 built this class but never actually wired it
-# to a real tick stream; this is that wiring, finally landing.
+# Module-level: one guard shared across every drain-job tick, matching Build Spec §8's framing of a
+# single feed-health signal, not a per-symbol one. Its threshold is `PAPER_TICK_MAX_AGE_SECONDS`,
+# set on every run: the guard's own 100 ms default is a WebSocket-relay bound, and applied to
+# polled ticks (fetched every 3 s, drained every 5 s) it discarded nearly all of them.
 _latency_guard = WebSocketLatencyGuard()
 
 # One back-off table for the one tick-publish job: a symbol the broker cannot quote
@@ -159,6 +163,7 @@ async def run_tick_drain_job(
     if not is_market_open_ist():
         return
 
+    max_tick_age_ms = get_settings().paper_tick_max_age_seconds * 1000.0
     async with session_factory() as db:
         result = await db.execute(
             select(PaperTradingSubscription).where(PaperTradingSubscription.is_active.is_(True))
@@ -171,14 +176,16 @@ async def run_tick_drain_job(
         )
         for tick in ticks:
             latency_ms = max(0.0, time.time() * 1000 - tick.timestamp_ms)
-            ws_latency_seconds.observe(latency_ms / 1000.0)
+            paper_tick_age_seconds.observe(latency_ms / 1000.0)
+            _latency_guard.threshold_ms = max_tick_age_ms
             observation = _latency_guard.observe(latency_ms)
             if observation.paused:
+                paper_ticks_skipped_stale_total.inc()
                 logger.warning(
-                    "paper_trading.tick_processing_paused_high_latency",
+                    "paper_trading.tick_skipped_stale",
                     subscription_id=str(subscription.id),
-                    latency_ms=latency_ms,
-                    threshold_ms=observation.threshold_ms,
+                    age_ms=latency_ms,
+                    max_age_ms=observation.threshold_ms,
                 )
                 continue
 
@@ -208,6 +215,10 @@ async def run_tick_drain_job(
                     logger.exception(
                         "paper_trading.tick_processing_failed",
                         subscription_id=str(subscription.id),
+                    )
+                else:
+                    paper_tick_to_decision_seconds.observe(
+                        max(0.0, time.time() * 1000 - tick.timestamp_ms) / 1000.0
                     )
 
         if new_cursor != subscription.tick_cursor:

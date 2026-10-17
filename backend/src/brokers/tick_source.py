@@ -38,6 +38,7 @@ job's very next firing, not only after a backend restart.
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import structlog
 
@@ -58,6 +59,11 @@ from src.engine.paper_trading.tick_feed import (
     UnavailableTickSource,
 )
 from src.models.data_source import DataSource
+from src.observability.metrics import (
+    paper_quote_exchange_lag_seconds,
+    paper_quote_exchange_lag_unusable_total,
+    paper_quote_fetch_seconds,
+)
 from src.security.secrets_store import SecretsStoreError, get_secrets_store
 
 logger = structlog.get_logger(__name__)
@@ -71,6 +77,9 @@ logger = structlog.get_logger(__name__)
 # 3 seconds.
 AUTH_REJECTED_RETRY_SECONDS = 600.0
 
+# A quote stamped slightly ahead of this machine's clock is clock skew, not a future quote.
+EXCHANGE_CLOCK_SKEW_SECONDS = 2.0
+
 
 @dataclass
 class BrokerQuoteTickSource:
@@ -82,13 +91,42 @@ class BrokerQuoteTickSource:
 
     async def next_tick(self, symbol: str) -> Tick:
         quote = await self._guarded(lambda: self.adapter.get_quote(symbol))
+        self._record_exchange_lag(quote)
         return _tick_from_quote(quote)
 
     async def next_ticks(self, symbols: Sequence[str]) -> dict[str, Tick]:
         """One batched quote call for all `symbols`. A symbol the broker has no price for is
         simply absent from the result."""
         quotes = await self._guarded(lambda: self.adapter.get_quotes(symbols))
+        for quote in quotes.values():
+            self._record_exchange_lag(quote)
         return {symbol: _tick_from_quote(quote) for symbol, quote in quotes.items()}
+
+    def _record_exchange_lag(self, quote: BrokerQuote) -> None:
+        """How old the exchange's own stamp on this quote was when it reached us. Recorded only
+        where the broker sends one we can read; a missing, unreadable or future stamp is counted,
+        not turned into a number."""
+        broker = self.adapter.broker_name
+        if quote.exchange_time is None:
+            paper_quote_exchange_lag_unusable_total.labels(broker=broker, reason="absent").inc()
+            return
+        lag = (datetime.now(UTC) - quote.exchange_time).total_seconds()
+        if lag < -EXCHANGE_CLOCK_SKEW_SECONDS:
+            paper_quote_exchange_lag_unusable_total.labels(broker=broker, reason="future").inc()
+            return
+        paper_quote_exchange_lag_seconds.labels(broker=broker).observe(max(lag, 0.0))
+
+    async def _timed[T](self, call: Callable[[], Awaitable[T]]) -> T:
+        started = time.perf_counter()
+        outcome = "error"
+        try:
+            result = await call()
+            outcome = "ok"
+            return result
+        finally:
+            paper_quote_fetch_seconds.labels(
+                broker=self.adapter.broker_name, outcome=outcome
+            ).observe(time.perf_counter() - started)
 
     async def _guarded[T](self, call: Callable[[], Awaitable[T]]) -> T:
         now = self.clock()
@@ -98,7 +136,7 @@ class BrokerQuoteTickSource:
                 f"(next probe in {self._suspended_until - now:.0f}s)"
             )
         try:
-            result = await call()
+            result = await self._timed(call)
         except BrokerAuthError as exc:
             # Said once, here, at the moment it happens -- not on every firing.
             self._rejection = (

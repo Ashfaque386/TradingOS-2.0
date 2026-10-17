@@ -52,6 +52,20 @@ groups:
             (src/brokers/resilient.py). Check broker connectivity and the
             circuit breaker state.
 
+      - alert: PaperTicksStale
+        expr: increase(tradingos_paper_ticks_skipped_stale_total[10m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Paper-trading ticks are arriving too old to act on"
+          description: >-
+            More than 3 ticks in 10 minutes were older than
+            PAPER_TICK_MAX_AGE_SECONDS when the drain job reached them, so
+            they were skipped (no entry or stop-loss on a price that old).
+            Look at the quote-call duration and tick-age panels: a slow
+            broker, a stalled scheduler, or a backlog.
+
       - alert: WebSocketLatencyElevated
         expr: |
           histogram_quantile(0.95, sum(rate(tradingos_ws_latency_seconds_bucket[5m])) by (le)) > 0.1
@@ -59,7 +73,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "p95 WS/tick-relay latency above the latency-guard threshold"
+          summary: "p95 WS/tick-relay latency above the latency-guard threshold (idle: nothing observes it until a broker WebSocket feed exists)"
           description: >-
             p95 of tradingos_ws_latency_seconds has been above 100ms (the
             same default threshold src.engine.risk.latency_guard.

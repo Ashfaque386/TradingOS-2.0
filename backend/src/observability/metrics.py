@@ -30,6 +30,42 @@ ws_latency_seconds = Histogram(
     buckets=(0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.5, 1.0),
 )
 
+# Paper-trading tick pipeline, measured stage by stage (quotes are polled, not streamed): how long
+# the batched broker quote call takes, how old the exchange says a quote was when it arrived, how
+# old a tick is when the drain job reaches it, and how long until its processing finished. These
+# are what decides whether polling is fast enough, or a broker WebSocket feed is worth building.
+paper_quote_fetch_seconds = Histogram(
+    "tradingos_paper_quote_fetch_seconds",
+    "Duration of one batched broker quote call",
+    labelnames=("broker", "outcome"),
+    buckets=(0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0),
+)
+paper_quote_exchange_lag_seconds = Histogram(
+    "tradingos_paper_quote_exchange_lag_seconds",
+    "Age of a quote's own exchange timestamp when it was received (brokers that send one)",
+    labelnames=("broker",),
+    buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0, 3600.0),
+)
+paper_quote_exchange_lag_unusable_total = Counter(
+    "tradingos_paper_quote_exchange_lag_unusable_total",
+    "Quotes whose exchange timestamp was missing, unreadable, or in the future",
+    labelnames=("broker", "reason"),
+)
+paper_tick_age_seconds = Histogram(
+    "tradingos_paper_tick_age_seconds",
+    "Age of a tick (time since it was fetched) when the drain job reached it",
+    buckets=(0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 60.0, 120.0),
+)
+paper_tick_to_decision_seconds = Histogram(
+    "tradingos_paper_tick_to_decision_seconds",
+    "Time from a tick being fetched to its processing (any resulting orders) finishing",
+    buckets=(0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0, 60.0, 120.0),
+)
+paper_ticks_skipped_stale_total = Counter(
+    "tradingos_paper_ticks_skipped_stale_total",
+    "Ticks not acted on because they were older than PAPER_TICK_MAX_AGE_SECONDS",
+)
+
 # LangGraph node execution duration (Build Spec §7.2's 13-node pipeline),
 # labeled by node name -- src.agents.graph.build_graph's per-node wrapper
 # is the single place every node call passes through.

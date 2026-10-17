@@ -187,6 +187,12 @@ class Settings(BaseSettings):
     # order waits for a fresh one) rather than filled against a book that may have moved. The
     # tick job refreshes it every few seconds.
     paper_depth_max_age_seconds: float = 30.0
+    # The oldest a tick may be when the drain job acts on it. Quotes are polled every 3 s and
+    # drained every 5 s, so a tick is routinely up to ~8 s old (plus the broker's round trip) by
+    # design; this is the bound beyond which the feed has stalled and the price is no longer one
+    # to trade or stop out on. It is not the 100 ms WebSocket-relay guard, which would discard
+    # nearly every polled tick (found by measuring the cadence; see docs/CLAUDE.md, Phase 7).
+    paper_tick_max_age_seconds: float = 20.0
     # The newest ticks kept per symbol stream (approximate trim). At one tick per 3 seconds over a
     # 6.25-hour session this is ~7,500 a day, so the default keeps about a day; a consumer that
     # falls further behind than that loses the oldest ticks, not the newest.

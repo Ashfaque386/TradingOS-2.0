@@ -13,7 +13,7 @@ from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.paper_trading.tick_feed import MockTickSource, tick_stream_key
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
-from src.observability.metrics import ws_latency_seconds
+from src.observability.metrics import paper_tick_age_seconds
 from src.orchestration import paper_trading_scheduler as scheduler_module
 from src.orchestration.paper_trading import enroll_in_paper_trading
 from src.orchestration.strategies import create_strategy, create_version_with_validation
@@ -155,15 +155,15 @@ async def test_start_paper_trading_scheduler_registers_and_runs_all_jobs(
         await redis_client.delete(tick_stream_key("SCHEDSTOCK"))
 
 
-def _ws_latency_observation_count() -> float:
-    for metric in ws_latency_seconds.collect():
+def _tick_age_observation_count() -> float:
+    for metric in paper_tick_age_seconds.collect():
         for sample in metric.samples:
             if sample.name.endswith("_count"):
                 return sample.value
-    raise AssertionError("no _count sample found for tradingos_ws_latency_seconds")
+    raise AssertionError("no _count sample found for tradingos_paper_tick_age_seconds")
 
 
-async def test_tick_drain_job_observes_ws_latency_metric_and_feeds_the_latency_guard(
+async def test_tick_drain_job_observes_tick_age_metric_and_feeds_the_staleness_guard(
     db_session_factory, redis_client, monkeypatch
 ):
     """Phase 11 (Build Spec §19): src.engine.risk.latency_guard.
@@ -183,7 +183,7 @@ async def test_tick_drain_job_observes_ws_latency_metric_and_feeds_the_latency_g
     monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
     await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, MockTickSource)
 
-    before = _ws_latency_observation_count()
+    before = _tick_age_observation_count()
 
     await scheduler_module.run_tick_drain_job(
         db_session_factory,
@@ -192,7 +192,7 @@ async def test_tick_drain_job_observes_ws_latency_metric_and_feeds_the_latency_g
         ReferenceTableRegulatoryDataProvider(),
     )
 
-    after = _ws_latency_observation_count()
+    after = _tick_age_observation_count()
 
     assert after > before
     # The module-level guard (built in Phase 6, wired for the first time
