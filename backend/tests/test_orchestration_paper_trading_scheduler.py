@@ -237,3 +237,43 @@ async def test_tick_publish_job_still_publishes_the_other_symbols_when_one_canno
     assert await redis_client.xlen(tick_stream_key("SCHEDISOBAD")) == 0
     for symbol in ("SCHEDISOGOOD", "SCHEDISOBAD"):
         await redis_client.delete(tick_stream_key(symbol))
+
+
+async def test_tick_publish_job_trims_the_stream_and_expires_the_book_from_the_settings(
+    db_session_factory, redis_client, monkeypatch
+):
+    from src.core.config import get_settings
+    from src.engine.paper_trading.depth import DepthSnapshot, depth_key
+    from src.engine.paper_trading.order_book import OrderBookLevel
+    from src.engine.paper_trading.tick_feed import Tick
+
+    async with db_session_factory() as db:
+        strategy = await create_strategy(db, name="SchedTrim", objective="obj")
+        version = await create_version_with_validation(db, strategy, _VALID_CODE)
+        await enroll_in_paper_trading(
+            db, strategy_version_id=version.id, symbol="SCHEDTRIM", builtin_strategy="sma_crossover"
+        )
+    await redis_client.delete(tick_stream_key("SCHEDTRIM"), depth_key("SCHEDTRIM"))
+    monkeypatch.setenv("PAPER_TICK_STREAM_MAXLEN", "100")
+    monkeypatch.setenv("PAPER_DEPTH_MAX_AGE_SECONDS", "20")
+    get_settings.cache_clear()
+
+    class _WithBook:
+        async def next_tick(self, symbol: str) -> Tick:
+            book = DepthSnapshot(
+                bids=(OrderBookLevel(100.0, 10),), asks=(OrderBookLevel(100.1, 10),), timestamp_ms=1
+            )
+            return Tick(symbol=symbol, price=100.05, timestamp_ms=1_000, depth=book)
+
+    monkeypatch.setattr(scheduler_module, "is_market_open_ist", lambda: True)
+    try:
+        for _ in range(300):
+            await scheduler_module.run_tick_publish_job(db_session_factory, redis_client, _WithBook)
+        length = await redis_client.xlen(tick_stream_key("SCHEDTRIM"))
+        ttl_ms = await redis_client.pttl(depth_key("SCHEDTRIM"))
+    finally:
+        get_settings.cache_clear()
+        await redis_client.delete(tick_stream_key("SCHEDTRIM"), depth_key("SCHEDTRIM"))
+
+    assert 100 <= length < 300  # trimmed to about the configured length, never unbounded
+    assert 30_000 < ttl_ms <= 40_000  # twice the configured max age

@@ -14,7 +14,7 @@ L2 feed is a Phase 8 broker-adapter / Phase 10 data-ingestion concern.
 """
 
 from dataclasses import dataclass, field
-from typing import ClassVar, Literal, Protocol
+from typing import ClassVar, Literal, Protocol, cast
 
 Side = Literal["buy", "sell"]
 
@@ -76,6 +76,19 @@ def simulate_fill(*, side: Side, quantity: int, book: OrderBookSnapshot) -> Fill
 
 class OrderBookProvider(Protocol):
     def snapshot(self, symbol: str, *, mid_price: float) -> OrderBookSnapshot: ...
+
+
+async def book_for(
+    provider: OrderBookProvider, symbol: str, *, side: Side, mid_price: float
+) -> OrderBookSnapshot:
+    """The book an order on `symbol` walks. A provider that reads its book from somewhere that
+    needs awaiting (the live depth in Redis: `RealDepthOrderBookProvider`) offers `snapshot_async`
+    and is awaited; the synthetic one answers directly. Raises whatever the provider raises when
+    it has no usable book (`DepthUnavailableError`)."""
+    snapshot_async = getattr(provider, "snapshot_async", None)
+    if snapshot_async is not None:
+        return cast(OrderBookSnapshot, await snapshot_async(symbol, side=side, mid_price=mid_price))
+    return provider.snapshot(symbol, mid_price=mid_price)
 
 
 @dataclass(frozen=True, slots=True)

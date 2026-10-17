@@ -29,13 +29,14 @@ below follow Upstox's publicly documented v2 API envelope from training
 knowledge; this sandbox cannot verify them against a live call.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
 import httpx
 
 from src.brokers.base import (
+    QUOTE_BATCH_SIZE,
     BrokerCredentials,
     BrokerOrder,
     BrokerOrderResult,
@@ -52,6 +53,7 @@ from src.brokers.base import (
     broker_request_error,
     broker_unreachable,
     parse_candle,
+    quote_from_row,
 )
 from src.brokers.upstox_instruments import (
     InstrumentResolver,
@@ -225,19 +227,36 @@ class UpstoxAdapter:
                 {},
             )
         )
-        last_price = float(row.get("last_price") or 0.0)
-        if last_price <= 0:
-            raise BrokerQuoteUnavailableError("upstox", symbol)
-        depth = row.get("depth", {})
-        buy_levels = depth.get("buy") or []
-        sell_levels = depth.get("sell") or []
-        return BrokerQuote(
-            symbol=symbol,
-            last_price=last_price,
-            bid=buy_levels[0].get("price") if buy_levels else None,
-            ask=sell_levels[0].get("price") if sell_levels else None,
-            timestamp=datetime.now(UTC),
-        )
+        return quote_from_row(symbol, row, broker="upstox")
+
+    async def get_quotes(self, symbols: Sequence[str]) -> dict[str, BrokerQuote]:
+        """Many quotes per `/market-quote/quotes` call. A symbol Upstox does not list, or has no
+        price for, is absent from the result. Rows are matched on the `instrument_token` they
+        carry, as in `get_quote`."""
+        keys: dict[str, str] = {}
+        for symbol in dict.fromkeys(symbols):
+            try:
+                keys[symbol] = await self._instruments.resolve(symbol)
+            except UpstoxInstrumentNotFoundError:
+                continue
+        quotes: dict[str, BrokerQuote] = {}
+        items = list(keys.items())
+        for start in range(0, len(items), QUOTE_BATCH_SIZE):
+            chunk = items[start : start + QUOTE_BATCH_SIZE]
+            data = await self._request(
+                "GET",
+                "/market-quote/quotes",
+                params={"instrument_key": ",".join(key for _, key in chunk)},
+            )
+            rows = data.get("data", {})
+            by_token = {r.get("instrument_token"): r for r in rows.values() if isinstance(r, dict)}
+            for symbol, key in chunk:
+                row = rows.get(key) or rows.get(key.replace("|", ":")) or by_token.get(key) or {}
+                try:
+                    quotes[symbol] = quote_from_row(symbol, row, broker="upstox")
+                except BrokerQuoteUnavailableError:
+                    continue
+        return quotes
 
     async def has_instrument(self, symbol: str) -> bool:
         try:

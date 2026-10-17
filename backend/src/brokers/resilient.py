@@ -16,6 +16,7 @@ open/cooldown/half-open state machine, only adapts the richer Phase 8
 """
 
 import time
+from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
@@ -93,6 +94,9 @@ class ResilientBrokerAdapter:
 
     async def get_quote(self, symbol: str) -> BrokerQuote:
         return await self._breaker.call(lambda: self._adapter.get_quote(symbol))
+
+    async def get_quotes(self, symbols: Sequence[str]) -> dict[str, BrokerQuote]:
+        return await self._breaker.call(lambda: self._adapter.get_quotes(symbols))
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         return await self._breaker.call(lambda: self._adapter.get_option_chain(underlying, expiry))

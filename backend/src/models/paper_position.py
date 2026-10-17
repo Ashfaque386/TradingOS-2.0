@@ -29,7 +29,12 @@ class PaperPosition(Base):
 
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     avg_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # Gross of costs, like PaperFill.realized_pnl; `costs_total` is every fill's costs so far,
+    # and the net realized result is realized_pnl - costs_total.
     realized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    costs_total: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

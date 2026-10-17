@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -177,6 +178,19 @@ class Settings(BaseSettings):
     # quietly trading on a random walk. On, it restores the old generated-data fallbacks -- for
     # demos and the automated tests, never for a session whose results are meant to be believed.
     paper_trading_synthetic: bool = False
+
+    # How a paper fill is charged. "cnc" is delivery (positions held overnight: the daily-signal
+    # strategies), "mis" is intraday; they differ in brokerage, STT and stamp duty
+    # (src.engine.backtest.friction).
+    paper_trading_product: Literal["cnc", "mis"] = "cnc"
+    # A paper fill walks the broker's live depth; a snapshot older than this is refused (the
+    # order waits for a fresh one) rather than filled against a book that may have moved. The
+    # tick job refreshes it every few seconds.
+    paper_depth_max_age_seconds: float = 30.0
+    # The newest ticks kept per symbol stream (approximate trim). At one tick per 3 seconds over a
+    # 6.25-hour session this is ~7,500 a day, so the default keeps about a day; a consumer that
+    # falls further behind than that loses the oldest ticks, not the newest.
+    paper_tick_stream_maxlen: int = 10_000
 
     # LLM provider credentials (Settings redesign): a sibling encrypted
     # store to secrets_store_path above, same Fernet key, same

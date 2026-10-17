@@ -35,10 +35,19 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import get_settings
 from src.engine.backtest.engine import run_vectorized_backtest
+from src.engine.backtest.friction import compute_leg_costs
 from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signals
 from src.engine.paper_trading.daily_signal import detect_todays_signal
-from src.engine.paper_trading.order_book import FillResult, OrderBookProvider, Side, simulate_fill
+from src.engine.paper_trading.depth import DepthUnavailableError
+from src.engine.paper_trading.order_book import (
+    FillResult,
+    OrderBookProvider,
+    Side,
+    book_for,
+    simulate_fill,
+)
 from src.engine.paper_trading.position_ledger import Position, apply_fill
 from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
 from src.engine.paper_trading.stop_loss import check_universal_stop_loss
@@ -171,6 +180,28 @@ async def _get_or_create_position(
     return position
 
 
+def fill_costs(side: Side, fill: FillResult) -> tuple[float, dict[str, float | str] | None]:
+    """What the broker and the exchange would charge for this fill: the total, and each line
+    (brokerage, STT, exchange charges, SEBI fee, stamp duty, GST) with the product they were
+    worked out for. Nothing for a fill that filled nothing. The depth walk already prices the
+    market impact of the order, so no further slippage is added on top."""
+    if fill.filled_quantity == 0 or fill.avg_fill_price is None:
+        return 0.0, None
+    product = get_settings().paper_trading_product
+    turnover = fill.filled_quantity * fill.avg_fill_price
+    legs = compute_leg_costs(turnover=turnover, is_buy=side == "buy", is_delivery=product == "cnc")
+    return legs.total, {
+        "product": product,
+        "turnover": turnover,
+        "brokerage": legs.brokerage,
+        "stt": legs.stt,
+        "exchange_txn_charges": legs.exchange_txn_charges,
+        "sebi_fee": legs.sebi_fee,
+        "stamp_duty": legs.stamp_duty,
+        "gst": legs.gst,
+    }
+
+
 async def _persist_fill(
     db: AsyncSession,
     *,
@@ -181,7 +212,10 @@ async def _persist_fill(
     order_group_id: uuid.UUID,
     leg_index: int = 0,
     data_source: str = DataSource.UNKNOWN,
+    charge_costs: bool = True,
 ) -> PaperPosition:
+    costs, breakdown = fill_costs(side, fill) if charge_costs else (0.0, None)
+    position.costs_total += costs
     if fill.filled_quantity > 0:
         # FillResult.avg_fill_price is None only when nothing filled at all
         # (see its own field comment) -- filled_quantity > 0 here rules
@@ -212,6 +246,8 @@ async def _persist_fill(
             avg_fill_price=fill.avg_fill_price,
             fully_filled=fill.fully_filled,
             realized_pnl=realized,
+            costs_total=costs,
+            costs_breakdown=breakdown,
             data_source=data_source,
         )
     )
@@ -249,6 +285,7 @@ async def process_tick(
 
     side: Side | None = None
     quantity = 0
+    signal_to_consume: DailySignal | None = None
     reference_price = position.avg_cost if position.avg_cost > 0 else tick_price
 
     if stop.triggered:
@@ -276,12 +313,32 @@ async def process_tick(
                 quantity = int(entry_capital // tick_price)
                 reference_price = latest_signal.reference_price
 
-            if side is not None and not latest_signal.consumed:
-                latest_signal.consumed = True
-                latest_signal.consumed_at = datetime.now(UTC)
+            if side is not None:
+                signal_to_consume = latest_signal
 
     if side is None or quantity <= 0:
         return None
+
+    # The book first: an order that cannot be priced against real depth (no snapshot, a stale one)
+    # waits -- the signal stays pending and the next tick tries again -- instead of being consumed
+    # by a fill that did not happen.
+    try:
+        book = await book_for(
+            order_book_provider, subscription.symbol, side=side, mid_price=tick_price
+        )
+    except DepthUnavailableError as exc:
+        logger.warning(
+            "paper_trading.order_waiting_for_depth",
+            subscription_id=str(subscription.id),
+            symbol=subscription.symbol,
+            side=side,
+            reason=str(exc),
+        )
+        return None
+
+    if signal_to_consume is not None and not signal_to_consume.consumed:
+        signal_to_consume.consumed = True
+        signal_to_consume.consumed_at = datetime.now(UTC)
 
     proposed_position_value = quantity * tick_price
     try:
@@ -321,7 +378,6 @@ async def process_tick(
         )
         return None
 
-    book = order_book_provider.snapshot(subscription.symbol, mid_price=tick_price)
     fill = simulate_fill(side=side, quantity=quantity, book=book)
 
     await _persist_fill(

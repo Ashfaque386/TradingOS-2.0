@@ -44,6 +44,7 @@ from src.data.broker_provider import NoRealDataSourceError
 from src.data.market_data_factory import get_market_data_provider
 from src.data.price_provider import DataLakePriceProvider, get_signal_price_provider
 from src.data.providers import AnyMarketDataProvider
+from src.engine.paper_trading.depth import build_order_book_provider
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.tick_feed import get_latest_tick
@@ -117,9 +118,11 @@ register_policy(
     "POST", "/api/v1/paper-trading/subscriptions/{subscription_id}/tick", roles=_OPERATOR_ROLES
 )
 
-# Module-level stand-ins for the order book and regulatory table, the same kind the scheduler
-# wires up in src.main's lifespan. (The daily-signal price provider is a dependency --
-# `get_signal_price_provider` -- so a manual run reads the real lake, never generated bars.)
+# The operator-supplied tick endpoint fills against a generated book (it is a test tool: the price
+# is typed, and the fill is labelled so); deactivate/close use the real depth. The regulatory
+# table is the same kind the scheduler wires up in src.main's lifespan. (The daily-signal price
+# provider is a dependency -- `get_signal_price_provider` -- so a manual run reads the real lake,
+# never generated bars.)
 _ORDER_BOOK_PROVIDER = MockOrderBookProvider()
 _REGULATORY_PROVIDER = ReferenceTableRegulatoryDataProvider()
 
@@ -151,6 +154,8 @@ def _fill_response(fill: PaperFill) -> PaperFillResponse:
         avg_fill_price=fill.avg_fill_price,
         fully_filled=fill.fully_filled,
         realized_pnl=fill.realized_pnl,
+        costs_total=fill.costs_total,
+        costs_breakdown=fill.costs_breakdown,
         data_source=fill.data_source,
         created_at=fill.created_at.isoformat(),
     )
@@ -173,13 +178,16 @@ async def todays_paper_pnl_endpoint(
     result = await db.execute(
         select(
             func.coalesce(func.sum(PaperFill.realized_pnl), 0.0),
+            func.coalesce(func.sum(PaperFill.costs_total), 0.0),
             func.count(PaperFill.id),
         ).where(PaperFill.created_at >= start_of_day_ist)
     )
-    total_realized, fill_count = result.one()
+    total_realized, total_costs, fill_count = result.one()
     return TodaysPaperPnlResponse(
         as_of_date=start_of_day_ist.date().isoformat(),
         realized_pnl=float(total_realized),
+        costs_total=float(total_costs),
+        net_realized_pnl=float(total_realized) - float(total_costs),
         fill_count=fill_count,
     )
 
@@ -326,6 +334,8 @@ def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
         quantity=view.quantity,
         avg_cost=view.avg_cost,
         realized_pnl=view.realized_pnl,
+        costs_total=view.costs_total,
+        net_realized_pnl=view.realized_pnl - view.costs_total,
         managed=sub.is_active or view.quantity == 0,
         last_tick=(
             PaperLastTick(
@@ -350,6 +360,8 @@ def _closed_response(result: CloseResult) -> PaperPositionClosedResponse:
             quantity=position.quantity,
             avg_cost=position.avg_cost,
             realized_pnl=position.realized_pnl,
+            costs_total=position.costs_total,
+            net_realized_pnl=position.realized_pnl - position.costs_total,
         ),
         closed=position.quantity == 0,
         remaining_quantity=result.remaining_quantity,
@@ -437,7 +449,7 @@ async def deactivate_subscription_endpoint(
             reason=body.reason,
             on_open_position=body.on_open_position,
             close_price=body.close_price,
-            order_book_provider=_ORDER_BOOK_PROVIDER,
+            order_book_provider=build_order_book_provider(redis),
             regulatory_provider=_REGULATORY_PROVIDER,
         )
     except (SubscriptionNotFoundError, SubscriptionStateError, PriceUnavailableError) as exc:
@@ -487,7 +499,7 @@ async def close_position_endpoint(
             reason=body.reason,
             price=body.price,
             administrative=body.administrative,
-            order_book_provider=_ORDER_BOOK_PROVIDER,
+            order_book_provider=build_order_book_provider(redis),
             regulatory_provider=_REGULATORY_PROVIDER,
         )
     except (
@@ -530,6 +542,8 @@ async def get_position_endpoint(
         quantity=position.quantity,
         avg_cost=position.avg_cost,
         realized_pnl=position.realized_pnl,
+        costs_total=position.costs_total,
+        net_realized_pnl=position.realized_pnl - position.costs_total,
     )
 
 

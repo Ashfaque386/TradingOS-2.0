@@ -18,6 +18,7 @@ construct -- and record -- the exact payload a real order would carry
 without ever sending it, for a broker with no sandbox to send it to.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -224,6 +225,18 @@ class BrokerPosition:
     pnl: float
 
 
+# Symbols per quote request: well under both brokers' documented caps (500), so URLs stay short.
+QUOTE_BATCH_SIZE = 100
+
+
+@dataclass(frozen=True, slots=True)
+class DepthLevel:
+    """One level of a broker's market depth: a price and the quantity resting there."""
+
+    price: float
+    quantity: int
+
+
 @dataclass(frozen=True, slots=True)
 class BrokerQuote:
     symbol: str
@@ -231,6 +244,48 @@ class BrokerQuote:
     bid: float | None
     ask: float | None
     timestamp: datetime
+    # The broker's 5-level book, best first (bids descending, asks ascending), and the open
+    # interest of a derivative. Empty / None when the broker sent none -- never filled in.
+    depth_bids: tuple[DepthLevel, ...] = ()
+    depth_asks: tuple[DepthLevel, ...] = ()
+    open_interest: float | None = None
+
+
+def _depth_levels(raw: Any) -> tuple[DepthLevel, ...]:
+    """Levels with a real price and a positive quantity, in the order sent. Both brokers send
+    empty padding levels (price 0, quantity 0) outside market hours; those are dropped."""
+    levels: list[DepthLevel] = []
+    for entry in raw or []:
+        if not isinstance(entry, dict):
+            continue
+        price = float(entry.get("price") or 0.0)
+        quantity = int(entry.get("quantity") or 0)
+        if price > 0 and quantity > 0:
+            levels.append(DepthLevel(price=price, quantity=quantity))
+    return tuple(levels)
+
+
+def quote_from_row(symbol: str, row: dict[str, Any], *, broker: str) -> BrokerQuote:
+    """A quote from one row of Kite's or Upstox's quote response (they share the shape: a
+    `last_price`, a `depth` of `buy`/`sell` levels and an `oi`). Raises
+    `BrokerQuoteUnavailableError` for a row with no usable price."""
+    last_price = float(row.get("last_price") or 0.0)
+    if last_price <= 0:
+        raise BrokerQuoteUnavailableError(broker, symbol)
+    depth = row.get("depth") or {}
+    bids = _depth_levels(depth.get("buy"))
+    asks = _depth_levels(depth.get("sell"))
+    open_interest = row.get("oi")
+    return BrokerQuote(
+        symbol=symbol,
+        last_price=last_price,
+        bid=bids[0].price if bids else None,
+        ask=asks[0].price if asks else None,
+        timestamp=datetime.now(UTC),
+        depth_bids=bids,
+        depth_asks=asks,
+        open_interest=float(open_interest) if open_interest else None,
+    )
 
 
 CandleInterval = Literal["day", "minute"]
@@ -311,6 +366,11 @@ class BrokerAdapter(Protocol):
     async def get_margin(self) -> MarginInfo: ...
     async def get_positions(self) -> list[BrokerPosition]: ...
     async def get_quote(self, symbol: str) -> BrokerQuote: ...
+    async def get_quotes(self, symbols: Sequence[str]) -> dict[str, BrokerQuote]:
+        """Quotes for many symbols in as few calls as the broker allows. A symbol the broker has
+        no usable price for is left out of the result (not an error, not a zero quote)."""
+        ...
+
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]: ...
     async def get_expiries(self, underlying: str) -> list[str]: ...
     async def get_historical_candles(

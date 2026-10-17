@@ -51,12 +51,14 @@ clients.
 import csv
 import io
 import time
-from datetime import UTC, date, datetime, timedelta
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta
 from typing import Any, cast
 
 import httpx
 
 from src.brokers.base import (
+    QUOTE_BATCH_SIZE,
     BrokerCredentials,
     BrokerOrder,
     BrokerOrderResult,
@@ -74,6 +76,7 @@ from src.brokers.base import (
     broker_request_error,
     broker_unreachable,
     parse_candle,
+    quote_from_row,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -246,28 +249,38 @@ class ZerodhaKiteAdapter:
         # Kite documents `exchange:tradingsymbol` for the request and keys the response by it;
         # a symbol that already names its exchange is passed through untouched. (Tolerant on
         # the way back: the bare symbol is also tried, and a missing key is simply "no data".)
-        if ":" in symbol:
-            instrument = symbol
-        else:
-            instrument = INDEX_QUOTE_KEYS.get(
-                symbol.strip().upper(), f"{DEFAULT_QUOTE_EXCHANGE}:{symbol}"
-            )
+        instrument = self._quote_key(symbol)
         data = await self._request("GET", "/quote", params={"i": instrument})
         rows = data.get("data", {})
         row = rows.get(instrument) or rows.get(symbol) or {}
-        last_price = float(row.get("last_price") or 0.0)
-        if last_price <= 0:
-            raise BrokerQuoteUnavailableError("zerodha", symbol)
-        depth = row.get("depth", {})
-        buy_levels = depth.get("buy") or []
-        sell_levels = depth.get("sell") or []
-        return BrokerQuote(
-            symbol=symbol,
-            last_price=last_price,
-            bid=buy_levels[0].get("price") if buy_levels else None,
-            ask=sell_levels[0].get("price") if sell_levels else None,
-            timestamp=datetime.now(UTC),
-        )
+        return quote_from_row(symbol, row, broker="zerodha")
+
+    @staticmethod
+    def _quote_key(symbol: str) -> str:
+        if ":" in symbol:
+            return symbol
+        return INDEX_QUOTE_KEYS.get(symbol.strip().upper(), f"{DEFAULT_QUOTE_EXCHANGE}:{symbol}")
+
+    async def get_quotes(self, symbols: Sequence[str]) -> dict[str, BrokerQuote]:
+        """Many quotes per `/quote` call (Kite takes up to 500 `i=` params; chunked well below
+        that to keep the URL short). A symbol Kite has no price for is absent from the result."""
+        quotes: dict[str, BrokerQuote] = {}
+        unique = list(dict.fromkeys(symbols))
+        for start in range(0, len(unique), QUOTE_BATCH_SIZE):
+            chunk = unique[start : start + QUOTE_BATCH_SIZE]
+            keys = {symbol: self._quote_key(symbol) for symbol in chunk}
+            data = await self._request(
+                "GET", "/quote", params=[("i", key) for key in keys.values()]
+            )
+            rows = data.get("data", {})
+            for symbol, key in keys.items():
+                try:
+                    quotes[symbol] = quote_from_row(
+                        symbol, rows.get(key) or rows.get(symbol) or {}, broker="zerodha"
+                    )
+                except BrokerQuoteUnavailableError:
+                    continue
+        return quotes
 
     async def _get_nfo_instruments(self) -> list[dict[str, Any]]:
         global _nfo_instruments_cache, _nfo_instruments_cache_at

@@ -203,10 +203,10 @@ async def test_a_redis_failure_for_one_symbol_is_isolated_too(redis_client, monk
     await _clean(redis_client, "ISOA", "ISOBAD", "ISOC")
     real_publish = tick_feed_module.publish_tick
 
-    async def flaky_publish(redis, tick):
+    async def flaky_publish(redis, tick, **kwargs):
         if tick.symbol == "ISOBAD":
             raise ConnectionError("stream unavailable")
-        return await real_publish(redis, tick)
+        return await real_publish(redis, tick, **kwargs)
 
     monkeypatch.setattr(tick_feed_module, "publish_tick", flaky_publish)
 

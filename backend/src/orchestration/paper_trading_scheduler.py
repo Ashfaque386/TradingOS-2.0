@@ -48,6 +48,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from src.core.config import get_settings
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.engine.paper_trading.order_book import OrderBookProvider
 from src.engine.paper_trading.price_data import PriceDataProvider
@@ -119,7 +120,15 @@ async def run_tick_publish_job(
         return
     symbols = await _active_symbols(session_factory)
     if symbols:
-        await publish_ticks_once(redis, tick_source_factory(), symbols, backoff=_symbol_backoff)
+        settings = get_settings()
+        await publish_ticks_once(
+            redis,
+            tick_source_factory(),
+            symbols,
+            backoff=_symbol_backoff,
+            maxlen=settings.paper_tick_stream_maxlen,
+            depth_ttl_seconds=settings.paper_depth_max_age_seconds * 2,
+        )
 
 
 async def run_tick_drain_job(

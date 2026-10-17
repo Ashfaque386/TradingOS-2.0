@@ -379,6 +379,7 @@ class PortfolioSummaryResponse(BaseModel):
     as_of: str
     active_strategy_count: int
     paper_realized_pnl_today: float
+    paper_costs_today: float = 0.0
     paper_open_position_count: int
     # How many of those sit on an inactive subscription (no stop-loss, no exits).
     paper_unmanaged_position_count: int = 0
@@ -615,7 +616,12 @@ class PaperPositionResponse(BaseModel):
     symbol: str
     quantity: int
     avg_cost: float
+    # Gross of costs (the price difference only); `costs_total` is what every fill so far cost
+    # (brokerage, STT, exchange charges, SEBI fee, stamp duty, GST) and `net_realized_pnl` the
+    # difference.
     realized_pnl: float
+    costs_total: float = 0.0
+    net_realized_pnl: float = 0.0
 
 
 class PaperLastTick(BaseModel):
@@ -650,6 +656,8 @@ class PaperSubscriptionDetailResponse(BaseModel):
     quantity: int
     avg_cost: float
     realized_pnl: float
+    costs_total: float = 0.0
+    net_realized_pnl: float = 0.0
     managed: bool
     last_tick: PaperLastTick | None
     unrealized_pnl: float | None
@@ -715,15 +723,23 @@ class PaperFillResponse(BaseModel):
     avg_fill_price: float | None
     fully_filled: bool
     realized_pnl: float
-    # What the fill rested on (see src.models.data_source): `mixed` for a fill on real ticks,
-    # because the order book it is walked through is synthetic.
+    # What the fill cost, gross realized_pnl aside: the total and each line (brokerage, stt,
+    # exchange_txn_charges, sebi_fee, stamp_duty, gst, plus the product and turnover they were
+    # worked out for).
+    costs_total: float = 0.0
+    costs_breakdown: dict[str, float | str] | None = None
+    # What the fill rested on (see src.models.data_source): `real` for a real tick walked through
+    # the broker's real depth, `mixed` when the book was generated.
     data_source: str = "unknown"
     created_at: str
 
 
 class TodaysPaperPnlResponse(BaseModel):
     as_of_date: str
+    # Gross of costs; `net_realized_pnl` is after the fills' costs.
     realized_pnl: float
+    costs_total: float = 0.0
+    net_realized_pnl: float = 0.0
     fill_count: int
 
 

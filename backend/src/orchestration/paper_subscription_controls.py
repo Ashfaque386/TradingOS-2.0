@@ -36,7 +36,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
 from src.brokers.tick_source import feed_unavailable_reason
-from src.engine.paper_trading.order_book import FillResult, OrderBookProvider, Side, simulate_fill
+from src.engine.paper_trading.depth import DepthUnavailableError
+from src.engine.paper_trading.order_book import (
+    FillResult,
+    OrderBookProvider,
+    Side,
+    book_for,
+    simulate_fill,
+)
 from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
 from src.engine.paper_trading.tick_feed import Tick, get_latest_tick, get_latest_tick_id
 from src.engine.risk.compliance import RegulatoryDataProvider
@@ -106,6 +113,7 @@ class SubscriptionView:
     quantity: int
     avg_cost: float
     realized_pnl: float
+    costs_total: float
     last_tick: Tick | None = None
     last_tick_age_seconds: float | None = None
     unrealized_pnl: float | None = None
@@ -198,6 +206,7 @@ async def list_subscription_views(
                 quantity=quantity,
                 avg_cost=avg_cost,
                 realized_pnl=position.realized_pnl if position else 0.0,
+                costs_total=position.costs_total if position else 0.0,
                 last_tick=tick,
                 last_tick_age_seconds=age,
                 unrealized_pnl=unrealized,
@@ -313,7 +322,12 @@ async def close_position(
                 "the risk gate refused the closing order: " + "; ".join(exc.reasons),
                 list(exc.reasons),
             ) from exc
-        book = order_book_provider.snapshot(subscription.symbol, mid_price=close_price)
+        try:
+            book = await book_for(
+                order_book_provider, subscription.symbol, side=side, mid_price=close_price
+            )
+        except DepthUnavailableError as exc:
+            raise CloseBlockedError(f"no live order book to fill the closing order: {exc}") from exc
         fill = simulate_fill(side=side, quantity=quantity, book=book)
         if fill.filled_quantity == 0:
             raise CloseBlockedError("there is no depth to fill the closing order against")
@@ -330,6 +344,7 @@ async def close_position(
         fill=fill,
         order_group_id=uuid.uuid4(),
         data_source=data_source,
+        charge_costs=not administrative,  # a cleanup is not a trade: no broker would charge it
     )
     latest = (
         await db.execute(

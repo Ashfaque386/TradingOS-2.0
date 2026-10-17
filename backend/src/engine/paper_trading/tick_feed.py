@@ -27,7 +27,7 @@ shape.
 
 import time
 import zlib
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
@@ -35,6 +35,7 @@ import numpy as np
 import structlog
 from redis.asyncio import Redis
 
+from src.engine.paper_trading.depth import DepthSnapshot, publish_depth
 from src.models.data_source import DataSource
 
 logger = structlog.get_logger(__name__)
@@ -52,12 +53,24 @@ class Tick:
     # Where the price came from (a `src.models.data_source.DataSource`): the stream carries
     # it, so whatever consumes the tick later can say what it rested on.
     source: str = "unknown"
+    # The broker's order book at the moment of this tick, when the source had one. It is not part
+    # of the stream entry: `publish_tick` stores it as the symbol's latest depth snapshot.
+    depth: DepthSnapshot | None = field(default=None, compare=False)
 
 
-async def publish_tick(redis: Redis, tick: Tick) -> str:
+async def publish_tick(
+    redis: Redis,
+    tick: Tick,
+    *,
+    maxlen: int | None = None,
+    depth_ttl_seconds: float = 60.0,
+) -> str:
+    """Appends the tick to its symbol's stream, trimmed to about `maxlen` entries (oldest go
+    first; `None` leaves the stream untrimmed), and stores its depth, if it has any, as the
+    symbol's latest book."""
     # redis-py's own xadd() return type is untyped (Any) regardless of the
     # real ID string it returns.
-    return cast(
+    entry_id = cast(
         str,
         await redis.xadd(
             tick_stream_key(tick.symbol),
@@ -66,8 +79,13 @@ async def publish_tick(redis: Redis, tick: Tick) -> str:
                 "timestamp_ms": str(tick.timestamp_ms),
                 "source": tick.source,
             },
+            maxlen=maxlen,
+            approximate=True,
         ),
     )
+    if tick.depth is not None and not tick.depth.is_empty():
+        await publish_depth(redis, tick.symbol, tick.depth, ttl_seconds=depth_ttl_seconds)
+    return entry_id
 
 
 async def read_new_ticks(
@@ -126,6 +144,21 @@ async def get_latest_tick_id(redis: Redis, symbol: str) -> str | None:
 
 class TickSource(Protocol):
     async def next_tick(self, symbol: str) -> Tick: ...
+
+
+# What a batching source reports for one symbol: its tick, or why it has none.
+TickOutcome = Tick | Exception
+
+
+class BatchTickSource(TickSource, Protocol):
+    """A source that can quote many symbols in one round trip. `publish_ticks_once` prefers
+    `next_ticks` when a source has it: one broker call per cycle instead of one per symbol."""
+
+    async def next_ticks(self, symbols: Sequence[str]) -> dict[str, TickOutcome]: ...
+
+
+class NoQuoteError(Exception):
+    """The source answered but had no tick for this symbol."""
 
 
 @dataclass
@@ -282,12 +315,45 @@ class TickPublishError(Exception):
         super().__init__(f"tick publish failed for {len(failures)} of {total} symbols: {detail}")
 
 
+async def _outcomes(
+    source: TickSource, symbols: list[str]
+) -> AsyncIterator[tuple[str, TickOutcome]]:
+    """Asks `source` about `symbols` and yields each one's outcome: all at once after one batched
+    call if the source can, else one call per symbol as the caller consumes them (so what was
+    published before a source went down stays published). A failure of one symbol is that
+    symbol's outcome, not the others'. A source that is down for good
+    (`TickSourceUnavailableError`) raises."""
+    batch = getattr(source, "next_ticks", None)
+    if batch is not None:
+        try:
+            got = cast(dict[str, TickOutcome], await batch(symbols))
+        except TickSourceUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the call failed for every symbol in it
+            for symbol in symbols:
+                yield symbol, exc
+            return
+        for symbol in symbols:
+            yield symbol, got.get(symbol, NoQuoteError(f"no quote for {symbol}"))
+        return
+    for symbol in symbols:
+        try:
+            outcome: TickOutcome = await source.next_tick(symbol)
+        except TickSourceUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - isolating one symbol's failure from the rest
+            outcome = exc
+        yield symbol, outcome
+
+
 async def publish_ticks_once(
     redis: Redis,
     source: TickSource,
     symbols: list[str],
     *,
     backoff: SymbolBackoff | None = None,
+    maxlen: int | None = None,
+    depth_ttl_seconds: float = 60.0,
 ) -> list[Tick]:
     """Publishes one tick per symbol -- the body of the APScheduler
     interval job driving whichever `TickSource` it was constructed with
@@ -307,15 +373,17 @@ async def publish_ticks_once(
         backoff.for_source(source)
     ticks: list[Tick] = []
     failures: dict[str, Exception] = {}
+    asking: list[str] = []
     for symbol in symbols:
         if backoff is not None and (retry_in := backoff.remaining(symbol)) > 0:
             failures[symbol] = SymbolBackedOffError(symbol, retry_in, backoff.last_error(symbol))
             continue
+        asking.append(symbol)
+    async for symbol, outcome in _outcomes(source, asking):
         try:
-            tick = await source.next_tick(symbol)
-            await publish_tick(redis, tick)
-        except TickSourceUnavailableError:
-            raise
+            if isinstance(outcome, Exception):
+                raise outcome
+            await publish_tick(redis, outcome, maxlen=maxlen, depth_ttl_seconds=depth_ttl_seconds)
         except Exception as exc:  # noqa: BLE001 - isolating one symbol's failure from the rest
             failures[symbol] = exc
             if backoff is not None:
@@ -329,7 +397,7 @@ async def publish_ticks_once(
             continue
         if backoff is not None and backoff.succeeded(symbol):
             logger.info("tick_feed.symbol_recovered", symbol=symbol)
-        ticks.append(tick)
+        ticks.append(outcome)
     if failures:
         raise TickPublishError(failures, ticks, len(symbols)) from next(iter(failures.values()))
     return ticks

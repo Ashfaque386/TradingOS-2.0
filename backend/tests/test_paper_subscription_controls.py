@@ -17,6 +17,8 @@ from src.audit.service import write_audit_entry  # noqa: F401  (the controls wri
 from src.core.redis_client import get_redis
 from src.core.roles import Role
 from src.data.price_provider import get_signal_price_provider
+from src.engine.paper_trading.depth import DepthSnapshot, depth_key, publish_depth
+from src.engine.paper_trading.order_book import OrderBookLevel
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.paper_trading.tick_feed import Tick, publish_tick, tick_stream_key
 from src.main import app
@@ -43,9 +45,9 @@ def _providers(redis_client):
 async def _no_ticks_left_by_an_earlier_test(redis_client):
     """The redis stream is shared across tests: a fresh tick published by one would let the next
     close "find a live price" it never published."""
-    await redis_client.delete(tick_stream_key(SYMBOL))
+    await redis_client.delete(tick_stream_key(SYMBOL), depth_key(SYMBOL))
     yield
-    await redis_client.delete(tick_stream_key(SYMBOL))
+    await redis_client.delete(tick_stream_key(SYMBOL), depth_key(SYMBOL))
 
 
 async def _headers(client, make_user, email: str, role: Role = Role.SYSTEM_ADMINISTRATOR) -> dict:
@@ -92,9 +94,18 @@ async def _open_position(client, headers, subscription_id: str) -> dict:
 
 
 async def _fresh_tick(
-    redis_client, price: float, *, age_seconds: float = 0.0, symbol: str = SYMBOL
+    redis_client,
+    price: float,
+    *,
+    age_seconds: float = 0.0,
+    symbol: str = SYMBOL,
+    levels: int = 5,
+    quantity_per_level: int = 100,
 ):
-    await redis_client.delete(tick_stream_key(symbol))
+    """A live tick and, beside it, the broker's book around it (`levels` of
+    `quantity_per_level` a side, 5 paise apart -- `levels=0` publishes no book at all). A close
+    walks that real book, so a test chooses how deep the market is."""
+    await redis_client.delete(tick_stream_key(symbol), depth_key(symbol))
     await publish_tick(
         redis_client,
         Tick(
@@ -104,6 +115,23 @@ async def _fresh_tick(
             source="real",
         ),
     )
+    if levels:
+        await publish_depth(
+            redis_client,
+            symbol,
+            DepthSnapshot(
+                bids=tuple(
+                    OrderBookLevel(round(price - 0.05 * (i + 1), 2), quantity_per_level)
+                    for i in range(levels)
+                ),
+                asks=tuple(
+                    OrderBookLevel(round(price + 0.05 * (i + 1), 2), quantity_per_level)
+                    for i in range(levels)
+                ),
+                timestamp_ms=int(time.time() * 1000),
+            ),
+            ttl_seconds=60,
+        )
 
 
 async def _audit_actions(db_session_factory) -> list[str]:
@@ -462,9 +490,23 @@ async def test_closing_at_a_live_tick_goes_through_the_gate_and_the_ledger(
     assert body["fill"]["side"] == "sell"
     assert body["fill"]["filled_quantity"] == position["quantity"]
     assert body["price_basis"].startswith("live tick")
-    assert body["data_source"] == "mixed"  # a real tick walked through the synthetic book
+    assert body["data_source"] == "real"  # a real tick walked through the broker's real book
     assert body["position"]["quantity"] == 0
     assert body["position"]["realized_pnl"] > position["realized_pnl"]  # it was a winner
+    # The close was charged like any sale (delivery STT, exchange fee, SEBI fee, GST) and the
+    # position keeps the gross result and every fill's costs apart.
+    assert body["fill"]["costs_total"] > 0
+    assert (
+        body["fill"]["costs_breakdown"]["stt"] > 0
+        and body["fill"]["costs_breakdown"]["stamp_duty"] == 0
+    )
+    assert position["costs_total"] > 0  # so was the entry
+    assert body["position"]["costs_total"] == pytest.approx(
+        position["costs_total"] + body["fill"]["costs_total"]
+    )
+    assert body["position"]["net_realized_pnl"] == pytest.approx(
+        body["position"]["realized_pnl"] - body["position"]["costs_total"]
+    )
     async with db_session_factory() as db:
         fills = (await db.execute(select(PaperFill).order_by(PaperFill.created_at))).scalars().all()
         assert [f.side for f in fills] == ["buy", "sell"]
@@ -582,6 +624,9 @@ async def test_an_administrative_close_fills_everything_at_the_given_price_and_s
     assert body["fill"]["filled_quantity"] == position["quantity"]
     assert body["fill"]["avg_fill_price"] == pytest.approx(price)
     assert body["data_source"] == "supplied"  # no order book was involved
+    # A cleanup is not a trade: nothing is charged for it (the entry's costs stay).
+    assert body["fill"]["costs_total"] == 0.0 and body["fill"]["costs_breakdown"] is None
+    assert body["position"]["costs_total"] == pytest.approx(position["costs_total"])
     async with db_session_factory() as db:
         entry = (
             await db.execute(
@@ -593,19 +638,13 @@ async def test_an_administrative_close_fills_everything_at_the_given_price_and_s
         assert entry.details["price_basis"] == "supplied by the operator"
 
 
-async def test_a_partial_close_leaves_the_rest_open(client, make_user, redis_client, monkeypatch):
+async def test_a_partial_close_leaves_the_rest_open(client, make_user, redis_client):
     """A thin book (2 levels x 20 = 40 shares deep) cannot absorb the whole position."""
-    from src.api.routes import paper_trading as routes
-    from src.engine.paper_trading.order_book import MockOrderBookProvider
-
     headers = await _headers(client, make_user, "partial-admin@example.com")
     sub_id = await _enrol(client, headers)
     position = await _open_position(client, headers, sub_id)
     assert position["quantity"] > 40
-    monkeypatch.setattr(
-        routes, "_ORDER_BOOK_PROVIDER", MockOrderBookProvider(levels=2, quantity_per_level=20)
-    )
-    await _fresh_tick(redis_client, position["avg_cost"])
+    await _fresh_tick(redis_client, position["avg_cost"], levels=2, quantity_per_level=20)
 
     closed = await client.post(
         f"/api/v1/paper-trading/subscriptions/{sub_id}/close-position",
@@ -622,20 +661,14 @@ async def test_a_partial_close_leaves_the_rest_open(client, make_user, redis_cli
 
 
 async def test_deactivating_with_close_refuses_when_only_part_of_the_position_closes(
-    client, make_user, redis_client, db_session_factory, monkeypatch
+    client, make_user, redis_client, db_session_factory
 ):
     """The close fills 40 of the position; the rest is still open, so the subscription must stay
     active (deactivating now would leave the remainder unmanaged without anyone choosing that)."""
-    from src.api.routes import paper_trading as routes
-    from src.engine.paper_trading.order_book import MockOrderBookProvider
-
     headers = await _headers(client, make_user, "partialdeact-admin@example.com")
     sub_id = await _enrol(client, headers)
     position = await _open_position(client, headers, sub_id)
-    monkeypatch.setattr(
-        routes, "_ORDER_BOOK_PROVIDER", MockOrderBookProvider(levels=2, quantity_per_level=20)
-    )
-    await _fresh_tick(redis_client, position["avg_cost"])
+    await _fresh_tick(redis_client, position["avg_cost"], levels=2, quantity_per_level=20)
 
     resp = await client.post(
         f"/api/v1/paper-trading/subscriptions/{sub_id}/deactivate",
@@ -652,25 +685,29 @@ async def test_deactivating_with_close_refuses_when_only_part_of_the_position_cl
         assert pos.quantity == position["quantity"] - 40  # the part that did close stays closed
 
 
-async def test_a_book_with_no_depth_cannot_close_anything(
-    client, make_user, redis_client, db_session_factory, monkeypatch
+@pytest.mark.parametrize("book", ["none", "stale"])
+async def test_without_a_fresh_book_nothing_can_close(
+    client, make_user, redis_client, db_session_factory, book
 ):
-    from src.api.routes import paper_trading as routes
-    from src.engine.paper_trading.order_book import MockOrderBookProvider
-
-    headers = await _headers(client, make_user, "nodepth-admin@example.com")
+    headers = await _headers(client, make_user, f"nodepth-{book}-admin@example.com")
     sub_id = await _enrol(client, headers)
     position = await _open_position(client, headers, sub_id)
-    monkeypatch.setattr(routes, "_ORDER_BOOK_PROVIDER", MockOrderBookProvider(levels=0))
-    await _fresh_tick(redis_client, position["avg_cost"])
+    await _fresh_tick(redis_client, position["avg_cost"], levels=0 if book == "none" else 5)
+    if book == "stale":
+        stale = DepthSnapshot(
+            bids=(OrderBookLevel(position["avg_cost"] - 0.05, 1000),),
+            asks=(OrderBookLevel(position["avg_cost"] + 0.05, 1000),),
+            timestamp_ms=int((time.time() - 600) * 1000),
+        )
+        await publish_depth(redis_client, SYMBOL, stale, ttl_seconds=60)
 
     resp = await client.post(
         f"/api/v1/paper-trading/subscriptions/{sub_id}/close-position",
-        json={"reason": "empty book"},
+        json={"reason": "no book"},
         headers=headers,
     )
 
-    assert resp.status_code == 409 and "no depth" in resp.json()["detail"]
+    assert resp.status_code == 409 and "no live order book" in resp.json()["detail"]
     async with db_session_factory() as db:  # nothing was recorded
         assert len((await db.execute(select(PaperFill))).scalars().all()) == 1  # just the entry
         pos = (await db.execute(select(PaperPosition))).scalar_one()
@@ -825,3 +862,45 @@ def test_feed_reason_for_a_rejected_token_and_none_when_healthy(
     assert feed_unavailable_reason() is None  # a valid token, nothing said against it
     feed_health.record_rejection("zerodha", status_code=403, detail="refused")
     assert feed_unavailable_reason() == "zerodha rejected the stored credentials (HTTP 403)"
+
+
+def test_a_second_connected_broker_keeps_the_feed_alive_when_the_first_is_not(
+    monkeypatch, tmp_path, _clean_settings
+):
+    """Zerodha's token expires every morning; the feed falls back to Upstox, so paper trading is
+    not halted, and the reasons are only reported when no broker at all can quote."""
+    from src.brokers import feed_health
+    from src.brokers.base import BrokerCredentials
+    from src.brokers.tick_source import feed_unavailable_reason
+
+    store = _isolated_store(monkeypatch, tmp_path)
+    store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
+    store.set_credentials("upstox", BrokerCredentials(api_key="k", access_token="t"))
+    feed_health.record_rejection("zerodha", status_code=403, detail="refused")
+
+    assert feed_unavailable_reason() is None  # Upstox is still a feed
+
+    feed_health.record_rejection("upstox", status_code=401, detail="refused")
+    reason = feed_unavailable_reason()
+    assert reason == (
+        "zerodha rejected the stored credentials (HTTP 403); "
+        "upstox rejected the stored credentials (HTTP 401)"
+    )
+
+
+def test_every_brokers_problem_is_named_when_none_can_quote(monkeypatch, tmp_path, _clean_settings):
+    from src.brokers.base import BrokerCredentials
+    from src.brokers.tick_source import feed_unavailable_reason
+
+    store = _isolated_store(monkeypatch, tmp_path)
+    store.set_credentials("zerodha", BrokerCredentials(api_key="k"))
+    store.set_credentials(
+        "upstox",
+        BrokerCredentials(
+            api_key="k", access_token="t", token_expires_at="2020-01-01T00:00:00+00:00"
+        ),
+    )
+
+    assert feed_unavailable_reason() == (
+        "zerodha has keys saved but is not connected; the upstox token has expired"
+    )

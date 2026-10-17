@@ -18,6 +18,7 @@ from src.brokers.base import (
 )
 from src.brokers.tick_source import (
     BrokerQuoteTickSource,
+    FallbackTickSource,
     _RefreshingTickSource,
     build_tick_source,
     is_broker_configured,
@@ -121,7 +122,7 @@ def test_synthetic_mode_does_not_override_a_connected_broker(tmp_path, monkeypat
         SecretsStore(tmp_path / "secrets.enc", key).set_credentials(
             "zerodha", BrokerCredentials(api_key="k", access_token="t")
         )
-        assert isinstance(build_tick_source(), BrokerQuoteTickSource)  # real data still wins
+        assert isinstance(build_tick_source(), FallbackTickSource)  # real data still wins
     finally:
         _reset_settings_and_store_caches()
 
@@ -138,8 +139,8 @@ def test_build_tick_source_uses_broker_quotes_when_credentials_configured(tmp_pa
         get_secrets_store.cache_clear()
 
         source = build_tick_source()
-        assert isinstance(source, BrokerQuoteTickSource)
-        assert source.adapter.broker_name == "zerodha"
+        assert isinstance(source, FallbackTickSource)
+        assert [s.adapter.broker_name for s in source.sources] == ["zerodha"]
     finally:
         _reset_settings_and_store_caches()
 
@@ -179,7 +180,7 @@ def test_is_broker_configured_is_true_once_a_broker_has_real_credentials(tmp_pat
         get_secrets_store.cache_clear()
 
         assert is_broker_configured() is True
-        assert isinstance(build_tick_source(), BrokerQuoteTickSource)
+        assert isinstance(build_tick_source(), FallbackTickSource)
     finally:
         _reset_settings_and_store_caches()
 
@@ -225,8 +226,8 @@ def test_refreshing_tick_source_rebuilds_the_moment_a_broker_is_connected(tmp_pa
         get_secrets_store.cache_clear()
 
         after = refreshing()
-        assert isinstance(after, BrokerQuoteTickSource)
-        assert after.adapter.broker_name == "zerodha"
+        assert isinstance(after, FallbackTickSource)
+        assert [s.adapter.broker_name for s in after.sources] == ["zerodha"]
         assert after is not before
     finally:
         _reset_settings_and_store_caches()
@@ -250,13 +251,13 @@ def test_refreshing_tick_source_rebuilds_when_the_same_brokers_credentials_chang
 
         refreshing = _RefreshingTickSource()
         before = refreshing()
-        assert isinstance(before, BrokerQuoteTickSource)
+        assert isinstance(before, FallbackTickSource)
 
         store.set_credentials("zerodha", BrokerCredentials(api_key="new-key", access_token="t2"))
         get_secrets_store.cache_clear()
 
         after = refreshing()
-        assert isinstance(after, BrokerQuoteTickSource)
+        assert isinstance(after, FallbackTickSource)
         assert after is not before
     finally:
         _reset_settings_and_store_caches()
@@ -280,7 +281,7 @@ def test_refreshing_tick_source_halts_rather_than_going_synthetic_once_a_broker_
 
         refreshing = _RefreshingTickSource()
         before = refreshing()
-        assert isinstance(before, BrokerQuoteTickSource)
+        assert isinstance(before, FallbackTickSource)
 
         store.delete_credentials("zerodha")
         get_secrets_store.cache_clear()
@@ -471,8 +472,8 @@ def test_reconnecting_the_broker_replaces_a_suspended_source(tmp_path, monkeypat
         get_secrets_store.cache_clear()
         refreshing = _RefreshingTickSource()
         stale = refreshing()
-        assert isinstance(stale, BrokerQuoteTickSource)
-        stale._suspended_until = float("inf")  # as if the broker had just refused it
+        assert isinstance(stale, FallbackTickSource)
+        stale.sources[0]._suspended_until = float("inf")  # as if the broker had just refused it
 
         assert refreshing() is stale  # nothing changed: still the suspended one
 
@@ -481,7 +482,8 @@ def test_reconnecting_the_broker_replaces_a_suspended_source(tmp_path, monkeypat
         renewed = refreshing()
 
         assert renewed is not stale
-        assert isinstance(renewed, BrokerQuoteTickSource) and renewed._suspended_until is None
+        assert isinstance(renewed, FallbackTickSource)
+        assert renewed.sources[0]._suspended_until is None
     finally:
         _reset_settings_and_store_caches()
 
@@ -503,3 +505,48 @@ async def test_a_symbol_with_no_quote_gives_no_tick_and_does_not_suspend_polling
             await source.next_tick("NOSUCHSYMBOL")
 
     assert calls == ["NSE:NOSUCHSYMBOL"] * 3  # every firing really asked; nothing suspended
+
+
+def test_connecting_a_second_broker_rebuilds_the_source_so_it_can_be_the_fallback(
+    tmp_path, monkeypatch
+):
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_settings_and_store_caches()
+    try:
+        store = SecretsStore(store_path, key)
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
+        get_secrets_store.cache_clear()
+        refreshing = _RefreshingTickSource()
+        before = refreshing()
+        assert [s.adapter.broker_name for s in before.sources] == ["zerodha"]
+
+        store.set_credentials("upstox", BrokerCredentials(api_key="k", access_token="t"))
+        get_secrets_store.cache_clear()
+        after = refreshing()
+
+        assert after is not before
+        assert [s.adapter.broker_name for s in after.sources] == ["zerodha", "upstox"]  # in order
+    finally:
+        _reset_settings_and_store_caches()
+
+
+def test_a_broker_without_a_live_token_is_not_part_of_the_source(tmp_path, monkeypatch):
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_settings_and_store_caches()
+    try:
+        store = SecretsStore(store_path, key)
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k"))  # keys, no token
+        store.set_credentials("upstox", BrokerCredentials(api_key="k", access_token="t"))
+        get_secrets_store.cache_clear()
+
+        source = build_tick_source()
+
+        assert [s.adapter.broker_name for s in source.sources] == ["upstox"]
+    finally:
+        _reset_settings_and_store_caches()

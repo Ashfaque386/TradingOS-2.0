@@ -18,7 +18,7 @@ from src.core.redis_client import get_redis
 from src.core.security import warn_if_signing_key_weak
 from src.data.market_data_factory import get_market_data_provider
 from src.data.price_provider import build_signal_price_provider
-from src.engine.paper_trading.order_book import MockOrderBookProvider
+from src.engine.paper_trading.depth import build_order_book_provider
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
@@ -145,7 +145,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         AsyncSessionLocal,
         redis=redis,
         price_provider=data_lake_price_provider,
-        order_book_provider=MockOrderBookProvider(),
+        order_book_provider=build_order_book_provider(redis),
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
         tick_source_factory=get_tick_source,
     )

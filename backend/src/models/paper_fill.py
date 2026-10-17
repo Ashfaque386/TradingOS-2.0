@@ -1,7 +1,18 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,7 +61,14 @@ class PaperFill(Base):
     avg_fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     fully_filled: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
+    # Gross of costs: the price difference only. What the fill cost (brokerage, STT, exchange
+    # charges, SEBI fee, stamp duty, GST) is `costs_total`, itemised in `costs_breakdown`; the
+    # net result of a fill is realized_pnl - costs_total.
     realized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    costs_total: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    costs_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

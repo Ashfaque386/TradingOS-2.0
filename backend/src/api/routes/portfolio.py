@@ -165,13 +165,14 @@ async def portfolio_summary_endpoint(
     ).scalar_one()
 
     start_of_day_utc = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    paper_realized_pnl_today = (
+    paper_realized_pnl_today, paper_costs_today = (
         await db.execute(
-            select(func.coalesce(func.sum(PaperFill.realized_pnl), 0.0)).where(
-                PaperFill.created_at >= start_of_day_utc
-            )
+            select(
+                func.coalesce(func.sum(PaperFill.realized_pnl), 0.0),
+                func.coalesce(func.sum(PaperFill.costs_total), 0.0),
+            ).where(PaperFill.created_at >= start_of_day_utc)
         )
-    ).scalar_one()
+    ).one()
 
     paper_open_position_count = (
         await db.execute(select(func.count(PaperPosition.id)).where(PaperPosition.quantity != 0))
@@ -205,6 +206,7 @@ async def portfolio_summary_endpoint(
         as_of=datetime.now(UTC).isoformat(),
         active_strategy_count=active_strategy_count,
         paper_realized_pnl_today=float(paper_realized_pnl_today),
+        paper_costs_today=float(paper_costs_today),
         paper_open_position_count=paper_open_position_count,
         paper_unmanaged_position_count=paper_unmanaged_position_count,
         live_position_count=live_position_count,

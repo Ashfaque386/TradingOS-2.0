@@ -36,18 +36,23 @@ job's very next firing, not only after a backend restart.
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
 import structlog
 
 from src.brokers import feed_health
-from src.brokers.base import BrokerAdapter, BrokerAuthError, BrokerCredentials
-from src.brokers.factory import KNOWN_BROKERS, build_configured_adapter
+from src.brokers.base import BrokerAdapter, BrokerAuthError, BrokerCredentials, BrokerQuote
+from src.brokers.factory import KNOWN_BROKERS
 from src.core.config import get_settings
+from src.data.market_data_factory import connected_adapters
+from src.engine.paper_trading.depth import DepthSnapshot
+from src.engine.paper_trading.order_book import OrderBookLevel
 from src.engine.paper_trading.tick_feed import (
     MockTickSource,
+    NoQuoteError,
     Tick,
+    TickOutcome,
     TickSource,
     TickSourceUnavailableError,
     UnavailableTickSource,
@@ -76,6 +81,16 @@ class BrokerQuoteTickSource:
     _rejection: str = field(default="", init=False, repr=False)
 
     async def next_tick(self, symbol: str) -> Tick:
+        quote = await self._guarded(lambda: self.adapter.get_quote(symbol))
+        return _tick_from_quote(quote)
+
+    async def next_ticks(self, symbols: Sequence[str]) -> dict[str, Tick]:
+        """One batched quote call for all `symbols`. A symbol the broker has no price for is
+        simply absent from the result."""
+        quotes = await self._guarded(lambda: self.adapter.get_quotes(symbols))
+        return {symbol: _tick_from_quote(quote) for symbol, quote in quotes.items()}
+
+    async def _guarded[T](self, call: Callable[[], Awaitable[T]]) -> T:
         now = self.clock()
         if self._suspended_until is not None and now < self._suspended_until:
             raise TickSourceUnavailableError(
@@ -83,7 +98,7 @@ class BrokerQuoteTickSource:
                 f"(next probe in {self._suspended_until - now:.0f}s)"
             )
         try:
-            quote = await self.adapter.get_quote(symbol)
+            result = await call()
         except BrokerAuthError as exc:
             # Said once, here, at the moment it happens -- not on every firing.
             self._rejection = (
@@ -109,47 +124,121 @@ class BrokerQuoteTickSource:
             logger.info(
                 "tick_source.broker_credentials_accepted_again", broker=self.adapter.broker_name
             )
-        return Tick(
-            symbol=symbol,
-            price=quote.last_price,
-            timestamp_ms=int(time.time() * 1000),
-            source=DataSource.REAL,  # a live quote from a real broker
+        return result
+
+
+def _tick_from_quote(quote: BrokerQuote) -> Tick:
+    now_ms = int(time.time() * 1000)
+    depth = None
+    if quote.depth_bids or quote.depth_asks:
+        depth = DepthSnapshot(
+            bids=tuple(OrderBookLevel(level.price, level.quantity) for level in quote.depth_bids),
+            asks=tuple(OrderBookLevel(level.price, level.quantity) for level in quote.depth_asks),
+            timestamp_ms=now_ms,
+            open_interest=quote.open_interest,
         )
+    return Tick(
+        symbol=quote.symbol,
+        price=quote.last_price,
+        timestamp_ms=now_ms,
+        source=DataSource.REAL,  # a live quote from a real broker
+        depth=depth,
+    )
+
+
+class FallbackTickSource:
+    """Live quotes from the first connected broker, with the next one as the fallback.
+
+    Each cycle asks the preferred broker for every symbol in one batched call. Whatever it does
+    not answer -- symbols it has no price for, or all of them if it is down, refused the
+    credentials or its circuit is open -- is asked of the next broker, and so on. A symbol no
+    broker prices is reported as failed (the caller backs it off); if every broker is
+    unavailable the whole source is, and says why. The data is real whichever broker served it.
+    """
+
+    def __init__(self, sources: Sequence[BrokerQuoteTickSource]) -> None:
+        self.sources = list(sources)
+        self._served_by: str | None = None
+
+    async def next_tick(self, symbol: str) -> Tick:
+        outcome = (await self.next_ticks([symbol]))[symbol]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    async def next_ticks(self, symbols: Sequence[str]) -> dict[str, TickOutcome]:
+        outcomes: dict[str, TickOutcome] = {}
+        remaining = list(dict.fromkeys(symbols))
+        unavailable: list[str] = []
+        last_error: Exception | None = None
+        served_by: str | None = None
+        for source in self.sources:
+            if not remaining:
+                break
+            try:
+                ticks = await source.next_ticks(remaining)
+            except TickSourceUnavailableError as exc:
+                unavailable.append(str(exc))
+                continue
+            except Exception as exc:  # noqa: BLE001 - a broker outage: try the next broker
+                last_error = exc
+                logger.warning(
+                    "tick_source.broker_failed",
+                    broker=source.adapter.broker_name,
+                    error=f"{type(exc).__name__}: {str(exc)[:120]}",
+                )
+                continue
+            if ticks:
+                served_by = served_by or source.adapter.broker_name
+            outcomes.update(ticks)
+            remaining = [symbol for symbol in remaining if symbol not in ticks]
+        if len(unavailable) == len(self.sources) and not outcomes:
+            raise TickSourceUnavailableError("; ".join(unavailable))
+        for symbol in remaining:
+            outcomes[symbol] = last_error or NoQuoteError(f"no connected broker quotes {symbol}")
+        if served_by is not None and served_by != self._served_by:
+            logger.info("tick_source.serving_quotes", broker=served_by, previous=self._served_by)
+            self._served_by = served_by
+        return outcomes
 
 
 def build_tick_source() -> TickSource:
-    adapter = build_configured_adapter(sandbox=False)
-    if adapter is None:
+    adapters = connected_adapters()
+    if not adapters:
         if get_settings().paper_trading_synthetic:
             logger.info(
                 "tick_source.selected", source="mock", reason="no broker; synthetic mode is on"
             )
             return MockTickSource()
-        logger.info("tick_source.selected", source="unavailable", reason="no broker configured")
+        logger.info("tick_source.selected", source="unavailable", reason="no broker connected")
         return UnavailableTickSource()
-    logger.info("tick_source.selected", source="broker_quotes", adapter=type(adapter).__name__)
-    return BrokerQuoteTickSource(adapter)
+    logger.info(
+        "tick_source.selected",
+        source="broker_quotes",
+        brokers=[adapter.broker_name for adapter in adapters],
+    )
+    return FallbackTickSource([BrokerQuoteTickSource(adapter) for adapter in adapters])
 
 
-def _configured_broker_fingerprint() -> tuple[str, BrokerCredentials] | None:
-    """The same "which broker is configured" lookup `build_configured_adapter`
-    does, plus the credentials themselves (a frozen, structurally-`==`-able
-    dataclass) so re-saving the *same* broker's key/token is also detected
-    as a real change, not just switching between brokers."""
+def _configured_broker_fingerprint() -> tuple[tuple[str, BrokerCredentials], ...] | None:
+    """Every broker with stored credentials, in preference order, with the credentials
+    themselves (frozen, structurally-`==`-able dataclasses) so re-saving the *same* broker's
+    key/token, or connecting a second broker, is detected as a real change."""
     try:
         store = get_secrets_store()
     except SecretsStoreError:
         return None
-    for broker in KNOWN_BROKERS:
-        credentials = store.get_credentials(broker)
-        if credentials is not None:
-            return (broker, credentials)
-    return None
+    configured = tuple(
+        (broker, credentials)
+        for broker in KNOWN_BROKERS
+        if (credentials := store.get_credentials(broker)) is not None
+    )
+    return configured or None
 
 
 class _RefreshingTickSource:
     def __init__(self) -> None:
-        self._fingerprint: tuple[str, BrokerCredentials] | None = None
+        self._fingerprint: tuple[tuple[str, BrokerCredentials], ...] | None = None
         self._tick_source: TickSource | None = None
 
     def __call__(self) -> TickSource:
@@ -177,15 +266,19 @@ def feed_unavailable_reason() -> str | None:
     fingerprint = _configured_broker_fingerprint()
     if fingerprint is None:
         return None if get_settings().paper_trading_synthetic else "no broker is connected"
-    broker, credentials = fingerprint
-    if not credentials.access_token:
-        return f"{broker} has keys saved but is not connected"
-    if credentials.token_status == "expired":  # nosec B105: a status label, not a secret
-        return f"the {broker} token has expired"
-    rejection = feed_health.get_rejection(broker)
-    if rejection is not None:
-        return f"{broker} rejected the stored credentials (HTTP {rejection.status_code})"
-    return None
+    reasons: list[str] = []
+    for broker, credentials in fingerprint:
+        if not credentials.access_token:
+            reasons.append(f"{broker} has keys saved but is not connected")
+        elif credentials.token_status == "expired":  # nosec B105: a status label, not a secret
+            reasons.append(f"the {broker} token has expired")
+        elif (rejection := feed_health.get_rejection(broker)) is not None:
+            reasons.append(
+                f"{broker} rejected the stored credentials (HTTP {rejection.status_code})"
+            )
+        else:
+            return None  # one usable broker is a feed
+    return "; ".join(reasons)
 
 
 def is_broker_configured() -> bool:

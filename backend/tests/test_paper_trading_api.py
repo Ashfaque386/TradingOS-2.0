@@ -268,7 +268,19 @@ async def test_todays_pnl_endpoint_sums_real_realized_pnl_across_a_stop_loss_exi
     assert pnl_resp.status_code == 200
     body = pnl_resp.json()
     assert body["fill_count"] == 2
-    assert body["realized_pnl"] == exit_fill["realized_pnl"]
+    assert body["realized_pnl"] == exit_fill["realized_pnl"]  # gross: the price difference only
+    # Both fills were charged; the day's figure splits gross, costs and net.
+    assert open_fill["costs_total"] > 0 and exit_fill["costs_total"] > 0
+    assert body["costs_total"] == pytest.approx(open_fill["costs_total"] + exit_fill["costs_total"])
+    assert body["net_realized_pnl"] == pytest.approx(body["realized_pnl"] - body["costs_total"])
+    assert body["net_realized_pnl"] < body["realized_pnl"]
+    position = await client.get(
+        f"/api/v1/paper-trading/subscriptions/{subscription_id}/position", headers=_auth(token)
+    )
+    assert position.json()["costs_total"] == pytest.approx(body["costs_total"])
+    assert position.json()["net_realized_pnl"] == pytest.approx(body["net_realized_pnl"])
+    summary = await client.get("/api/v1/portfolio/summary", headers=_auth(token))
+    assert summary.json()["paper_costs_today"] == pytest.approx(body["costs_total"])
 
 
 async def test_todays_pnl_endpoint_readable_by_every_role(client, make_user):
