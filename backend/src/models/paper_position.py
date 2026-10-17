@@ -18,14 +18,16 @@ class PaperPosition(Base):
 
     __tablename__ = "paper_positions"
     __table_args__ = (
-        UniqueConstraint("subscription_id", name="uq_paper_positions_subscription_id"),
+        UniqueConstraint(
+            "subscription_id", "symbol", name="uq_paper_positions_subscription_symbol"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     subscription_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("paper_trading_subscriptions.id"), nullable=False, index=True
     )
-    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(48), nullable=False)
 
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     avg_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

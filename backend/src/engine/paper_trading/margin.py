@@ -109,3 +109,25 @@ def check_futures_margin(
             f"({max_utilisation_pct:g}% of Rs {capital:,.0f} capital) a paper position may use"
         ),
     )
+
+
+def check_max_loss_margin(
+    *, max_loss: float, capital: float, max_utilisation_pct: float = 50.0
+) -> MarginCheck:
+    """Whether a defined-risk option position fits the account. Its largest possible loss (the
+    premium of a bought option; the width less the credit of a credit spread) is the capital it
+    commits, and must be within `max_utilisation_pct` of capital. It is what a broker blocks for a
+    defined-risk spread, give or take: the reason says it is the largest possible loss."""
+    limit = capital * max_utilisation_pct / 100.0
+    if max_loss <= limit:
+        return MarginCheck(ok=True, required=max_loss, limit=limit)
+    return MarginCheck(
+        ok=False,
+        required=max_loss,
+        limit=limit,
+        reason=(
+            f"the Rs {max_loss:,.0f} this position could lose at most (its largest possible "
+            f"loss) is above the Rs {limit:,.0f} ({max_utilisation_pct:g}% of Rs {capital:,.0f} "
+            "capital) a paper position may use"
+        ),
+    )

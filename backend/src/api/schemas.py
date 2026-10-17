@@ -595,13 +595,19 @@ class EnrollPaperTradingRequest(BaseModel):
     builtin_strategy: EngineBuiltinStrategy = "sma_crossover"
     sma_window: int = Field(default=15, gt=0)
     initial_capital: float = Field(default=100_000.0, gt=0)
-    stop_loss_pct: float = Field(default=3.0, gt=0)
+    # Unset: 3% for equity and futures, 50% of the premium for an option strategy (3% of a premium
+    # is noise).
+    stop_loss_pct: float | None = Field(default=None, gt=0)
     position_size_pct: float = Field(default=5.0, gt=0, le=100)
     # `future`: `symbol` is the underlying (NIFTY, RELIANCE); the monthly contract and its lot size
     # come from the connected broker's instrument master, and entries are `lots` whole lots
-    # (position_size_pct does not apply to a future).
-    instrument_kind: Literal["equity", "future"] = "equity"
+    # (position_size_pct does not apply to a future). `option`: `symbol` is the underlying, and
+    # `option_strategy` chooses the legs (long_option: the at-the-money call on BUY, put on SELL;
+    # vertical_spread: the same, hedged by a sold leg `spread_width` strikes further out).
+    instrument_kind: Literal["equity", "future", "option"] = "equity"
     lots: int = Field(default=1, ge=1, le=1000)
+    option_strategy: Literal["long_option", "vertical_spread"] = "long_option"
+    spread_width: int = Field(default=2, ge=1, le=20)
 
 
 class PaperTradingSubscriptionResponse(BaseModel):
@@ -614,11 +620,13 @@ class PaperTradingSubscriptionResponse(BaseModel):
     stop_loss_pct: float
     position_size_pct: float
     is_active: bool
-    instrument_kind: Literal["equity", "future"] = "equity"
+    instrument_kind: Literal["equity", "future", "option"] = "equity"
     contract_symbol: str | None = None
     contract_expiry: str | None = None
     lot_size: int | None = None
     lots: int = 1
+    option_strategy: str | None = None
+    spread_width: int = 2
 
 
 class PaperPositionResponse(BaseModel):
@@ -656,11 +664,16 @@ class PaperSubscriptionDetailResponse(BaseModel):
     stop_loss_pct: float
     position_size_pct: float
     is_active: bool
-    instrument_kind: Literal["equity", "future"] = "equity"
+    instrument_kind: Literal["equity", "future", "option"] = "equity"
     contract_symbol: str | None = None
     contract_expiry: str | None = None
     lot_size: int | None = None
     lots: int = 1
+    option_strategy: str | None = None
+    spread_width: int = 2
+    # Positions that are not flat: 0 or 1 for equity and futures, one per leg for an option
+    # strategy (whose `quantity` and `avg_cost` are 0 across legs: see GET .../positions).
+    open_legs: int = 0
     state: Literal["active", "awaiting_history", "halted_no_data", "inactive"]
     state_reason: str | None
     created_at: str
@@ -718,6 +731,10 @@ class PaperPositionClosedResponse(BaseModel):
     price_basis: str
     data_source: str
     administrative: bool
+    # An option strategy closes every leg: `fill` and `position` are the first one's, and these
+    # list every fill and say why a leg did not close.
+    legs: list["PaperFillResponse"] = []
+    failures: list[str] = []
 
 
 class DeactivatePaperSubscriptionResponse(BaseModel):

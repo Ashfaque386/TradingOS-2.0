@@ -18,7 +18,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import httpx
@@ -28,10 +28,13 @@ from src.brokers.base import (
     BrokerRequestError,
     FuturesContract,
     InstrumentNotFoundError,
+    OptionContract,
     broker_request_error,
     broker_unreachable,
     futures_symbol,
+    option_symbol,
     parse_futures_symbol,
+    parse_option_symbol,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -70,11 +73,19 @@ class InstrumentResolver(Protocol):
 
     async def futures_for(self, underlying: str) -> list[FuturesContract]: ...
 
+    async def options_for(self, underlying: str) -> list[OptionContract]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class FutureEntry:
     key: str
     contract: FuturesContract
+
+
+@dataclass(frozen=True, slots=True)
+class OptionEntry:
+    key: str
+    contract: OptionContract
 
 
 @dataclass
@@ -85,6 +96,35 @@ class SymbolIndex:
     # `NIFTY FUT 27 OCT 26`; this system names it `futures_symbol(...)`, so lookups go by what
     # both share: the underlying and the month it expires in.
     futures: dict[tuple[str, int, int], FutureEntry] = field(default_factory=dict)
+    # (UNDERLYING, expiry date, strike, CE/PE) -> the option contract and its instrument_key.
+    options: dict[tuple[str, date, float, str], OptionEntry] = field(default_factory=dict)
+
+
+def _option_entry(
+    row: dict[str, Any], key: str
+) -> tuple[tuple[str, date, float, str], OptionEntry] | None:
+    underlying = str(row.get("underlying_symbol") or "").upper()
+    expiry_ms = row.get("expiry")
+    kind = row.get("instrument_type")
+    strike = row.get("strike_price")
+    if not underlying or kind not in ("CE", "PE") or not isinstance(expiry_ms, int | float):
+        return None
+    if not isinstance(strike, int | float):
+        return None
+    expiry = datetime.fromtimestamp(expiry_ms / 1000, IST).date()
+    lot_size = int(row.get("lot_size") or 0)
+    if lot_size <= 0:
+        return None
+    contract = OptionContract(
+        symbol=option_symbol(underlying, expiry, float(strike), str(kind)),
+        underlying=underlying,
+        expiry=expiry,
+        strike=float(strike),
+        option_type=str(kind),
+        lot_size=lot_size,
+        tick_size=float(row.get("tick_size") or 0.0),
+    )
+    return (underlying, expiry, float(strike), str(kind)), OptionEntry(key=key, contract=contract)
 
 
 def _future_entry(row: dict[str, Any], key: str) -> tuple[tuple[str, int, int], FutureEntry] | None:
@@ -128,6 +168,9 @@ def build_symbol_index(rows: list[dict[str, Any]]) -> SymbolIndex:
         elif segment == FUTURES_SEGMENT and row.get("instrument_type") == FUTURES_TYPE:
             if (entry := _future_entry(row, key)) is not None:
                 index.futures.setdefault(entry[0], entry[1])
+        elif segment == FUTURES_SEGMENT and row.get("instrument_type") in ("CE", "PE"):
+            if (option := _option_entry(row, key)) is not None:
+                index.options.setdefault(option[0], option[1])
     return index
 
 
@@ -166,8 +209,8 @@ class UpstoxInstruments:
 
     async def resolve(self, symbol: str) -> str:
         cleaned = symbol.strip()
-        if "|" in cleaned:
-            return cleaned  # already an instrument_key
+        if "|" in cleaned and parse_option_symbol(cleaned) is None:
+            return cleaned  # already an instrument_key (an option's shared name has `|` too)
         index = await self._current_index()
         wanted = cleaned.upper()
         if (parsed := parse_futures_symbol(wanted)) is not None:
@@ -175,10 +218,21 @@ class UpstoxInstruments:
             if entry is None:
                 raise UpstoxInstrumentNotFoundError(symbol)
             return entry.key
+        if (parsed_option := parse_option_symbol(wanted)) is not None:
+            option = index.options.get(parsed_option)
+            if option is None:
+                raise UpstoxInstrumentNotFoundError(symbol)
+            return option.key
         key = index.equities.get(wanted) or index.indices.get(wanted)
         if key is None:
             raise UpstoxInstrumentNotFoundError(symbol)
         return key
+
+    async def options_for(self, underlying: str) -> list[OptionContract]:
+        """The underlying's listed option contracts, every expiry and strike."""
+        index = await self._current_index()
+        wanted = underlying.strip().upper()
+        return [e.contract for (name, _x, _s, _k), e in index.options.items() if name == wanted]
 
     async def futures_for(self, underlying: str) -> list[FuturesContract]:
         """The underlying's listed monthly futures, soonest expiry first."""
@@ -229,6 +283,7 @@ class UpstoxInstruments:
             equities=len(index.equities),
             indices=len(index.indices),
             futures=len(index.futures),
+            options=len(index.options),
         )
         return index
 

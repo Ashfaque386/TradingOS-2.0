@@ -36,13 +36,17 @@ class PaperTradingSubscription(Base):
             name="ck_paper_trading_subscriptions_builtin_strategy",
         ),
         CheckConstraint(
-            "instrument_kind IN ('equity','future')",
+            "instrument_kind IN ('equity','future','option')",
             name="ck_paper_trading_subscriptions_instrument_kind",
         ),
         CheckConstraint(
-            "instrument_kind = 'equity' OR (contract_symbol IS NOT NULL "
+            "instrument_kind <> 'future' OR (contract_symbol IS NOT NULL "
             "AND contract_expiry IS NOT NULL AND lot_size IS NOT NULL)",
             name="ck_paper_trading_subscriptions_future_has_contract",
+        ),
+        CheckConstraint(
+            "instrument_kind <> 'option' OR option_strategy IN ('long_option','vertical_spread')",
+            name="ck_paper_trading_subscriptions_option_has_strategy",
         ),
     )
 
@@ -76,6 +80,15 @@ class PaperTradingSubscription(Base):
     contract_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
     lot_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lots: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    # An `option` subscription reads signals from `symbol` (the underlying) like a future, but
+    # holds whichever option legs its strategy chose (`long_option`: buy the at-the-money call on
+    # a BUY signal, the put on a SELL; `vertical_spread`: the same as a debit spread, the bought
+    # leg hedged by a sold one `spread_width` strikes further out). The legs are positions (one
+    # row each), not a column here: they change with every entry.
+    option_strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    spread_width: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default="2"
+    )
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Set by the deactivate control, cleared by activate; NULL for a subscription that was
@@ -96,7 +109,9 @@ class PaperTradingSubscription(Base):
 
     @property
     def trading_symbol(self) -> str:
-        """What is quoted, ticked, filled and held: the contract for a future, else the symbol."""
+        """What is quoted, ticked, filled and held: the contract for a future, else the symbol.
+        (An option subscription's own tick is its underlying's; its legs are held and quoted
+        under their own contract names.)"""
         if self.instrument_kind == "future" and self.contract_symbol:
             return self.contract_symbol
         return self.symbol
@@ -104,6 +119,10 @@ class PaperTradingSubscription(Base):
     @property
     def is_future(self) -> bool:
         return self.instrument_kind == "future"
+
+    @property
+    def is_option(self) -> bool:
+        return self.instrument_kind == "option"
 
     def __repr__(self) -> str:
         return (

@@ -31,6 +31,7 @@ from src.brokers.base import (
     FuturesContract,
     MarginInfo,
     OptionChainEntry,
+    OptionContract,
     OrderRequest,
 )
 from src.core.config import get_settings
@@ -101,6 +102,9 @@ class ResilientBrokerAdapter:
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         return await self._breaker.call(lambda: self._adapter.get_option_chain(underlying, expiry))
+
+    async def get_option_contracts(self, underlying: str) -> list[OptionContract]:
+        return await self._breaker.call(lambda: self._adapter.get_option_contracts(underlying))
 
     async def get_futures_contracts(self, underlying: str) -> list[FuturesContract]:
         return await self._breaker.call(lambda: self._adapter.get_futures_contracts(underlying))

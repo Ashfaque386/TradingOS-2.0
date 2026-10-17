@@ -67,6 +67,14 @@ class FrictionModel:
     futures_exchange_txn_pct: float = 0.0000183  # NSE, 0.00183%
     futures_stamp_buy_pct: float = 0.00002  # 0.002%, buy side only
 
+    # Equity OPTIONS, as Zerodha publishes them (zerodha.com/charges, read 2026-10-17); every
+    # charge but brokerage is on the PREMIUM traded (premium x quantity), not the strike value.
+    # Overridable from config like the rest (`PAPER_FRICTION_OVERRIDES`).
+    option_brokerage_flat: float = 20.0  # Rs 20 an executed order, whatever its size
+    option_stt_sell_pct: float = 0.0015  # 0.15% of the premium, sell side only
+    option_exchange_txn_pct: float = 0.0003553  # NSE, 0.03553% of the premium
+    option_stamp_buy_pct: float = 0.00003  # 0.003%, buy side only
+
     atr_slippage_multiplier: float = 0.1
     volume_impact_coefficient: float = 0.1
 
@@ -157,6 +165,29 @@ def compute_futures_leg_costs(
     exchange_txn_charges = turnover * model.futures_exchange_txn_pct
     sebi_fee = turnover * model.sebi_fee_pct
     stamp_duty = turnover * model.futures_stamp_buy_pct if is_buy else 0.0
+    gst = model.gst_pct * (brokerage + sebi_fee + exchange_txn_charges)
+    return LegCosts(
+        brokerage=brokerage,
+        stt=stt,
+        exchange_txn_charges=exchange_txn_charges,
+        sebi_fee=sebi_fee,
+        stamp_duty=stamp_duty,
+        gst=gst,
+    )
+
+
+def compute_option_leg_costs(
+    *, turnover: float, is_buy: bool, model: FrictionModel = FrictionModel()
+) -> LegCosts:
+    """The costs of one leg of an option trade. `turnover` is the PREMIUM traded (premium *
+    quantity), which is what STT and the exchange charge are levied on; brokerage is a flat fee
+    per executed order; GST (18%) is on brokerage + the SEBI fee + the exchange charge. STT is on
+    the sell side only and stamp duty on the buy side only."""
+    brokerage = model.option_brokerage_flat
+    stt = 0.0 if is_buy else turnover * model.option_stt_sell_pct
+    exchange_txn_charges = turnover * model.option_exchange_txn_pct
+    sebi_fee = turnover * model.sebi_fee_pct
+    stamp_duty = turnover * model.option_stamp_buy_pct if is_buy else 0.0
     gst = model.gst_pct * (brokerage + sebi_fee + exchange_txn_charges)
     return LegCosts(
         brokerage=brokerage,

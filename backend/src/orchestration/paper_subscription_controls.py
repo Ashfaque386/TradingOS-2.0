@@ -115,6 +115,9 @@ class SubscriptionView:
     avg_cost: float
     realized_pnl: float
     costs_total: float
+    # Positions that are not flat: 0 or 1 for equity and futures, one per leg for an option
+    # strategy (whose `quantity` and `avg_cost` mean nothing across legs and are left at 0).
+    open_legs: int = 0
     last_tick: Tick | None = None
     last_tick_age_seconds: float | None = None
     unrealized_pnl: float | None = None
@@ -180,9 +183,9 @@ async def list_subscription_views(
     if symbol:
         query = query.where(PaperTradingSubscription.symbol == symbol.upper())
     subscriptions = (await db.execute(query)).scalars().all()
-    positions = {
-        p.subscription_id: p
-        for p in (
+    positions: dict[uuid.UUID, list[PaperPosition]] = {}
+    for held in (
+        (
             await db.execute(
                 select(PaperPosition).where(
                     PaperPosition.subscription_id.in_([s.id for s in subscriptions])
@@ -191,7 +194,8 @@ async def list_subscription_views(
         )
         .scalars()
         .all()
-    }
+    ):
+        positions.setdefault(held.subscription_id, []).append(held)
     feed_problem = feed_unavailable_reason()
 
     views: list[SubscriptionView] = []
@@ -208,12 +212,18 @@ async def list_subscription_views(
         )
         if state is not None and derived != state:
             continue
-        position = positions.get(subscription.id)
-        quantity = position.quantity if position else 0
-        avg_cost = position.avg_cost if position else 0.0
+        legs = positions.get(subscription.id, [])
+        open_legs = [p for p in legs if p.quantity != 0]
         tick = await get_latest_tick(redis, subscription.trading_symbol)
         age = max(0.0, now.timestamp() - tick.timestamp_ms / 1000.0) if tick else None
-        unrealized = (tick.price - avg_cost) * quantity if tick and quantity != 0 else None
+        if subscription.is_option:
+            quantity, avg_cost = 0, 0.0
+            unrealized = await _legs_unrealized(redis, open_legs)
+        else:
+            position = legs[0] if legs else None
+            quantity = position.quantity if position else 0
+            avg_cost = position.avg_cost if position else 0.0
+            unrealized = (tick.price - avg_cost) * quantity if tick and quantity != 0 else None
         views.append(
             SubscriptionView(
                 subscription=subscription,
@@ -221,14 +231,27 @@ async def list_subscription_views(
                 state_reason=reason,
                 quantity=quantity,
                 avg_cost=avg_cost,
-                realized_pnl=position.realized_pnl if position else 0.0,
-                costs_total=position.costs_total if position else 0.0,
+                realized_pnl=sum(p.realized_pnl for p in legs),
+                costs_total=sum(p.costs_total for p in legs),
+                open_legs=len(open_legs),
                 last_tick=tick,
                 last_tick_age_seconds=age,
                 unrealized_pnl=unrealized,
             )
         )
     return views
+
+
+async def _legs_unrealized(redis: Redis, open_legs: list[PaperPosition]) -> float | None:
+    """Mark-to-market of an option strategy's open legs off each leg's own last tick: `0.0` with
+    nothing open, `None` (unknown, not zero) when any open leg has never been priced."""
+    total = 0.0
+    for leg in open_legs:
+        tick = await get_latest_tick(redis, leg.symbol)
+        if tick is None:
+            return None
+        total += (tick.price - leg.avg_cost) * leg.quantity
+    return total
 
 
 # ---- helpers ----
@@ -300,18 +323,30 @@ async def close_position(
     order_book_provider: OrderBookProvider,
     regulatory_provider: RegulatoryDataProvider,
     now: datetime | None = None,
+    symbol: str | None = None,
+    price_basis: tuple[str, str] | None = None,
 ) -> CloseResult:
+    """Closes one position of the subscription: its only one, or -- for an option strategy, which
+    holds a leg per contract -- the leg named by `symbol`. `price_basis` (text, data-source label)
+    replaces the "supplied by the operator" description of a supplied price, for callers that
+    supply a real one (the expiry sweep closing at the last quote it saw)."""
     now = now or datetime.now(UTC)
     subscription = await _load(db, subscription_id)
-    position = await _get_or_create_position(db, subscription)
+    if subscription.is_option and symbol is None:
+        raise SubscriptionStateError(
+            f"the {subscription.symbol} option subscription holds a position per leg: close them "
+            "all (close_all_positions) or name the leg"
+        )
+    position = await _get_or_create_position(db, subscription, symbol)
+    leg = position.symbol
     if position.quantity == 0:
-        raise SubscriptionStateError(f"{subscription.symbol} has no open position to close")
+        raise SubscriptionStateError(f"{leg} has no open position to close")
 
     quantity = abs(position.quantity)
     side: Side = "sell" if position.quantity > 0 else "buy"
-    close_price, basis, label = await _price_for_close(
-        redis, subscription.trading_symbol, price, now
-    )
+    close_price, basis, label = await _price_for_close(redis, leg, price, now)
+    if price is not None and price_basis is not None:
+        basis, label = price_basis
 
     if administrative:
         # Whole quantity at the given price, no gate, no book: the rule for cleanup, not trading.
@@ -328,14 +363,25 @@ async def close_position(
             await create_order_intent(
                 db,
                 mode="paper",
-                symbol=subscription.trading_symbol,
+                symbol=leg,
                 side=side,
                 quantity=quantity,
                 proposed_price=close_price,
-                reference_price=position.avg_cost if position.avg_cost > 0 else close_price,
-                # A future is judged by margin, and closing one needs none: the cash-equity
-                # notional limit does not apply (it would refuse any index future's close).
-                proposed_position_value=0.0 if subscription.is_future else quantity * close_price,
+                # An option premium can move far more in a day than a share's price may, so the
+                # equity circuit band is not applied to it (the reference is the price itself).
+                reference_price=(
+                    close_price
+                    if subscription.is_option
+                    else (position.avg_cost if position.avg_cost > 0 else close_price)
+                ),
+                # A derivative is judged by margin or premium, and closing one needs none: the
+                # cash-equity notional limit does not apply (it would refuse any index future's
+                # close).
+                proposed_position_value=(
+                    0.0
+                    if (subscription.is_future or subscription.is_option)
+                    else quantity * close_price
+                ),
                 portfolio_value=subscription.initial_capital,
                 regulatory_provider=regulatory_provider,
             )
@@ -349,9 +395,7 @@ async def close_position(
                 list(exc.reasons),
             ) from exc
         try:
-            book = await book_for(
-                order_book_provider, subscription.trading_symbol, side=side, mid_price=close_price
-            )
+            book = await book_for(order_book_provider, leg, side=side, mid_price=close_price)
         except DepthUnavailableError as exc:
             raise CloseBlockedError(f"no live order book to fill the closing order: {exc}") from exc
         fill = simulate_fill(side=side, quantity=quantity, book=book)
@@ -371,6 +415,7 @@ async def close_position(
         order_group_id=uuid.uuid4(),
         data_source=data_source,
         charge_costs=not administrative,  # a cleanup is not a trade: no broker would charge it
+        symbol=leg,
     )
     latest = (
         await db.execute(
@@ -387,7 +432,7 @@ async def close_position(
         entity_type="paper_trading_subscription",
         entity_id=str(subscription.id),
         details={
-            "symbol": subscription.symbol,
+            "symbol": leg,
             "side": side,
             "requested_quantity": quantity,
             "filled_quantity": fill.filled_quantity,
@@ -405,7 +450,7 @@ async def close_position(
     logger.info(
         "paper_trading.position_closed",
         subscription_id=str(subscription.id),
-        symbol=subscription.symbol,
+        symbol=leg,
         administrative=administrative,
         remaining=fill.remaining_quantity,
     )
@@ -418,6 +463,85 @@ async def close_position(
         data_source=data_source,
         administrative=administrative,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CloseAllResult:
+    closed: list[CloseResult]
+    failures: list[str]  # why a leg did not close, in the order tried
+
+    @property
+    def all_flat(self) -> bool:
+        return not self.failures and all(r.remaining_quantity == 0 for r in self.closed)
+
+
+async def open_positions(
+    db: AsyncSession, subscription: PaperTradingSubscription
+) -> list[PaperPosition]:
+    """The subscription's positions that are not flat, sold legs first: closing a spread buys back
+    the short leg before selling the long one it hedges, so it is never left naked."""
+    rows = (
+        (
+            await db.execute(
+                select(PaperPosition).where(
+                    PaperPosition.subscription_id == subscription.id, PaperPosition.quantity != 0
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return sorted(rows, key=lambda position: position.quantity)
+
+
+async def close_all_positions(
+    db: AsyncSession,
+    redis: Redis,
+    subscription_id: uuid.UUID,
+    *,
+    actor: str,
+    reason: str,
+    price: float | None = None,
+    administrative: bool = False,
+    order_book_provider: OrderBookProvider,
+    regulatory_provider: RegulatoryDataProvider,
+    now: datetime | None = None,
+) -> CloseAllResult:
+    """Closes every open position of the subscription, each on its own (a leg that cannot close --
+    no tick, no book, a refusal -- is reported and the others are still tried). `price` is
+    supplied for every leg, so it is only meaningful for a one-position subscription."""
+    subscription = await _load(db, subscription_id)
+    closed: list[CloseResult] = []
+    failures: list[str] = []
+    held = await open_positions(db, subscription)
+    if not held:
+        raise SubscriptionStateError(f"{subscription.symbol} has no open position to close")
+    for position in held:
+        try:
+            closed.append(
+                await close_position(
+                    db,
+                    redis,
+                    subscription_id,
+                    actor=actor,
+                    reason=reason,
+                    price=price,
+                    administrative=administrative,
+                    order_book_provider=order_book_provider,
+                    regulatory_provider=regulatory_provider,
+                    now=now,
+                    symbol=position.symbol,
+                )
+            )
+        except (SubscriptionStateError, PriceUnavailableError) as exc:
+            if len(held) == 1:
+                raise  # one position: the failure is the answer, with its own type and words
+            failures.append(f"{position.symbol}: {exc}")
+            if position.quantity < 0:
+                # A sold leg that cannot be bought back: the bought legs that hedge it stay open.
+                failures.append("the bought legs are left open, as they hedge it")
+                break
+    return CloseAllResult(closed=closed, failures=failures)
 
 
 # ---- deactivate / activate ----
@@ -441,17 +565,18 @@ async def deactivate_subscription(
     if not subscription.is_active:
         raise SubscriptionStateError(f"the {subscription.symbol} subscription is already inactive")
 
-    position = await _get_or_create_position(db, subscription)
+    held = await open_positions(db, subscription)
     closed: CloseResult | None = None
-    if position.quantity != 0:
+    if held:
         if on_open_position is None:
+            summary = ", ".join(f"{p.symbol} {p.quantity:+d}" for p in held)
             raise SubscriptionStateError(
-                f"{subscription.symbol} has an open position of {position.quantity}: deactivating "
+                f"{subscription.symbol} has an open position ({summary}): deactivating "
                 "would leave it unmanaged (no stop-loss). Say `on_open_position`: 'close' to close "
                 "it first, or 'leave_unmanaged' to accept that."
             )
         if on_open_position == "close":
-            closed = await close_position(
+            outcome = await close_all_positions(
                 db,
                 redis,
                 subscription_id,
@@ -463,14 +588,20 @@ async def deactivate_subscription(
                 regulatory_provider=regulatory_provider,
                 now=now,
             )
-            if closed.remaining_quantity > 0:
+            if outcome.failures and not outcome.closed:
+                raise CloseBlockedError("; ".join(outcome.failures))  # several legs, none closed
+            if not outcome.all_flat:
+                left = sum(r.remaining_quantity for r in outcome.closed)
+                detail = "; ".join(outcome.failures) or f"{left} left"
                 raise SubscriptionStateError(
-                    f"the position was only partly closed ({closed.remaining_quantity} left); the "
+                    f"the position was only partly closed ({detail}); the "
                     "subscription stays active -- close the rest, then deactivate"
                 )
+            closed = outcome.closed[0] if outcome.closed else None
             subscription = await _load(db, subscription_id)
 
-    left_unmanaged = position.quantity if closed is None else 0
+    still_held = await open_positions(db, subscription)
+    left_unmanaged = sum(abs(p.quantity) for p in still_held)
     subscription.is_active = False
     subscription.deactivated_at = now
     subscription.deactivated_by = actor

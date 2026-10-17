@@ -43,6 +43,7 @@ from src.engine.backtest.friction import (
     FrictionModel,
     compute_futures_leg_costs,
     compute_leg_costs,
+    compute_option_leg_costs,
 )
 from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signals
 from src.engine.paper_trading.daily_signal import detect_todays_signal
@@ -91,13 +92,22 @@ async def enroll_in_paper_trading(
     created_by: str | None = None,
     contract: FuturesContract | None = None,
     lots: int = 1,
+    option_strategy: str | None = None,
+    spread_width: int = 2,
 ) -> PaperTradingSubscription:
     """Enrols a strategy on `symbol`. With a `contract` the subscription trades that monthly
-    future (`symbol` is then its underlying, which the signals are read from) in `lots` lots."""
+    future (`symbol` is then its underlying, which the signals are read from) in `lots` lots;
+    with an `option_strategy` it holds the option legs that strategy chooses (see
+    `src.engine.paper_trading.option_strategies`)."""
+    if contract is not None and option_strategy is not None:
+        raise ValueError("a subscription trades a future or an option strategy, not both")
+    kind = "future" if contract is not None else "option" if option_strategy else "equity"
     subscription = PaperTradingSubscription(
         strategy_version_id=strategy_version_id,
         symbol=symbol,
-        instrument_kind="future" if contract is not None else "equity",
+        instrument_kind=kind,
+        option_strategy=option_strategy,
+        spread_width=spread_width,
         contract_symbol=contract.symbol if contract is not None else None,
         contract_expiry=contract.expiry if contract is not None else None,
         lot_size=contract.lot_size if contract is not None else None,
@@ -180,16 +190,21 @@ async def run_daily_signal_generation(
 
 
 async def _get_or_create_position(
-    db: AsyncSession, subscription: PaperTradingSubscription
+    db: AsyncSession, subscription: PaperTradingSubscription, symbol: str | None = None
 ) -> PaperPosition:
+    """The subscription's position in `symbol` (its trading symbol by default), created flat if
+    it has none. An equity or futures subscription holds one; an option strategy one per leg."""
+    symbol = symbol or subscription.trading_symbol
     result = await db.execute(
-        select(PaperPosition).where(PaperPosition.subscription_id == subscription.id)
+        select(PaperPosition).where(
+            PaperPosition.subscription_id == subscription.id, PaperPosition.symbol == symbol
+        )
     )
     position = result.scalar_one_or_none()
     if position is None:
         position = PaperPosition(
             subscription_id=subscription.id,
-            symbol=subscription.trading_symbol,
+            symbol=symbol,
             quantity=0,
             avg_cost=0.0,
         )
@@ -224,6 +239,10 @@ def fill_costs(
     if instrument_kind == "future":
         product = "nrml"  # a future is carried overnight on margin
         legs = compute_futures_leg_costs(turnover=turnover, is_buy=side == "buy", model=model)
+    elif instrument_kind == "option":
+        product = "nrml"
+        # `turnover` is the premium traded here, which is what the option charges are levied on.
+        legs = compute_option_leg_costs(turnover=turnover, is_buy=side == "buy", model=model)
     else:
         product = get_settings().paper_trading_product
         legs = compute_leg_costs(
@@ -253,6 +272,7 @@ async def _persist_fill(
     leg_index: int = 0,
     data_source: str = DataSource.UNKNOWN,
     charge_costs: bool = True,
+    symbol: str | None = None,
 ) -> PaperPosition:
     costs, breakdown = (
         fill_costs(side, fill, instrument_kind=subscription.instrument_kind)
@@ -281,7 +301,7 @@ async def _persist_fill(
     db.add(
         PaperFill(
             subscription_id=subscription.id,
-            symbol=subscription.trading_symbol,
+            symbol=symbol or position.symbol,
             side=side,
             order_group_id=order_group_id,
             leg_index=leg_index,

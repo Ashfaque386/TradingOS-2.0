@@ -142,6 +142,7 @@ async def test_start_paper_trading_scheduler_registers_and_runs_all_jobs(
             scheduler_module.TICK_PUBLISH_JOB_ID,
             scheduler_module.TICK_DRAIN_JOB_ID,
             scheduler_module.FUTURES_ROLL_JOB_ID,
+            scheduler_module.EXPIRY_SWEEP_JOB_ID,
         }
 
         # The tick-publish job fires every 3s; give it time to run at least

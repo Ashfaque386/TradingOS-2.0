@@ -359,6 +359,55 @@ class FuturesContract:
     tick_size: float
 
 
+_OPTION_SYMBOL = re.compile(
+    r"^NFO:(?P<underlying>[^|]+)\|(?P<expiry>\d{6})\|(?P<strike>\d+(?:\.\d+)?)\|(?P<kind>CE|PE)$"
+)
+
+
+def _strike_text(strike: float) -> str:
+    return str(int(strike)) if float(strike).is_integer() else repr(float(strike))
+
+
+def option_symbol(underlying: str, expiry: date, strike: float, option_type: str) -> str:
+    """The one name this system gives an option contract, whichever broker lists it:
+    `NFO:NIFTY|261027|24500|CE` (underlying, expiry as YYMMDD, strike, CE or PE). Brokers name
+    options differently, and Kite names a weekly differently from a monthly, so neither's own
+    symbol is used: each adapter maps this name to its own instrument through its instrument
+    master (by underlying, expiry date, strike and type), which is exact for every expiry."""
+    kind = option_type.upper()
+    if kind not in ("CE", "PE"):
+        raise ValueError(f"an option is CE or PE, not {option_type!r}")
+    return f"NFO:{underlying.upper()}|{expiry:%y%m%d}|{_strike_text(strike)}|{kind}"
+
+
+def parse_option_symbol(symbol: str) -> tuple[str, date, float, str] | None:
+    """`NFO:NIFTY|261027|24500|CE` -> (`NIFTY`, 2026-10-27, 24500.0, `CE`); `None` for anything
+    that is not an option contract's name (an equity, a future, an index)."""
+    match = _OPTION_SYMBOL.match(symbol.strip().upper())
+    if match is None:
+        return None
+    stamp = match["expiry"]
+    try:
+        expiry = date(2000 + int(stamp[:2]), int(stamp[2:4]), int(stamp[4:]))
+    except ValueError:
+        return None
+    return match["underlying"], expiry, float(match["strike"]), match["kind"]
+
+
+@dataclass(frozen=True, slots=True)
+class OptionContract:
+    """One option as a broker's instrument master lists it (lot size read each time, as for
+    futures: exchanges revise it)."""
+
+    symbol: str  # `option_symbol(...)`
+    underlying: str
+    expiry: date
+    strike: float
+    option_type: str  # "CE" | "PE"
+    lot_size: int
+    tick_size: float
+
+
 @dataclass(frozen=True, slots=True)
 class OptionChainEntry:
     """`call_oi`/`put_oi`/`call_iv`/`put_iv` are genuinely optional --
@@ -407,6 +456,11 @@ class BrokerAdapter(Protocol):
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]: ...
     async def get_expiries(self, underlying: str) -> list[str]: ...
+    async def get_option_contracts(self, underlying: str) -> list[OptionContract]:
+        """The underlying's listed option contracts (every expiry and strike), unsorted; empty
+        when it has none."""
+        ...
+
     async def get_futures_contracts(self, underlying: str) -> list[FuturesContract]:
         """The underlying's listed monthly futures, soonest expiry first (none if it has none)."""
         ...

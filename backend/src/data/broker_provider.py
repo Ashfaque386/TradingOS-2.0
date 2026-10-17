@@ -29,7 +29,13 @@ from pathlib import Path
 import pandas as pd
 import structlog
 
-from src.brokers.base import BrokerAdapter, Candle, FuturesContract, InstrumentNotFoundError
+from src.brokers.base import (
+    BrokerAdapter,
+    Candle,
+    FuturesContract,
+    InstrumentNotFoundError,
+    OptionContract,
+)
 from src.brokers.futures_contracts import resolve_contract
 from src.data import lake
 from src.data.providers import (
@@ -154,6 +160,24 @@ class BrokerMarketDataProvider:
         return await resolve_contract(
             self._connected(), underlying, today=today, roll_days=roll_days
         )
+
+    async def option_contracts(self, underlying: str) -> list[OptionContract]:
+        """The underlying's listed option contracts from the first connected broker that has any.
+        Raises `NoRealDataSourceError` with no broker connected; empty if none lists any."""
+        for adapter in self._connected():
+            try:
+                contracts = await adapter.get_option_contracts(underlying)
+            except Exception as exc:  # noqa: BLE001 - one broker failing must not stop the next
+                logger.warning(
+                    "market_data.option_contracts_unavailable",
+                    broker=adapter.broker_name,
+                    underlying=underlying,
+                    error=f"{type(exc).__name__}: {str(exc)[:120]}",
+                )
+                continue
+            if contracts:
+                return contracts
+        return []
 
     async def indicative_price(self, symbol: str) -> float | None:
         """A last price for `symbol` from the first connected broker that has one -- for a

@@ -66,6 +66,13 @@ from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.observability.correlation import with_job_correlation_id
 from src.observability.metrics import ws_latency_seconds
 from src.orchestration.paper_futures import run_futures_roll
+from src.orchestration.paper_options import (
+    OptionContractsFn,
+    evaluate_option_subscription,
+    option_contracts_from,
+    option_quote_symbols,
+    run_expiry_sweep,
+)
 from src.orchestration.paper_trading import process_tick, run_daily_signal_generation
 
 logger = structlog.get_logger(__name__)
@@ -90,15 +97,22 @@ TICK_PUBLISH_JOB_ID = "paper_trading_tick_publish"
 TICK_DRAIN_JOB_ID = "paper_trading_tick_drain"
 FUTURES_ROLL_JOB_ID = "paper_trading_futures_roll"
 FUTURES_ROLL_INTERVAL_SECONDS = 600
+EXPIRY_SWEEP_JOB_ID = "paper_trading_expiry_sweep"
+EXPIRY_SWEEP_INTERVAL_SECONDS = 600
 
 
-async def _active_symbols(session_factory: async_sessionmaker[AsyncSession]) -> list[str]:
+async def _active_symbols(
+    session_factory: async_sessionmaker[AsyncSession], redis: Redis
+) -> list[str]:
     async with session_factory() as db:
         result = await db.execute(
             select(PaperTradingSubscription).where(PaperTradingSubscription.is_active.is_(True))
         )
-        # What is quoted: the equity itself, or a future's current contract.
-        return sorted({sub.trading_symbol for sub in result.scalars().all()})
+        # What is quoted: the equity itself, a future's current contract, an option strategy's
+        # underlying, and the option legs it holds or has just chosen.
+        symbols = {sub.trading_symbol for sub in result.scalars().all()}
+        symbols |= await option_quote_symbols(db, redis)
+        return sorted(symbols)
 
 
 async def run_daily_signal_job(
@@ -122,7 +136,7 @@ async def run_tick_publish_job(
 ) -> None:
     if not is_market_open_ist():
         return
-    symbols = await _active_symbols(session_factory)
+    symbols = await _active_symbols(session_factory, redis)
     if symbols:
         settings = get_settings()
         await publish_ticks_once(
@@ -140,6 +154,7 @@ async def run_tick_drain_job(
     redis: Redis,
     order_book_provider: OrderBookProvider,
     regulatory_provider: RegulatoryDataProvider,
+    option_contracts: OptionContractsFn | None = None,
 ) -> None:
     if not is_market_open_ist():
         return
@@ -169,14 +184,26 @@ async def run_tick_drain_job(
 
             async with session_factory() as db:
                 try:
-                    await process_tick(
-                        db,
-                        subscription_id=subscription.id,
-                        tick_price=tick.price,
-                        tick_source=tick.source,
-                        order_book_provider=order_book_provider,
-                        regulatory_provider=regulatory_provider,
-                    )
+                    if subscription.is_option:
+                        await evaluate_option_subscription(
+                            db,
+                            redis,
+                            subscription.id,
+                            spot=tick.price,
+                            tick_source=tick.source,
+                            contracts=option_contracts,
+                            order_book_provider=order_book_provider,
+                            regulatory_provider=regulatory_provider,
+                        )
+                    else:
+                        await process_tick(
+                            db,
+                            subscription_id=subscription.id,
+                            tick_price=tick.price,
+                            tick_source=tick.source,
+                            order_book_provider=order_book_provider,
+                            regulatory_provider=regulatory_provider,
+                        )
                 except Exception:  # noqa: BLE001 - one bad tick must never kill the drain job
                     logger.exception(
                         "paper_trading.tick_processing_failed",
@@ -223,6 +250,36 @@ async def run_futures_roll_job(
         )
 
 
+async def run_expiry_sweep_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    order_book_provider: OrderBookProvider,
+    regulatory_provider: RegulatoryDataProvider,
+) -> None:
+    """Squares off option positions the day before expiry and cleans up any derivative position
+    still open after its expiry (see `paper_options.run_expiry_sweep`). Market hours only: the
+    normal close needs a live tick and book, and one that cannot be done now is tried at the
+    next run."""
+    if not is_market_open_ist():
+        return
+    async with session_factory() as db:
+        outcomes = await run_expiry_sweep(
+            db,
+            redis,
+            order_book_provider=order_book_provider,
+            regulatory_provider=regulatory_provider,
+            squareoff_days=get_settings().paper_options_squareoff_days,
+        )
+    for outcome in outcomes:
+        logger.info(
+            "paper_trading.expiry_sweep_outcome",
+            subscription_id=outcome.subscription_id,
+            symbol=outcome.symbol,
+            status=outcome.status,
+            detail=outcome.detail,
+        )
+
+
 def start_paper_trading_scheduler(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -232,9 +289,11 @@ def start_paper_trading_scheduler(
     regulatory_provider: RegulatoryDataProvider,
     tick_source_factory: Callable[[], TickSource],
     futures_adapters_factory: Callable[[], Sequence[BrokerAdapter]] | None = None,
+    option_contracts: OptionContractsFn | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST)
     adapters_factory = futures_adapters_factory or connected_adapters
+    contracts_source = option_contracts or option_contracts_from(adapters_factory)
 
     scheduler.add_job(
         with_job_correlation_id(DAILY_SIGNAL_JOB_ID, run_daily_signal_job),
@@ -255,7 +314,7 @@ def start_paper_trading_scheduler(
         with_job_correlation_id(TICK_DRAIN_JOB_ID, run_tick_drain_job),
         "interval",
         seconds=TICK_DRAIN_INTERVAL_SECONDS,
-        args=[session_factory, redis, order_book_provider, regulatory_provider],
+        args=[session_factory, redis, order_book_provider, regulatory_provider, contracts_source],
         id=TICK_DRAIN_JOB_ID,
         replace_existing=True,
     )
@@ -266,6 +325,15 @@ def start_paper_trading_scheduler(
         seconds=FUTURES_ROLL_INTERVAL_SECONDS,
         args=[session_factory, redis, order_book_provider, regulatory_provider, adapters_factory],
         id=FUTURES_ROLL_JOB_ID,
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        with_job_correlation_id(EXPIRY_SWEEP_JOB_ID, run_expiry_sweep_job),
+        "interval",
+        seconds=EXPIRY_SWEEP_INTERVAL_SECONDS,
+        args=[session_factory, redis, order_book_provider, regulatory_provider],
+        id=EXPIRY_SWEEP_JOB_ID,
         replace_existing=True,
     )
 

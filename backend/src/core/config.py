@@ -198,6 +198,16 @@ class Settings(BaseSettings):
     paper_futures_max_margin_utilisation_pct: float = 50.0
     # A future is rolled into the next month this many calendar days before it expires.
     paper_futures_roll_days: int = 3
+
+    # Options. A new position is only opened in a contract with more than this many days to
+    # expiry (a near-dated option decays too fast to be worth buying), and any position is
+    # squared off this many days before its expiry (1 = the day before, in market hours). A
+    # position still open after its expiry is closed at the last real quote seen.
+    paper_options_min_days_to_expiry: int = 3
+    paper_options_squareoff_days: int = 1
+    # The legs chosen for an entry are quoted for at most this long while waiting for their
+    # books; past it the choice is made again from the then-current spot.
+    paper_options_plan_ttl_seconds: int = 300
     # Any `src.engine.backtest.friction.FrictionModel` field, as JSON (e.g.
     # {"futures_stt_sell_pct": 0.0002}): the cost rates are published figures that change, so a
     # new rate is a setting, not a code change.

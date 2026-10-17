@@ -49,6 +49,7 @@ from src.data.providers import AnyMarketDataProvider
 from src.engine.paper_trading.depth import build_order_book_provider
 from src.engine.paper_trading.margin import check_futures_margin
 from src.engine.paper_trading.market_hours import IST
+from src.engine.paper_trading.option_strategies import pick_expiry
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.tick_feed import get_latest_tick
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
@@ -68,6 +69,7 @@ from src.orchestration.paper_subscription_controls import (
     SubscriptionView,
     activate_subscription,
     assert_no_active_duplicate,
+    close_all_positions,
     close_position,
     deactivate_subscription,
     list_subscription_views,
@@ -111,6 +113,9 @@ register_policy(
     "GET", "/api/v1/paper-trading/subscriptions/{subscription_id}/position", roles=list(Role)
 )
 register_policy(
+    "GET", "/api/v1/paper-trading/subscriptions/{subscription_id}/positions", roles=list(Role)
+)
+register_policy(
     "GET", "/api/v1/paper-trading/subscriptions/{subscription_id}/fills", roles=list(Role)
 )
 register_policy(
@@ -146,6 +151,8 @@ def _subscription_response(sub: PaperTradingSubscription) -> PaperTradingSubscri
         contract_expiry=sub.contract_expiry.isoformat() if sub.contract_expiry else None,
         lot_size=sub.lot_size,
         lots=sub.lots,
+        option_strategy=sub.option_strategy,
+        spread_width=sub.spread_width,
     )
 
 
@@ -279,6 +286,8 @@ async def enroll_subscription_endpoint(
     contract = None
     if body.instrument_kind == "future":
         contract = await _future_contract_for(provider, body)
+    if body.instrument_kind == "option":
+        await _check_options_listed(provider, body.symbol)
     try:
         await assert_no_active_duplicate(
             db,
@@ -295,11 +304,17 @@ async def enroll_subscription_endpoint(
         builtin_strategy=body.builtin_strategy,
         sma_window=body.sma_window,
         initial_capital=body.initial_capital,
-        stop_loss_pct=body.stop_loss_pct,
+        stop_loss_pct=(
+            body.stop_loss_pct
+            if body.stop_loss_pct is not None
+            else (OPTION_DEFAULT_STOP_LOSS_PCT if body.instrument_kind == "option" else 3.0)
+        ),
         position_size_pct=body.position_size_pct,
         created_by=str(current_user.id),
         contract=contract,
         lots=body.lots,
+        option_strategy=body.option_strategy if body.instrument_kind == "option" else None,
+        spread_width=body.spread_width,
     )
     if listed is True:
         # Fetch its real price history now so it can signal tomorrow morning. Best effort: a
@@ -313,6 +328,48 @@ async def enroll_subscription_endpoint(
             as_of=datetime.now(IST).date(),
         )
     return _subscription_response(subscription)
+
+
+OPTION_DEFAULT_STOP_LOSS_PCT = 50.0
+
+
+async def _check_options_listed(provider: AnyMarketDataProvider, underlying: str) -> None:
+    """An option subscription needs the connected broker's contract list (the only source of
+    expiries, strikes and lot sizes), and an expiry far enough out to enter. Refused otherwise,
+    not guessed."""
+    lister = getattr(provider, "option_contracts", None)
+    if lister is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "options need a connected broker: its instrument master is the only source of "
+                "the contracts and their lot sizes"
+            ),
+        )
+    try:
+        contracts = await lister(underlying)
+    except NoRealDataSourceError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"options need a connected broker ({exc})",
+        ) from exc
+    settings = get_settings()
+    if (
+        pick_expiry(
+            contracts,
+            today=datetime.now(IST).date(),
+            min_days=settings.paper_options_min_days_to_expiry,
+        )
+        is None
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"no listed {underlying} option expires more than "
+                f"{settings.paper_options_min_days_to_expiry} days from now"
+                f"{' (the broker lists none)' if not contracts else ''}"
+            ),
+        )
 
 
 async def _future_contract_for(
@@ -398,6 +455,9 @@ def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
         contract_expiry=sub.contract_expiry.isoformat() if sub.contract_expiry else None,
         lot_size=sub.lot_size,
         lots=sub.lots,
+        option_strategy=sub.option_strategy,
+        spread_width=sub.spread_width,
+        open_legs=view.open_legs,
         state=view.state,
         state_reason=view.state_reason,
         created_at=sub.created_at.isoformat(),
@@ -410,7 +470,7 @@ def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
         realized_pnl=view.realized_pnl,
         costs_total=view.costs_total,
         net_realized_pnl=view.realized_pnl - view.costs_total,
-        managed=sub.is_active or view.quantity == 0,
+        managed=sub.is_active or view.open_legs == 0,
         last_tick=(
             PaperLastTick(
                 price=view.last_tick.price,
@@ -564,7 +624,10 @@ async def close_position_endpoint(
             status.HTTP_403_FORBIDDEN,
             detail="an administrative close (no risk gate) needs the SystemAdministrator role",
         )
+    subscription = await db.get(PaperTradingSubscription, subscription_id)
     try:
+        if subscription is not None and subscription.is_option:
+            return await _close_every_leg(db, redis, subscription_id, body, current_user)
         result = await close_position(
             db,
             redis,
@@ -586,6 +649,36 @@ async def close_position_endpoint(
     return _closed_response(result)
 
 
+async def _close_every_leg(
+    db: AsyncSession,
+    redis: Redis,
+    subscription_id: uuid.UUID,
+    body: ClosePaperPositionRequest,
+    current_user: User,
+) -> PaperPositionClosedResponse:
+    """The close of an option strategy: every open leg, sold legs first. A leg that cannot close
+    (no tick, no book, a refusal) is listed in `failures`; if none could, it is a 409."""
+    outcome = await close_all_positions(
+        db,
+        redis,
+        subscription_id,
+        actor=str(current_user.id),
+        reason=body.reason,
+        price=body.price,
+        administrative=body.administrative,
+        order_book_provider=build_order_book_provider(redis),
+        regulatory_provider=_REGULATORY_PROVIDER,
+    )
+    if not outcome.closed:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="; ".join(outcome.failures))
+    response = _closed_response(outcome.closed[0])
+    response.closed = outcome.all_flat
+    response.remaining_quantity = sum(r.remaining_quantity for r in outcome.closed)
+    response.legs = [_fill_response(r.fill) for r in outcome.closed]
+    response.failures = outcome.failures
+    return response
+
+
 @router.get("/subscriptions/{subscription_id}")
 async def get_subscription_endpoint(
     subscription_id: uuid.UUID,
@@ -604,12 +697,22 @@ async def get_position_endpoint(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> PaperPositionResponse:
+    subscription = await db.get(PaperTradingSubscription, subscription_id)
+    if subscription is not None and subscription.is_option:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="an option subscription holds a position per leg: use GET .../positions",
+        )
     result = await db.execute(
         select(PaperPosition).where(PaperPosition.subscription_id == subscription_id)
     )
     position = result.scalar_one_or_none()
     if position is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No position yet")
+    return _position_response(position)
+
+
+def _position_response(position: PaperPosition) -> PaperPositionResponse:
     return PaperPositionResponse(
         subscription_id=position.subscription_id,
         symbol=position.symbol,
@@ -619,6 +722,30 @@ async def get_position_endpoint(
         costs_total=position.costs_total,
         net_realized_pnl=position.realized_pnl - position.costs_total,
     )
+
+
+@router.get("/subscriptions/{subscription_id}/positions")
+async def list_positions_endpoint(
+    subscription_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[PaperPositionResponse]:
+    """Every position the subscription has ever held a leg in (one for equity and futures, one per
+    contract for an option strategy), flat ones included so their realized P&L and costs show."""
+    if await db.get(PaperTradingSubscription, subscription_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+    rows = (
+        (
+            await db.execute(
+                select(PaperPosition)
+                .where(PaperPosition.subscription_id == subscription_id)
+                .order_by(PaperPosition.symbol)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_position_response(position) for position in rows]
 
 
 @router.get("/subscriptions/{subscription_id}/fills")

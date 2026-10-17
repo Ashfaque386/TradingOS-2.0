@@ -41,7 +41,7 @@ class PaperFill(Base):
     subscription_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("paper_trading_subscriptions.id"), nullable=False, index=True
     )
-    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(48), nullable=False)
     side: Mapped[str] = mapped_column(String(8), nullable=False)
     # What the fill rested on: the tick price's source combined with the order book's
     # (always synthetic today), so a fill on real ticks is `mixed`, not `real`.

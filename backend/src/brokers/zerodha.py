@@ -71,13 +71,16 @@ from src.brokers.base import (
     InstrumentNotFoundError,
     MarginInfo,
     OptionChainEntry,
+    OptionContract,
     OrderRequest,
     OrderSide,
     OrderType,
     broker_request_error,
     broker_unreachable,
     futures_symbol,
+    option_symbol,
     parse_candle,
+    parse_option_symbol,
     quote_from_row,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
@@ -112,6 +115,10 @@ INDEX_QUOTE_KEYS = {
 _NFO_INSTRUMENTS_CACHE_TTL_SECONDS = 900
 _nfo_instruments_cache: list[dict[str, Any]] | None = None
 _nfo_instruments_cache_at: float = 0.0
+# The option index derived from that dump: (the rows it was built from, the index).
+_nfo_option_index: tuple[list[dict[str, Any]], dict[tuple[str, date, float, str], Any]] | None = (
+    None
+)
 
 # The NSE dump (equities and indices, ~10k rows) is the symbol -> instrument_token map the
 # historical-data endpoint needs. Public exchange data like the NFO dump, so shared the same way;
@@ -251,7 +258,9 @@ class ZerodhaKiteAdapter:
         # Kite documents `exchange:tradingsymbol` for the request and keys the response by it;
         # a symbol that already names its exchange is passed through untouched. (Tolerant on
         # the way back: the bare symbol is also tried, and a missing key is simply "no data".)
-        instrument = self._quote_key(symbol)
+        instrument = await self._key_for(symbol)
+        if instrument is None:
+            raise BrokerQuoteUnavailableError("zerodha", symbol)
         data = await self._request("GET", "/quote", params={"i": instrument})
         rows = data.get("data", {})
         row = rows.get(instrument) or rows.get(symbol) or {}
@@ -263,6 +272,63 @@ class ZerodhaKiteAdapter:
             return symbol
         return INDEX_QUOTE_KEYS.get(symbol.strip().upper(), f"{DEFAULT_QUOTE_EXCHANGE}:{symbol}")
 
+    async def _key_for(self, symbol: str) -> str | None:
+        """The `exchange:tradingsymbol` Kite wants for `symbol`. An option contract is named
+        `option_symbol(...)` here and is looked up in the NFO dump by underlying, expiry, strike
+        and type (`None` if the dump lists no such contract); anything else is as before."""
+        parsed = parse_option_symbol(symbol)
+        if parsed is None:
+            return self._quote_key(symbol)
+        entry = (await self._option_index()).get(parsed)
+        return f"NFO:{entry[0]}" if entry is not None else None
+
+    async def _option_index(
+        self,
+    ) -> dict[tuple[str, date, float, str], tuple[str, OptionContract]]:
+        """(underlying, expiry, strike, CE/PE) -> (Kite tradingsymbol, contract), built from the
+        NFO dump and kept as long as that dump is."""
+        global _nfo_option_index
+        rows = await self._get_nfo_instruments()
+        if _nfo_option_index is not None and _nfo_option_index[0] is rows:
+            return _nfo_option_index[1]
+        index: dict[tuple[str, date, float, str], tuple[str, OptionContract]] = {}
+        for row in rows:
+            kind = row.get("instrument_type")
+            underlying = (row.get("name") or "").upper()
+            tradingsymbol = row.get("tradingsymbol")
+            if kind not in ("CE", "PE") or not underlying or not tradingsymbol:
+                continue
+            try:
+                expiry = date.fromisoformat(row["expiry"])
+                strike = float(row["strike"])
+                lot_size = int(row["lot_size"])
+            except (KeyError, ValueError):
+                continue
+            if lot_size <= 0:
+                continue
+            contract = OptionContract(
+                symbol=option_symbol(underlying, expiry, strike, kind),
+                underlying=underlying,
+                expiry=expiry,
+                strike=strike,
+                option_type=kind,
+                lot_size=lot_size,
+                tick_size=float(row.get("tick_size") or 0.0),
+            )
+            index[(underlying, expiry, strike, kind)] = (tradingsymbol, contract)
+        _nfo_option_index = (rows, index)
+        return index
+
+    async def get_option_contracts(self, underlying: str) -> list[OptionContract]:
+        wanted = underlying.strip().upper()
+        return [
+            contract
+            for (name, _expiry, _strike, _kind), (_symbol, contract) in (
+                await self._option_index()
+            ).items()
+            if name == wanted
+        ]
+
     async def get_quotes(self, symbols: Sequence[str]) -> dict[str, BrokerQuote]:
         """Many quotes per `/quote` call (Kite takes up to 500 `i=` params; chunked well below
         that to keep the URL short). A symbol Kite has no price for is absent from the result."""
@@ -270,7 +336,13 @@ class ZerodhaKiteAdapter:
         unique = list(dict.fromkeys(symbols))
         for start in range(0, len(unique), QUOTE_BATCH_SIZE):
             chunk = unique[start : start + QUOTE_BATCH_SIZE]
-            keys = {symbol: self._quote_key(symbol) for symbol in chunk}
+            keys: dict[str, str] = {}
+            for symbol in chunk:
+                key = await self._key_for(symbol)
+                if key is not None:  # an option the dump does not list has no quote to ask for
+                    keys[symbol] = key
+            if not keys:
+                continue
             data = await self._request(
                 "GET", "/quote", params=[("i", key) for key in keys.values()]
             )
