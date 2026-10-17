@@ -9,7 +9,7 @@ runs itself without either endpoint ever being called.
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -35,6 +35,8 @@ from src.api.schemas import (
     TodaysPaperPnlResponse,
     UnrealizedPaperPnlResponse,
 )
+from src.brokers.base import FuturesContract
+from src.brokers.futures_contracts import NoFuturesContractError
 from src.brokers.tick_source import is_broker_configured
 from src.core.config import get_settings
 from src.core.db import get_db
@@ -45,6 +47,7 @@ from src.data.market_data_factory import get_market_data_provider
 from src.data.price_provider import DataLakePriceProvider, get_signal_price_provider
 from src.data.providers import AnyMarketDataProvider
 from src.engine.paper_trading.depth import build_order_book_provider
+from src.engine.paper_trading.margin import check_futures_margin
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.tick_feed import get_latest_tick
@@ -138,6 +141,11 @@ def _subscription_response(sub: PaperTradingSubscription) -> PaperTradingSubscri
         stop_loss_pct=sub.stop_loss_pct,
         position_size_pct=sub.position_size_pct,
         is_active=sub.is_active,
+        instrument_kind=sub.instrument_kind,  # type: ignore[arg-type]
+        contract_symbol=sub.contract_symbol,
+        contract_expiry=sub.contract_expiry.isoformat() if sub.contract_expiry else None,
+        lot_size=sub.lot_size,
+        lots=sub.lots,
     )
 
 
@@ -268,9 +276,15 @@ async def enroll_subscription_endpoint(
                 "trading runs on real symbols"
             ),
         )
+    contract = None
+    if body.instrument_kind == "future":
+        contract = await _future_contract_for(provider, body)
     try:
         await assert_no_active_duplicate(
-            db, strategy_version_id=body.strategy_version_id, symbol=body.symbol
+            db,
+            strategy_version_id=body.strategy_version_id,
+            symbol=body.symbol,
+            instrument_kind=body.instrument_kind,
         )
     except SubscriptionStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -284,6 +298,8 @@ async def enroll_subscription_endpoint(
         stop_loss_pct=body.stop_loss_pct,
         position_size_pct=body.position_size_pct,
         created_by=str(current_user.id),
+        contract=contract,
+        lots=body.lots,
     )
     if listed is True:
         # Fetch its real price history now so it can signal tomorrow morning. Best effort: a
@@ -297,6 +313,59 @@ async def enroll_subscription_endpoint(
             as_of=datetime.now(IST).date(),
         )
     return _subscription_response(subscription)
+
+
+async def _future_contract_for(
+    provider: AnyMarketDataProvider, body: EnrollPaperTradingRequest
+) -> FuturesContract:
+    """The contract a new futures subscription will trade, and a check that one entry fits the
+    account. Both need the connected broker (its instrument master is the only source of the
+    contract and the lot size), so a futures enrolment without one is refused rather than
+    guessed. The margin check uses an indicative price and is skipped if nobody quotes one."""
+    resolver = getattr(provider, "futures_contract", None)
+    if resolver is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "futures need a connected broker: its instrument master is the only source of "
+                "the contract and its lot size"
+            ),
+        )
+    settings = get_settings()
+    try:
+        contract = cast(
+            FuturesContract,
+            await resolver(
+                body.symbol,
+                today=datetime.now(IST).date(),
+                roll_days=settings.paper_futures_roll_days,
+            ),
+        )
+    except NoRealDataSourceError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"futures need a connected broker ({exc})",
+        ) from exc
+    except NoFuturesContractError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    price = await provider.indicative_price(contract.symbol)  # type: ignore[union-attr]
+    if price:
+        margin = check_futures_margin(
+            price=price,
+            quantity=body.lots * contract.lot_size,
+            capital=body.initial_capital,
+            margin_pct=settings.paper_futures_margin_pct,
+            max_utilisation_pct=settings.paper_futures_max_margin_utilisation_pct,
+        )
+        if not margin.ok:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"{body.lots} lot(s) of {contract.symbol} ({contract.lot_size} each) do not "
+                    f"fit this account: {margin.reason}. Raise initial_capital or trade fewer lots."
+                ),
+            )
+    return contract
 
 
 async def _symbol_listing(provider: AnyMarketDataProvider, symbol: str) -> bool | None:
@@ -324,6 +393,11 @@ def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
         stop_loss_pct=sub.stop_loss_pct,
         position_size_pct=sub.position_size_pct,
         is_active=sub.is_active,
+        instrument_kind=sub.instrument_kind,  # type: ignore[arg-type]
+        contract_symbol=sub.contract_symbol,
+        contract_expiry=sub.contract_expiry.isoformat() if sub.contract_expiry else None,
+        lot_size=sub.lot_size,
+        lots=sub.lots,
         state=view.state,
         state_reason=view.state_reason,
         created_at=sub.created_at.isoformat(),

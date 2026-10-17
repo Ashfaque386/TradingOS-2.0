@@ -192,6 +192,17 @@ class Settings(BaseSettings):
     # falls further behind than that loses the oldest ticks, not the newest.
     paper_tick_stream_maxlen: int = 10_000
 
+    # Futures. The margin is an APPROXIMATION (a flat share of notional, not SPAN); an entry is
+    # refused when it would commit more than the stated share of the subscription's capital.
+    paper_futures_margin_pct: float = 15.0
+    paper_futures_max_margin_utilisation_pct: float = 50.0
+    # A future is rolled into the next month this many calendar days before it expires.
+    paper_futures_roll_days: int = 3
+    # Any `src.engine.backtest.friction.FrictionModel` field, as JSON (e.g.
+    # {"futures_stt_sell_pct": 0.0002}): the cost rates are published figures that change, so a
+    # new rate is a setting, not a code change.
+    paper_friction_overrides: dict[str, float] = Field(default_factory=dict)
+
     # LLM provider credentials (Settings redesign): a sibling encrypted
     # store to secrets_store_path above, same Fernet key, same
     # write-only/never-logged contract -- kept as its own file rather than

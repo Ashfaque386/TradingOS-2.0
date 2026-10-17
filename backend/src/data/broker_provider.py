@@ -29,7 +29,8 @@ from pathlib import Path
 import pandas as pd
 import structlog
 
-from src.brokers.base import BrokerAdapter, Candle, InstrumentNotFoundError
+from src.brokers.base import BrokerAdapter, Candle, FuturesContract, InstrumentNotFoundError
+from src.brokers.futures_contracts import resolve_contract
 from src.data import lake
 from src.data.providers import (
     CorporateActionRecord,
@@ -141,6 +142,33 @@ class BrokerMarketDataProvider:
             if await adapter.has_instrument(symbol):
                 return True
         return False
+
+    # ---- futures ----
+
+    async def futures_contract(
+        self, underlying: str, *, today: date, roll_days: int
+    ) -> FuturesContract:
+        """The monthly future a subscription on `underlying` should trade today (see
+        `futures_contracts.select_contract`). Raises `NoRealDataSourceError` with no broker
+        connected, `NoFuturesContractError` when the connected ones list nothing usable."""
+        return await resolve_contract(
+            self._connected(), underlying, today=today, roll_days=roll_days
+        )
+
+    async def indicative_price(self, symbol: str) -> float | None:
+        """A last price for `symbol` from the first connected broker that has one -- for a
+        what-would-this-cost check at enrolment, never for a trade. `None` if nobody quotes it."""
+        for adapter in self._connected():
+            try:
+                return (await adapter.get_quote(symbol)).last_price
+            except Exception as exc:  # noqa: BLE001 - an indicative price is best effort
+                logger.info(
+                    "market_data.indicative_price_unavailable",
+                    broker=adapter.broker_name,
+                    symbol=symbol,
+                    error=f"{type(exc).__name__}: {str(exc)[:120]}",
+                )
+        return None
 
     # ---- the MarketDataProvider surface (async) ----
 

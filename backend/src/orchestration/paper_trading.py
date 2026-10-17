@@ -27,6 +27,7 @@ on its own.
 """
 
 import uuid
+from dataclasses import fields
 from datetime import UTC, datetime
 from typing import cast
 
@@ -35,12 +36,18 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.brokers.base import FuturesContract
 from src.core.config import get_settings
 from src.engine.backtest.engine import run_vectorized_backtest
-from src.engine.backtest.friction import compute_leg_costs
+from src.engine.backtest.friction import (
+    FrictionModel,
+    compute_futures_leg_costs,
+    compute_leg_costs,
+)
 from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signals
 from src.engine.paper_trading.daily_signal import detect_todays_signal
 from src.engine.paper_trading.depth import DepthUnavailableError
+from src.engine.paper_trading.margin import check_futures_margin
 from src.engine.paper_trading.order_book import (
     FillResult,
     OrderBookProvider,
@@ -82,10 +89,19 @@ async def enroll_in_paper_trading(
     stop_loss_pct: float = 3.0,
     position_size_pct: float = 5.0,
     created_by: str | None = None,
+    contract: FuturesContract | None = None,
+    lots: int = 1,
 ) -> PaperTradingSubscription:
+    """Enrols a strategy on `symbol`. With a `contract` the subscription trades that monthly
+    future (`symbol` is then its underlying, which the signals are read from) in `lots` lots."""
     subscription = PaperTradingSubscription(
         strategy_version_id=strategy_version_id,
         symbol=symbol,
+        instrument_kind="future" if contract is not None else "equity",
+        contract_symbol=contract.symbol if contract is not None else None,
+        contract_expiry=contract.expiry if contract is not None else None,
+        lot_size=contract.lot_size if contract is not None else None,
+        lots=lots,
         builtin_strategy=builtin_strategy,
         sma_window=sma_window,
         initial_capital=initial_capital,
@@ -172,7 +188,10 @@ async def _get_or_create_position(
     position = result.scalar_one_or_none()
     if position is None:
         position = PaperPosition(
-            subscription_id=subscription.id, symbol=subscription.symbol, quantity=0, avg_cost=0.0
+            subscription_id=subscription.id,
+            symbol=subscription.trading_symbol,
+            quantity=0,
+            avg_cost=0.0,
         )
         db.add(position)
         await db.commit()
@@ -180,17 +199,38 @@ async def _get_or_create_position(
     return position
 
 
-def fill_costs(side: Side, fill: FillResult) -> tuple[float, dict[str, float | str] | None]:
+def friction_model() -> FrictionModel:
+    """The cost rates in force: the published defaults, with any `PAPER_FRICTION_OVERRIDES`
+    applied. An override naming a rate that does not exist is an error, not silently ignored --
+    a typo must not leave the old rate in force while looking like a change."""
+    overrides = get_settings().paper_friction_overrides
+    unknown = set(overrides) - {f.name for f in fields(FrictionModel)}
+    if unknown:
+        raise ValueError(f"PAPER_FRICTION_OVERRIDES names no such rate: {sorted(unknown)}")
+    return FrictionModel(**overrides)
+
+
+def fill_costs(
+    side: Side, fill: FillResult, *, instrument_kind: str = "equity"
+) -> tuple[float, dict[str, float | str] | None]:
     """What the broker and the exchange would charge for this fill: the total, and each line
-    (brokerage, STT, exchange charges, SEBI fee, stamp duty, GST) with the product they were
-    worked out for. Nothing for a fill that filled nothing. The depth walk already prices the
-    market impact of the order, so no further slippage is added on top."""
+    (brokerage, STT, exchange charges, SEBI fee, stamp duty, GST) with the segment and product
+    they were worked out for. Nothing for a fill that filled nothing. The depth walk already
+    prices the market impact of the order, so no further slippage is added on top."""
     if fill.filled_quantity == 0 or fill.avg_fill_price is None:
         return 0.0, None
-    product = get_settings().paper_trading_product
     turnover = fill.filled_quantity * fill.avg_fill_price
-    legs = compute_leg_costs(turnover=turnover, is_buy=side == "buy", is_delivery=product == "cnc")
+    model = friction_model()
+    if instrument_kind == "future":
+        product = "nrml"  # a future is carried overnight on margin
+        legs = compute_futures_leg_costs(turnover=turnover, is_buy=side == "buy", model=model)
+    else:
+        product = get_settings().paper_trading_product
+        legs = compute_leg_costs(
+            turnover=turnover, is_buy=side == "buy", is_delivery=product == "cnc", model=model
+        )
     return legs.total, {
+        "segment": instrument_kind,
         "product": product,
         "turnover": turnover,
         "brokerage": legs.brokerage,
@@ -214,7 +254,11 @@ async def _persist_fill(
     data_source: str = DataSource.UNKNOWN,
     charge_costs: bool = True,
 ) -> PaperPosition:
-    costs, breakdown = fill_costs(side, fill) if charge_costs else (0.0, None)
+    costs, breakdown = (
+        fill_costs(side, fill, instrument_kind=subscription.instrument_kind)
+        if charge_costs
+        else (0.0, None)
+    )
     position.costs_total += costs
     if fill.filled_quantity > 0:
         # FillResult.avg_fill_price is None only when nothing filled at all
@@ -237,7 +281,7 @@ async def _persist_fill(
     db.add(
         PaperFill(
             subscription_id=subscription.id,
-            symbol=subscription.symbol,
+            symbol=subscription.trading_symbol,
             side=side,
             order_group_id=order_group_id,
             leg_index=leg_index,
@@ -254,6 +298,36 @@ async def _persist_fill(
     await db.commit()
     await db.refresh(position)
     return position
+
+
+def decide_order(
+    subscription: PaperTradingSubscription,
+    *,
+    position_quantity: int,
+    signal_type: str,
+    tick_price: float,
+) -> tuple[Side, int] | None:
+    """The order the latest signal calls for given the position, or `None`.
+
+    Equity is long-only: a BUY opens (sized as a share of capital), a SELL closes. A future goes
+    both ways, in whole lots: BUY opens a long or covers a short, SELL opens a short or sells a
+    long out. A flip is an exit and then, on the next tick, the entry the same signal calls for
+    (the same "re-entry falls out for free" rule the equity path has)."""
+    if subscription.is_future:
+        lots_units = subscription.lots * (subscription.lot_size or 0)
+        if position_quantity > 0 and signal_type == "SELL":
+            return "sell", position_quantity
+        if position_quantity < 0 and signal_type == "BUY":
+            return "buy", -position_quantity
+        if position_quantity == 0 and lots_units > 0:
+            return ("buy" if signal_type == "BUY" else "sell"), lots_units
+        return None
+    if position_quantity > 0 and signal_type == "SELL":
+        return "sell", position_quantity
+    if position_quantity == 0 and signal_type == "BUY":
+        entry_capital = subscription.initial_capital * (subscription.position_size_pct / 100.0)
+        return "buy", int(entry_capital // tick_price)
+    return None
 
 
 async def process_tick(
@@ -301,19 +375,15 @@ async def process_tick(
         latest_signal = latest_signal_result.scalar_one_or_none()
 
         if latest_signal is not None:
-            if position.quantity > 0 and latest_signal.signal_type == "SELL":
-                side = "sell"
-                quantity = position.quantity
+            decided = decide_order(
+                subscription,
+                position_quantity=position.quantity,
+                signal_type=latest_signal.signal_type,
+                tick_price=tick_price,
+            )
+            if decided is not None:
+                side, quantity = decided
                 reference_price = latest_signal.reference_price
-            elif position.quantity == 0 and latest_signal.signal_type == "BUY":
-                side = "buy"
-                entry_capital = subscription.initial_capital * (
-                    subscription.position_size_pct / 100.0
-                )
-                quantity = int(entry_capital // tick_price)
-                reference_price = latest_signal.reference_price
-
-            if side is not None:
                 signal_to_consume = latest_signal
 
     if side is None or quantity <= 0:
@@ -324,13 +394,13 @@ async def process_tick(
     # by a fill that did not happen.
     try:
         book = await book_for(
-            order_book_provider, subscription.symbol, side=side, mid_price=tick_price
+            order_book_provider, subscription.trading_symbol, side=side, mid_price=tick_price
         )
     except DepthUnavailableError as exc:
         logger.warning(
             "paper_trading.order_waiting_for_depth",
             subscription_id=str(subscription.id),
-            symbol=subscription.symbol,
+            symbol=subscription.trading_symbol,
             side=side,
             reason=str(exc),
         )
@@ -341,11 +411,35 @@ async def process_tick(
         signal_to_consume.consumed_at = datetime.now(UTC)
 
     proposed_position_value = quantity * tick_price
+    opens_a_position = position.quantity == 0
+    if subscription.is_future:
+        # A future is bought on margin: the cash-equity "notional against capital" limit would
+        # refuse almost any index future on a small account, so what an entry commits is judged
+        # as margin (an estimate, labelled so), and the gate's notional limit is not applied.
+        # Closing a position needs no margin.
+        proposed_position_value = 0.0
+        if opens_a_position:
+            settings = get_settings()
+            margin = check_futures_margin(
+                price=tick_price,
+                quantity=quantity,
+                capital=subscription.initial_capital,
+                margin_pct=settings.paper_futures_margin_pct,
+                max_utilisation_pct=settings.paper_futures_max_margin_utilisation_pct,
+            )
+            if not margin.ok:
+                logger.info(
+                    "paper_trading.order_refused_for_margin",
+                    subscription_id=str(subscription.id),
+                    symbol=subscription.trading_symbol,
+                    reason=margin.reason,
+                )
+                return None
     try:
         await create_order_intent(
             db,
             mode="paper",
-            symbol=subscription.symbol,
+            symbol=subscription.trading_symbol,
             side=side,
             quantity=quantity,
             proposed_price=tick_price,
@@ -365,7 +459,7 @@ async def process_tick(
         logger.warning(
             "paper_trading.blocked_by_kill_switch",
             subscription_id=str(subscription.id),
-            symbol=subscription.symbol,
+            symbol=subscription.trading_symbol,
             reason=exc.reason,
         )
         return None
@@ -373,7 +467,7 @@ async def process_tick(
         logger.info(
             "paper_trading.order_intent_rejected",
             subscription_id=str(subscription.id),
-            symbol=subscription.symbol,
+            symbol=subscription.trading_symbol,
             reasons=exc.reasons,
         )
         return None

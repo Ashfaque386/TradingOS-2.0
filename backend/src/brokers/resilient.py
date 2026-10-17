@@ -28,6 +28,7 @@ from src.brokers.base import (
     BrokerQuote,
     Candle,
     CandleInterval,
+    FuturesContract,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
@@ -100,6 +101,9 @@ class ResilientBrokerAdapter:
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]:
         return await self._breaker.call(lambda: self._adapter.get_option_chain(underlying, expiry))
+
+    async def get_futures_contracts(self, underlying: str) -> list[FuturesContract]:
+        return await self._breaker.call(lambda: self._adapter.get_futures_contracts(underlying))
 
     async def get_expiries(self, underlying: str) -> list[str]:
         return await self._breaker.call(lambda: self._adapter.get_expiries(underlying))

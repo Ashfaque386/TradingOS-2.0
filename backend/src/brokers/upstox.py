@@ -45,6 +45,7 @@ from src.brokers.base import (
     BrokerQuoteUnavailableError,
     Candle,
     CandleInterval,
+    FuturesContract,
     MarginInfo,
     OptionChainEntry,
     OrderRequest,
@@ -257,6 +258,9 @@ class UpstoxAdapter:
                 except BrokerQuoteUnavailableError:
                     continue
         return quotes
+
+    async def get_futures_contracts(self, underlying: str) -> list[FuturesContract]:
+        return await self._instruments.futures_for(underlying)
 
     async def has_instrument(self, symbol: str) -> bool:
         try:

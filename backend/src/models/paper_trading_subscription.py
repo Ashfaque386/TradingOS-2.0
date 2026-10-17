@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -34,6 +35,15 @@ class PaperTradingSubscription(Base):
             "builtin_strategy IN ('always_long','sma_crossover')",
             name="ck_paper_trading_subscriptions_builtin_strategy",
         ),
+        CheckConstraint(
+            "instrument_kind IN ('equity','future')",
+            name="ck_paper_trading_subscriptions_instrument_kind",
+        ),
+        CheckConstraint(
+            "instrument_kind = 'equity' OR (contract_symbol IS NOT NULL "
+            "AND contract_expiry IS NOT NULL AND lot_size IS NOT NULL)",
+            name="ck_paper_trading_subscriptions_future_has_contract",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -55,6 +65,18 @@ class PaperTradingSubscription(Base):
     # enhancement point this phase's scope doesn't require wiring in here.
     position_size_pct: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
 
+    # What is traded. An `equity` subscription trades `symbol` itself. A `future` one reads its
+    # signals from `symbol` (the underlying: NIFTY, RELIANCE) and trades `contract_symbol`, the
+    # monthly future the roll job keeps pointed at the right expiry, in whole lots of `lot_size`
+    # (the broker's figure when the contract was picked, refreshed at each roll).
+    instrument_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="equity", server_default="equity"
+    )
+    contract_symbol: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    contract_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    lot_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lots: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Set by the deactivate control, cleared by activate; NULL for a subscription that was
     # deactivated before these existed and has no audit entry saying who.
@@ -71,6 +93,17 @@ class PaperTradingSubscription(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    @property
+    def trading_symbol(self) -> str:
+        """What is quoted, ticked, filled and held: the contract for a future, else the symbol."""
+        if self.instrument_kind == "future" and self.contract_symbol:
+            return self.contract_symbol
+        return self.symbol
+
+    @property
+    def is_future(self) -> bool:
+        return self.instrument_kind == "future"
 
     def __repr__(self) -> str:
         return (

@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.audit.service import write_audit_entry
 from src.brokers.tick_source import feed_unavailable_reason
 from src.engine.paper_trading.depth import DepthUnavailableError
+from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import (
     FillResult,
     OrderBookProvider,
@@ -137,6 +138,21 @@ def derive_state(
     return "active", None
 
 
+def contract_problem(subscription: PaperTradingSubscription, now: datetime) -> str | None:
+    """Why a future's contract can no longer be priced: it has expired and the roll job has not
+    moved the subscription on (a broker that was down at the roll, say). `None` for an equity, an
+    inactive subscription, or a contract still listed."""
+    if not subscription.is_future or not subscription.is_active:
+        return None
+    expiry = subscription.contract_expiry
+    if expiry is not None and expiry < now.astimezone(IST).date():
+        return (
+            f"{subscription.contract_symbol} expired on {expiry.isoformat()} and the subscription "
+            "has not been rolled to the next contract"
+        )
+    return None
+
+
 def _history_problem(price_provider: PriceDataProvider, symbol: str, as_of: datetime) -> str | None:
     try:
         price_provider.daily_bars(
@@ -188,14 +204,14 @@ async def list_subscription_views(
         derived, reason = derive_state(
             is_active=subscription.is_active,
             history_problem=history_problem,
-            feed_problem=feed_problem,
+            feed_problem=contract_problem(subscription, now) or feed_problem,
         )
         if state is not None and derived != state:
             continue
         position = positions.get(subscription.id)
         quantity = position.quantity if position else 0
         avg_cost = position.avg_cost if position else 0.0
-        tick = await get_latest_tick(redis, subscription.symbol)
+        tick = await get_latest_tick(redis, subscription.trading_symbol)
         age = max(0.0, now.timestamp() - tick.timestamp_ms / 1000.0) if tick else None
         unrealized = (tick.price - avg_cost) * quantity if tick and quantity != 0 else None
         views.append(
@@ -226,13 +242,19 @@ async def _load(db: AsyncSession, subscription_id: uuid.UUID) -> PaperTradingSub
 
 
 async def assert_no_active_duplicate(
-    db: AsyncSession, *, strategy_version_id: uuid.UUID, symbol: str
+    db: AsyncSession,
+    *,
+    strategy_version_id: uuid.UUID,
+    symbol: str,
+    instrument_kind: str = "equity",
 ) -> None:
-    """At most one active subscription per (strategy version, symbol): two would trade the same
-    symbol twice under one strategy and double-count its position and P&L."""
+    """At most one active subscription per (strategy version, symbol, kind): two would trade the
+    same instrument twice under one strategy and double-count its position and P&L. (The cash
+    stock and its future are different instruments.)"""
     query = select(PaperTradingSubscription.id).where(
         PaperTradingSubscription.strategy_version_id == strategy_version_id,
         PaperTradingSubscription.symbol == symbol,
+        PaperTradingSubscription.instrument_kind == instrument_kind,
         PaperTradingSubscription.is_active.is_(True),
     )
     if (await db.execute(query)).first() is not None:
@@ -287,7 +309,9 @@ async def close_position(
 
     quantity = abs(position.quantity)
     side: Side = "sell" if position.quantity > 0 else "buy"
-    close_price, basis, label = await _price_for_close(redis, subscription.symbol, price, now)
+    close_price, basis, label = await _price_for_close(
+        redis, subscription.trading_symbol, price, now
+    )
 
     if administrative:
         # Whole quantity at the given price, no gate, no book: the rule for cleanup, not trading.
@@ -304,12 +328,14 @@ async def close_position(
             await create_order_intent(
                 db,
                 mode="paper",
-                symbol=subscription.symbol,
+                symbol=subscription.trading_symbol,
                 side=side,
                 quantity=quantity,
                 proposed_price=close_price,
                 reference_price=position.avg_cost if position.avg_cost > 0 else close_price,
-                proposed_position_value=quantity * close_price,
+                # A future is judged by margin, and closing one needs none: the cash-equity
+                # notional limit does not apply (it would refuse any index future's close).
+                proposed_position_value=0.0 if subscription.is_future else quantity * close_price,
                 portfolio_value=subscription.initial_capital,
                 regulatory_provider=regulatory_provider,
             )
@@ -324,7 +350,7 @@ async def close_position(
             ) from exc
         try:
             book = await book_for(
-                order_book_provider, subscription.symbol, side=side, mid_price=close_price
+                order_book_provider, subscription.trading_symbol, side=side, mid_price=close_price
             )
         except DepthUnavailableError as exc:
             raise CloseBlockedError(f"no live order book to fill the closing order: {exc}") from exc
@@ -478,10 +504,13 @@ async def activate_subscription(
         raise SubscriptionStateError(f"the {subscription.symbol} subscription is already active")
     # (This subscription is inactive here, so it cannot match its own duplicate check.)
     await assert_no_active_duplicate(
-        db, strategy_version_id=subscription.strategy_version_id, symbol=subscription.symbol
+        db,
+        strategy_version_id=subscription.strategy_version_id,
+        symbol=subscription.symbol,
+        instrument_kind=subscription.instrument_kind,
     )
     # Start at "now": ticks published while it was off are history, not instructions.
-    subscription.tick_cursor = await get_latest_tick_id(redis, subscription.symbol) or "0"
+    subscription.tick_cursor = await get_latest_tick_id(redis, subscription.trading_symbol) or "0"
     subscription.is_active = True
     subscription.deactivated_at = None
     subscription.deactivated_by = None
@@ -492,7 +521,7 @@ async def activate_subscription(
         action="paper_trading.subscription_activated",
         entity_type="paper_trading_subscription",
         entity_id=str(subscription.id),
-        details={"symbol": subscription.symbol, "tick_cursor": subscription.tick_cursor},
+        details={"symbol": subscription.trading_symbol, "tick_cursor": subscription.tick_cursor},
     )
     await db.commit()
     await db.refresh(subscription)

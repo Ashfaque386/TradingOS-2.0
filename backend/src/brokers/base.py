@@ -18,6 +18,7 @@ construct -- and record -- the exact payload a real order would carry
 without ever sending it, for a broker with no sandbox to send it to.
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -325,6 +326,39 @@ def parse_candle(row: list[Any]) -> Candle:
     )
 
 
+_MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+_FUTURES_SYMBOL = re.compile(r"^(?:NFO:)?(?P<underlying>.+?)(?P<year>\d{2})(?P<month>[A-Z]{3})FUT$")
+
+
+def futures_symbol(underlying: str, expiry: date) -> str:
+    """The one name this system gives a monthly future, whichever broker lists it:
+    `NFO:NIFTY26OCTFUT` (Kite's own `NFO:` + tradingsymbol form). A quote or a tick stream is
+    asked for by it; each adapter maps it to its own instrument (Kite uses it as is, Upstox looks
+    the underlying and expiry month up in its instrument file)."""
+    return f"NFO:{underlying.upper()}{expiry:%y}{_MONTHS[expiry.month - 1]}FUT"
+
+
+def parse_futures_symbol(symbol: str) -> tuple[str, int, int] | None:
+    """`NFO:NIFTY26OCTFUT` -> (`NIFTY`, 2026, 10); `None` for anything that is not a monthly
+    future's name (an equity, an index, an option)."""
+    match = _FUTURES_SYMBOL.match(symbol.strip().upper())
+    if match is None or match["month"] not in _MONTHS:
+        return None
+    return match["underlying"], 2000 + int(match["year"]), _MONTHS.index(match["month"]) + 1
+
+
+@dataclass(frozen=True, slots=True)
+class FuturesContract:
+    """One monthly future as a broker's instrument master lists it. `lot_size` is the broker's
+    figure today -- exchanges revise it, so it is read each time and never kept as a constant."""
+
+    symbol: str  # `futures_symbol(...)`
+    underlying: str
+    expiry: date
+    lot_size: int
+    tick_size: float
+
+
 @dataclass(frozen=True, slots=True)
 class OptionChainEntry:
     """`call_oi`/`put_oi`/`call_iv`/`put_iv` are genuinely optional --
@@ -373,6 +407,10 @@ class BrokerAdapter(Protocol):
 
     async def get_option_chain(self, underlying: str, expiry: str) -> list[OptionChainEntry]: ...
     async def get_expiries(self, underlying: str) -> list[str]: ...
+    async def get_futures_contracts(self, underlying: str) -> list[FuturesContract]:
+        """The underlying's listed monthly futures, soonest expiry first (none if it has none)."""
+        ...
+
     async def get_historical_candles(
         self, symbol: str, interval: CandleInterval, start: date, end: date
     ) -> list[Candle]: ...

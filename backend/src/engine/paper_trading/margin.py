@@ -70,3 +70,42 @@ def approximate_futures_margin(
 
     notional = price * quantity
     return MarginEstimate(approximate_margin=notional * (margin_pct / 100.0))
+
+
+@dataclass(frozen=True, slots=True)
+class MarginCheck:
+    ok: bool
+    required: float  # the approximate margin the position needs
+    limit: float  # the most of the account's capital a paper position may use
+    reason: str | None = None
+
+
+def check_futures_margin(
+    *,
+    price: float,
+    quantity: int,
+    capital: float,
+    margin_pct: float = DEFAULT_FUTURES_MARGIN_PCT,
+    max_utilisation_pct: float = 50.0,
+) -> MarginCheck:
+    """Whether an entry fits the account. A future is bought on margin, so the notional-versus-
+    capital position limit (built for cash equity: an index future's notional is many times a
+    small account) is the wrong yardstick; the committed margin is the one that counts, and it
+    must stay within `max_utilisation_pct` of capital. The margin is an estimate (see the module
+    docstring) -- the reason says so."""
+    required = approximate_futures_margin(
+        price=price, quantity=quantity, margin_pct=margin_pct
+    ).approximate_margin
+    limit = capital * max_utilisation_pct / 100.0
+    if required <= limit:
+        return MarginCheck(ok=True, required=required, limit=limit)
+    return MarginCheck(
+        ok=False,
+        required=required,
+        limit=limit,
+        reason=(
+            f"estimated margin Rs {required:,.0f} ({margin_pct:g}% of Rs {price * quantity:,.0f} "
+            f"notional; an approximation, not SPAN) is above the Rs {limit:,.0f} "
+            f"({max_utilisation_pct:g}% of Rs {capital:,.0f} capital) a paper position may use"
+        ),
+    )

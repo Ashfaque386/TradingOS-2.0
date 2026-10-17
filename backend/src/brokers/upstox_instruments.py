@@ -18,6 +18,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import httpx
@@ -25,9 +26,12 @@ import structlog
 
 from src.brokers.base import (
     BrokerRequestError,
+    FuturesContract,
     InstrumentNotFoundError,
     broker_request_error,
     broker_unreachable,
+    futures_symbol,
+    parse_futures_symbol,
 )
 from src.engine.risk.circuit_breaker import BrokerServerError
 
@@ -43,6 +47,9 @@ DOWNLOAD_TIMEOUT_SECONDS = 60.0
 EQUITY_SEGMENT = "NSE_EQ"
 EQUITY_TYPE = "EQ"
 INDEX_SEGMENT = "NSE_INDEX"
+FUTURES_SEGMENT = "NSE_FO"
+FUTURES_TYPE = "FUT"
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class UpstoxInstrumentNotFoundError(InstrumentNotFoundError):
@@ -61,11 +68,43 @@ class UpstoxInstrumentNotFoundError(InstrumentNotFoundError):
 class InstrumentResolver(Protocol):
     async def resolve(self, symbol: str) -> str: ...
 
+    async def futures_for(self, underlying: str) -> list[FuturesContract]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FutureEntry:
+    key: str
+    contract: FuturesContract
+
 
 @dataclass
 class SymbolIndex:
     equities: dict[str, str] = field(default_factory=dict)  # TRADING SYMBOL -> instrument_key
     indices: dict[str, str] = field(default_factory=dict)  # NAME or TRADING SYMBOL -> key
+    # (UNDERLYING, expiry year, expiry month) -> the monthly future. Upstox names a future
+    # `NIFTY FUT 27 OCT 26`; this system names it `futures_symbol(...)`, so lookups go by what
+    # both share: the underlying and the month it expires in.
+    futures: dict[tuple[str, int, int], FutureEntry] = field(default_factory=dict)
+
+
+def _future_entry(row: dict[str, Any], key: str) -> tuple[tuple[str, int, int], FutureEntry] | None:
+    underlying = str(row.get("underlying_symbol") or "").upper()
+    expiry_ms = row.get("expiry")
+    if not underlying or not isinstance(expiry_ms, int | float):
+        return None
+    # The file stamps an expiry at 23:59:59 IST of the expiry day, in epoch milliseconds.
+    expiry = datetime.fromtimestamp(expiry_ms / 1000, IST).date()
+    lot_size = int(row.get("lot_size") or 0)
+    if lot_size <= 0:
+        return None
+    contract = FuturesContract(
+        symbol=futures_symbol(underlying, expiry),
+        underlying=underlying,
+        expiry=expiry,
+        lot_size=lot_size,
+        tick_size=float(row.get("tick_size") or 0.0),
+    )
+    return (underlying, expiry.year, expiry.month), FutureEntry(key=key, contract=contract)
 
 
 def build_symbol_index(rows: list[dict[str, Any]]) -> SymbolIndex:
@@ -86,6 +125,9 @@ def build_symbol_index(rows: list[dict[str, Any]]) -> SymbolIndex:
             for name in (row.get("name"), row.get("trading_symbol")):
                 if name:
                     index.indices.setdefault(str(name).upper(), key)
+        elif segment == FUTURES_SEGMENT and row.get("instrument_type") == FUTURES_TYPE:
+            if (entry := _future_entry(row, key)) is not None:
+                index.futures.setdefault(entry[0], entry[1])
     return index
 
 
@@ -128,10 +170,22 @@ class UpstoxInstruments:
             return cleaned  # already an instrument_key
         index = await self._current_index()
         wanted = cleaned.upper()
+        if (parsed := parse_futures_symbol(wanted)) is not None:
+            entry = index.futures.get(parsed)
+            if entry is None:
+                raise UpstoxInstrumentNotFoundError(symbol)
+            return entry.key
         key = index.equities.get(wanted) or index.indices.get(wanted)
         if key is None:
             raise UpstoxInstrumentNotFoundError(symbol)
         return key
+
+    async def futures_for(self, underlying: str) -> list[FuturesContract]:
+        """The underlying's listed monthly futures, soonest expiry first."""
+        index = await self._current_index()
+        wanted = underlying.strip().upper()
+        found = [e.contract for (name, _y, _m), e in index.futures.items() if name == wanted]
+        return sorted(found, key=lambda contract: contract.expiry)
 
     async def _current_index(self) -> SymbolIndex:
         if self._index is not None and self._clock() < self._valid_until:
@@ -174,6 +228,7 @@ class UpstoxInstruments:
             "upstox_instruments.loaded",
             equities=len(index.equities),
             indices=len(index.indices),
+            futures=len(index.futures),
         )
         return index
 

@@ -38,7 +38,7 @@ order" means operationally.
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import pandas as pd
 import structlog
@@ -48,7 +48,9 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from src.brokers.base import BrokerAdapter
 from src.core.config import get_settings
+from src.data.market_data_factory import connected_adapters
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.engine.paper_trading.order_book import OrderBookProvider
 from src.engine.paper_trading.price_data import PriceDataProvider
@@ -63,6 +65,7 @@ from src.engine.risk.latency_guard import WebSocketLatencyGuard
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.observability.correlation import with_job_correlation_id
 from src.observability.metrics import ws_latency_seconds
+from src.orchestration.paper_futures import run_futures_roll
 from src.orchestration.paper_trading import process_tick, run_daily_signal_generation
 
 logger = structlog.get_logger(__name__)
@@ -85,16 +88,17 @@ TICK_PUBLISH_INTERVAL_SECONDS = 3
 DAILY_SIGNAL_JOB_ID = "paper_trading_daily_signal"
 TICK_PUBLISH_JOB_ID = "paper_trading_tick_publish"
 TICK_DRAIN_JOB_ID = "paper_trading_tick_drain"
+FUTURES_ROLL_JOB_ID = "paper_trading_futures_roll"
+FUTURES_ROLL_INTERVAL_SECONDS = 600
 
 
 async def _active_symbols(session_factory: async_sessionmaker[AsyncSession]) -> list[str]:
     async with session_factory() as db:
         result = await db.execute(
-            select(PaperTradingSubscription.symbol)
-            .where(PaperTradingSubscription.is_active.is_(True))
-            .distinct()
+            select(PaperTradingSubscription).where(PaperTradingSubscription.is_active.is_(True))
         )
-        return [row[0] for row in result.all()]
+        # What is quoted: the equity itself, or a future's current contract.
+        return sorted({sub.trading_symbol for sub in result.scalars().all()})
 
 
 async def run_daily_signal_job(
@@ -148,7 +152,7 @@ async def run_tick_drain_job(
 
     for subscription in subscriptions:
         ticks, new_cursor = await read_new_ticks(
-            redis, subscription.symbol, last_id=subscription.tick_cursor
+            redis, subscription.trading_symbol, last_id=subscription.tick_cursor
         )
         for tick in ticks:
             latency_ms = max(0.0, time.time() * 1000 - tick.timestamp_ms)
@@ -187,6 +191,38 @@ async def run_tick_drain_job(
                     await db.commit()
 
 
+async def run_futures_roll_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    order_book_provider: OrderBookProvider,
+    regulatory_provider: RegulatoryDataProvider,
+    adapters_factory: Callable[[], Sequence[BrokerAdapter]],
+) -> None:
+    """Rolls futures subscriptions that are within `PAPER_FUTURES_ROLL_DAYS` of expiry. Only while
+    the market is open: closing the old position needs a live tick and book, and a roll that
+    cannot be done now is simply tried again at the next run."""
+    if not is_market_open_ist():
+        return
+    async with session_factory() as db:
+        outcomes = await run_futures_roll(
+            db,
+            redis,
+            adapters=adapters_factory(),
+            order_book_provider=order_book_provider,
+            regulatory_provider=regulatory_provider,
+            roll_days=get_settings().paper_futures_roll_days,
+        )
+    for outcome in outcomes:
+        logger.info(
+            "paper_trading.futures_roll_outcome",
+            subscription_id=outcome.subscription_id,
+            status=outcome.status,
+            old_contract=outcome.old_contract,
+            new_contract=outcome.new_contract,
+            detail=outcome.detail,
+        )
+
+
 def start_paper_trading_scheduler(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -195,8 +231,10 @@ def start_paper_trading_scheduler(
     order_book_provider: OrderBookProvider,
     regulatory_provider: RegulatoryDataProvider,
     tick_source_factory: Callable[[], TickSource],
+    futures_adapters_factory: Callable[[], Sequence[BrokerAdapter]] | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST)
+    adapters_factory = futures_adapters_factory or connected_adapters
 
     scheduler.add_job(
         with_job_correlation_id(DAILY_SIGNAL_JOB_ID, run_daily_signal_job),
@@ -219,6 +257,15 @@ def start_paper_trading_scheduler(
         seconds=TICK_DRAIN_INTERVAL_SECONDS,
         args=[session_factory, redis, order_book_provider, regulatory_provider],
         id=TICK_DRAIN_JOB_ID,
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        with_job_correlation_id(FUTURES_ROLL_JOB_ID, run_futures_roll_job),
+        "interval",
+        seconds=FUTURES_ROLL_INTERVAL_SECONDS,
+        args=[session_factory, redis, order_book_provider, regulatory_provider, adapters_factory],
+        id=FUTURES_ROLL_JOB_ID,
         replace_existing=True,
     )
 

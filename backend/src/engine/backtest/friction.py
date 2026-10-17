@@ -58,6 +58,15 @@ class FrictionModel:
 
     gst_pct: float = 0.18
 
+    # Equity FUTURES, as Zerodha publishes them (zerodha.com/charges, read 2026-10-17). Rates
+    # move with every Budget and exchange circular: confirm them again before relying on a
+    # figure, and override any of them from config (`PAPER_FRICTION_OVERRIDES`) rather than here.
+    futures_brokerage_pct: float = 0.0003  # 0.03% or Rs 20 an executed order, whichever is lower
+    futures_brokerage_cap: float = 20.0
+    futures_stt_sell_pct: float = 0.0005  # 0.05%, sell side only
+    futures_exchange_txn_pct: float = 0.0000183  # NSE, 0.00183%
+    futures_stamp_buy_pct: float = 0.00002  # 0.002%, buy side only
+
     atr_slippage_multiplier: float = 0.1
     volume_impact_coefficient: float = 0.1
 
@@ -134,3 +143,26 @@ def compute_slippage_per_share(
         else 0.0
     )
     return atr_component + volume_component
+
+
+def compute_futures_leg_costs(
+    *, turnover: float, is_buy: bool, model: FrictionModel = FrictionModel()
+) -> LegCosts:
+    """The costs of one leg of an equity-futures trade. Unlike the cash-equity schedule above,
+    GST (18%) is charged on brokerage + the SEBI fee + the exchange transaction charges, as
+    Zerodha states it for futures; STT is on the sell side only and stamp duty on the buy side
+    only. `turnover` = price * quantity (lots * lot size) for this leg."""
+    brokerage = _brokerage(turnover, model.futures_brokerage_pct, model.futures_brokerage_cap)
+    stt = 0.0 if is_buy else turnover * model.futures_stt_sell_pct
+    exchange_txn_charges = turnover * model.futures_exchange_txn_pct
+    sebi_fee = turnover * model.sebi_fee_pct
+    stamp_duty = turnover * model.futures_stamp_buy_pct if is_buy else 0.0
+    gst = model.gst_pct * (brokerage + sebi_fee + exchange_txn_charges)
+    return LegCosts(
+        brokerage=brokerage,
+        stt=stt,
+        exchange_txn_charges=exchange_txn_charges,
+        sebi_fee=sebi_fee,
+        stamp_duty=stamp_duty,
+        gst=gst,
+    )

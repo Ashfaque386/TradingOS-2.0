@@ -597,6 +597,11 @@ class EnrollPaperTradingRequest(BaseModel):
     initial_capital: float = Field(default=100_000.0, gt=0)
     stop_loss_pct: float = Field(default=3.0, gt=0)
     position_size_pct: float = Field(default=5.0, gt=0, le=100)
+    # `future`: `symbol` is the underlying (NIFTY, RELIANCE); the monthly contract and its lot size
+    # come from the connected broker's instrument master, and entries are `lots` whole lots
+    # (position_size_pct does not apply to a future).
+    instrument_kind: Literal["equity", "future"] = "equity"
+    lots: int = Field(default=1, ge=1, le=1000)
 
 
 class PaperTradingSubscriptionResponse(BaseModel):
@@ -609,6 +614,11 @@ class PaperTradingSubscriptionResponse(BaseModel):
     stop_loss_pct: float
     position_size_pct: float
     is_active: bool
+    instrument_kind: Literal["equity", "future"] = "equity"
+    contract_symbol: str | None = None
+    contract_expiry: str | None = None
+    lot_size: int | None = None
+    lots: int = 1
 
 
 class PaperPositionResponse(BaseModel):
@@ -646,6 +656,11 @@ class PaperSubscriptionDetailResponse(BaseModel):
     stop_loss_pct: float
     position_size_pct: float
     is_active: bool
+    instrument_kind: Literal["equity", "future"] = "equity"
+    contract_symbol: str | None = None
+    contract_expiry: str | None = None
+    lot_size: int | None = None
+    lots: int = 1
     state: Literal["active", "awaiting_history", "halted_no_data", "inactive"]
     state_reason: str | None
     created_at: str

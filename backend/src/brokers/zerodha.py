@@ -67,6 +67,7 @@ from src.brokers.base import (
     BrokerQuoteUnavailableError,
     Candle,
     CandleInterval,
+    FuturesContract,
     InstrumentNotFoundError,
     MarginInfo,
     OptionChainEntry,
@@ -75,6 +76,7 @@ from src.brokers.base import (
     OrderType,
     broker_request_error,
     broker_unreachable,
+    futures_symbol,
     parse_candle,
     quote_from_row,
 )
@@ -461,6 +463,32 @@ class ZerodhaKiteAdapter:
                 )
             )
         return entries
+
+    async def get_futures_contracts(self, underlying: str) -> list[FuturesContract]:
+        """The underlying's monthly futures from the NFO instrument dump (name = the underlying,
+        type FUT), soonest expiry first. Lot size and tick size are the dump's own figures."""
+        wanted = underlying.strip().upper()
+        contracts: list[FuturesContract] = []
+        for row in await self._get_nfo_instruments():
+            if row.get("instrument_type") != "FUT" or (row.get("name") or "").upper() != wanted:
+                continue
+            try:
+                expiry = date.fromisoformat(row["expiry"])
+                lot_size = int(row["lot_size"])
+            except (KeyError, ValueError):
+                continue
+            if lot_size <= 0:
+                continue
+            contracts.append(
+                FuturesContract(
+                    symbol=futures_symbol(wanted, expiry),
+                    underlying=wanted,
+                    expiry=expiry,
+                    lot_size=lot_size,
+                    tick_size=float(row.get("tick_size") or 0.0),
+                )
+            )
+        return sorted(contracts, key=lambda contract: contract.expiry)
 
     async def get_expiries(self, underlying: str) -> list[str]:
         """Derived from the same real NFO instrument dump
