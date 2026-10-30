@@ -63,6 +63,14 @@ jobs:
   secrets-scan:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-24.04
+    # On a pull_request event gitleaks-action lists the PR's commits through the API
+    # (GET /pulls/{n}/commits) to scan only those. The workflow-level `contents: read`
+    # above leaves every other scope at none, so without this the job died in 6s with
+    # "Resource not accessible by integration" on every pull request (seen on Dependabot's
+    # #55). It never showed on a push to main, which has no PR to list.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v5
         with:
