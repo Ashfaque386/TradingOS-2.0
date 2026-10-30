@@ -3,6 +3,8 @@ freshness/instrument/provenance reads, plus every manual ingestion trigger
 -- through the actual HTTP routes, RBAC included.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pandas as pd
 import pytest
@@ -317,7 +319,10 @@ def _linear_ramp_bars(n: int, start: str) -> pd.DataFrame:
 async def test_indicators_endpoint_returns_real_sma_and_bollinger_middle_once_window_fills(
     client: AsyncClient, make_user, tmp_path
 ):
-    lake.write_daily_bars(tmp_path / "lake", "INDSTOCK", _linear_ramp_bars(40, "2026-07-01"))
+    # The endpoint reads the last `lookback_days` days up to today, so the ramp is placed relative
+    # to today: a fixed start date aged out of the window (40 bars became 39 on 29 Oct 2026).
+    start = (datetime.now(UTC).date() - timedelta(days=90)).isoformat()
+    lake.write_daily_bars(tmp_path / "lake", "INDSTOCK", _linear_ramp_bars(40, start))
 
     await make_user("md7@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
     token = await _login(client, "md7@example.com", "supersecret1")
