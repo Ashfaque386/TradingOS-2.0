@@ -1,76 +1,120 @@
-# TradingOS-2.0-yp
+# TradingOS 2.0
 
-This is a [Next.js](https://nextjs.org) project bootstrapped with [v0](https://v0.app).
+An AI multi-agent trading operating system for Indian equity and F&O markets (NSE/BSE). A 24-agent
+LLM organisation researches markets, writes and validates strategies, backtests them and runs them in
+paper trading. Live capital runs autonomously once a strategy has earned live eligibility and its own
+master switch is on; from then on only the deterministic safety layer (kill switch, compliance,
+naked-options scan, correlation constraint, per-strategy caps) can stop an order. It is a
+self-hosted, single-operator system, not a multi-tenant product.
 
-## Built with v0
+> **Status.** Everything below is built, tested and running, but it has not yet been through a full
+> live trading session with real brokers. Read [`docs/gap-analysis-2026-10-30.md`](docs/gap-analysis-2026-10-30.md)
+> before connecting real capital: it lists what is still missing, ranked, with the file that shows each gap.
 
-This repository is linked to a [v0](https://v0.app) project. You can continue developing by visiting the link below -- start new chats to make changes, and v0 will push commits directly to this repo. Every merge to `main` will automatically deploy.
+## What is in it
 
-[Continue working on v0 →](https://v0.app/chat/projects/prj_uaBySbq9NwBHR5iBUb2xizhzuSAy)
+| Area | What it does |
+|---|---|
+| **Agent organisation** | 24 agents under one gateway config (`config/tradingos.config.json`, hot-reloaded, versioned, audited). Orchestration engine, LangGraph strategy pipeline, a multi-provider LLM router, long-term vector memory (Qdrant). |
+| **Strategies and backtests** | Objective → generated strategy → AST ban-list and lint → process-isolated sandbox → backtest with the Indian cost model, walk-forward, Monte Carlo, Optuna sweeps. |
+| **Paper trading** | Runs on **real broker quotes and 5-level depth only**; with no real feed a subscription halts and says why, it never trades generated prices. Equities, monthly futures (lots, margin estimate, roll) and defined-risk option spreads (per-leg positions, expiry square-off), charged brokerage, STT, exchange fees, SEBI fee, stamp duty and GST per fill. |
+| **The Paper Desk** (`/paper-trading`) | Today's result as *price result − costs = net*, what needs attention, one lane per subscription (legs, payoff at expiry, costs and fills, settings), add / switch off / close / edit dialogs with live previews and typed confirmation. |
+| **Live trading** | Order-intent pipeline with the safety layer in front of the broker, per-strategy autonomy switch, standing rate and notional caps, Zerodha Kite and Upstox adapters. |
+| **Safety and audit** | Kill switch, compliance checker, naked-options scanner, correlation constraint, dual-control risk limits, a hash-chained append-only audit log with a WORM archive. |
+| **Operations** | Prometheus + Grafana (tick age, quote-call latency, order dispatch), notifications to Telegram / Discord / Slack, scheduled market-data ingestion into a DuckDB/Parquet lake, nightly lake backup. |
 
-## Getting Started
+## Running it
 
-First, run the development server:
+Docker is the supported way. `docker compose up` builds and runs the frontend, the backend (API and
+its Postgres in one container), Redis, Qdrant, Temporal, Prometheus and Grafana.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
+cp .env.example .env        # then set SECRETS_ENCRYPTION_KEY, see below
+docker compose up --build -d
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Ports (all bound to `127.0.0.1` unless you set `BIND_HOST`): frontend **3000**, API **8000**,
+Prometheus **9090**, Grafana **3001**. Open <http://localhost:3000> and register: **the first user to
+register becomes the SystemAdministrator**, so do that before exposing the port to anyone else.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-## Running the full app in Docker
-
-`docker compose up` builds and runs the frontend (this Next.js app) and the backend together — see the repo-root `Dockerfile` and `docker-compose.yml`, and `docs/CLAUDE.md` for the full architecture.
-
-**First-time setup — Settings UI (Broker Config, LLM Providers, Notification Channels):** copy `.env.example` to `.env` and set `SECRETS_ENCRYPTION_KEY`, or those three panels will all fail with a 503 (the rest of the app, including paper trading, works fine without it):
+**First-time setup — Settings UI (Broker Config, LLM Providers, Notification Channels):** these three
+panels share one encrypted store and fail with a 503 until you set `SECRETS_ENCRYPTION_KEY` in `.env`:
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Paste the output into `.env` as `SECRETS_ENCRYPTION_KEY=<value>`. The backend logs a startup warning if this is left unset — it won't fail to boot, but those three Settings panels won't work until you set it and restart.
+Keep that key somewhere safe: it is the only way to read the stored broker and LLM credentials. The
+backend logs a startup warning, and does not fail, if it is unset. Everything else, including paper
+trading on generated data (`PAPER_TRADING_SYNTHETIC=true`), works without it.
 
-If port 8000 or 3000 is already taken by something else on your machine, use:
+**Connecting brokers.** Settings → Broker Config. Zerodha and Upstox access tokens end around
+**06:00 IST every day**, so each trading morning you sign the brokers in again (a reminder is sent to
+your notification channels). Paper trading needs a connected broker for quotes, depth, history and
+the instrument lists; without one the Paper Desk's symbol search and previews say so and subscriptions
+wait.
+
+**Tuning.** Every `PAPER_*` setting (tick and order-book age limits, futures margin and roll, option
+expiry rules, cost overrides) is in `.env.example`, forwarded by `docker-compose.yml`, and explained in
+`backend/src/core/config.py`.
+
+If port 8000 or 3000 is taken, use `pnpm docker:up` instead of `docker compose up`: it walks forward to
+the next free port for whichever one is busy and passes extra flags through (`pnpm docker:up -d`).
+Without Node installed, `.\scripts\docker-up.cmd -d --build` does the same on Windows. Behind a
+TLS-intercepting antivirus or proxy, put its root certificate at `.local/extra-ca.pem` (git-ignored);
+both launchers pass it to the image build and the running backend.
+
+### Published images (GHCR)
+
+CI builds both images on every run and publishes them from `main` (`latest`, `sha-<short>`) and from
+`v*` tags:
+
+- `ghcr.io/ashfaque386/tradingos-2.0-allinone`: frontend, backend, Postgres, Redis and nginx behind one port (8080), host-agnostic.
+- `ghcr.io/ashfaque386/tradingos-2.0-backend`: the backend with its embedded Postgres, as `docker-compose.yml` runs it.
+
+The frontend-only image is not published: Next.js inlines `NEXT_PUBLIC_API_URL` at build time. Build it
+with the URL you need (`docker compose build frontend`).
 
 ```bash
-pnpm docker:up
+docker run -d -p 8080:8080 --security-opt seccomp=deploy/seccomp/backend.json \
+  -v tradingos_secrets:/app/secrets \
+  -e SECRETS_ENCRYPTION_KEY=<fernet key> -e JWT_SECRET_KEY=<long random string> \
+  ghcr.io/ashfaque386/tradingos-2.0-allinone:latest
 ```
 
-instead of `docker compose up` directly — it checks whether `API_HOST_PORT` (default 8000) and `FRONTEND_HOST_PORT` (default 3000) are free and automatically walks forward to the next free port for whichever one is busy, then runs `docker compose up` with those ports. Any extra flags (e.g. `-d`) are passed through: `pnpm docker:up -d`.
+The seccomp profile is required for strategy creation (the sandbox needs `unshare`).
 
-**No Node/pnpm installed?** Use the native Windows equivalent instead, no extra tooling required:
-
-```powershell
-.\scripts\docker-up.cmd -d --build
-```
-
-(Runs `scripts/docker-up.ps1` via PowerShell — same port-fallback logic, same env vars, same passthrough of extra flags.)
-
-## Published images (GHCR)
-
-CI builds both images on every run and, after every job passes, publishes them from `main` (tagged `latest` and `sha-<short>`) and from `v*` tags (`<version>`, `<major>.<minor>`):
-
-- `ghcr.io/ashfaque386/tradingos-2.0-allinone` — frontend, backend, Postgres, Redis and nginx behind one port (8080). It is built to be host-agnostic, so the same image runs anywhere.
-- `ghcr.io/ashfaque386/tradingos-2.0-backend` — the backend with its embedded Postgres, as `docker-compose.yml` runs it.
-
-The frontend-only image is **not** published: Next.js inlines `NEXT_PUBLIC_API_URL` at build time, so a registry copy would only work against a backend on `localhost:8000`. Build it yourself with the URL you need (`docker compose build frontend`).
+## Developing and testing
 
 ```bash
-docker run -d -p 8080:8080   --security-opt seccomp=deploy/seccomp/backend.json   -v tradingos_secrets:/app/secrets   -e SECRETS_ENCRYPTION_KEY=<fernet key>   -e JWT_SECRET_KEY=<long random string>   ghcr.io/ashfaque386/tradingos-2.0-allinone:latest
+pnpm install && pnpm dev                      # the console, on :3000, against a backend on :8000
+pnpm exec tsc --noEmit                        # type-check (next build does not: ignoreBuildErrors)
+cd backend && pytest -q                       # ~2,300 tests; needs Postgres and Redis (see CI for the env)
+cd backend && ruff check src tests && ruff format --check src tests && mypy src && bandit -c pyproject.toml -r src
+pnpm test:e2e                                 # Playwright against a real backend; see e2e/README.md
 ```
 
-The seccomp profile is required for strategy creation (the sandbox needs `unshare`); take `deploy/seccomp/backend.json` from this repo. Both packages are public and pull without logging in (they follow this public repository's visibility); if you fork the repo to a private one, they will not be, and you will need `docker login ghcr.io` with a token that has `read:packages`.
+CI (`.github/workflows/ci.yml`) runs only what a change can affect: a secrets scan, ruff, bandit,
+`mypy --strict`, pip-audit, pytest with global and per-module coverage floors, mutation testing of the
+safety layer, the Playwright suite, `tsc`, and the image builds. Most backend tests are written against
+real Postgres and Redis, not mocks.
 
-## Learn More
+**Time-dependent tests.** A test that writes data on a fixed date and reads a window from "today" stops
+passing when the calendar moves on (one did on 29 Oct 2026). Place such data relative to today, or
+inject a clock.
 
-To learn more, take a look at the following resources:
+## Where things are written down
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-- [v0 Documentation](https://v0.app/docs) - learn about v0 and how to use it.
+- [`docs/CLAUDE.md`](docs/CLAUDE.md): the project memory: rules that never bend, decisions, and a dated
+  entry for every phase and follow-up, with what was verified live and what was not. **Start here.**
+- [`docs/gap-analysis-2026-10-30.md`](docs/gap-analysis-2026-10-30.md): what is still pending and where the gaps are.
+- `docs/TradingOS_2.0_Build_Specification.md`, `…_Blueprint.md`, `…_Build_Prompt_Pack.md`: the design and build plan.
+- `docs/phase16-wiring-audit.md`, `phase19-audit.md`, `phase20-*.md`: the audits and the old-app comparison backlog.
+- [`e2e/README.md`](e2e/README.md): the end-to-end suite and how to run it.
+
+## The frontend
+
+The console is a Next.js app at the repository root (`app/`, `components/`, `lib/`) that was started
+in [v0](https://v0.app) and is now wired to the real backend; it is edited in this repository.
+Design tokens and the shared glass-panel styles are in `app/globals.css`; `lib/api.ts` is the one
+place that talks to the backend, and `lib/paper-trading.ts` holds the Paper Desk's pure logic.

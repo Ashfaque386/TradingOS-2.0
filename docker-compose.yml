@@ -20,6 +20,21 @@ services:
       # Paper trading runs on real market data only. true = generated demo data (never for a
       # session whose results are meant to be believed); see src/core/config.py.
       PAPER_TRADING_SYNTHETIC: ${PAPER_TRADING_SYNTHETIC:-false}
+      # The paper-trading tunables (src/core/config.py documents each). Only variables listed here
+      # reach the container, so a setting that is not forwarded cannot be changed in Docker; the
+      # defaults below are the code's own.
+      PAPER_TRADING_PRODUCT: ${PAPER_TRADING_PRODUCT:-cnc}
+      PAPER_DEPTH_MAX_AGE_SECONDS: ${PAPER_DEPTH_MAX_AGE_SECONDS:-30}
+      PAPER_TICK_MAX_AGE_SECONDS: ${PAPER_TICK_MAX_AGE_SECONDS:-20}
+      PAPER_TICK_STREAM_MAXLEN: ${PAPER_TICK_STREAM_MAXLEN:-10000}
+      PAPER_FUTURES_MARGIN_PCT: ${PAPER_FUTURES_MARGIN_PCT:-15}
+      PAPER_FUTURES_MAX_MARGIN_UTILISATION_PCT: ${PAPER_FUTURES_MAX_MARGIN_UTILISATION_PCT:-50}
+      PAPER_FUTURES_ROLL_DAYS: ${PAPER_FUTURES_ROLL_DAYS:-3}
+      PAPER_OPTIONS_MIN_DAYS_TO_EXPIRY: ${PAPER_OPTIONS_MIN_DAYS_TO_EXPIRY:-3}
+      PAPER_OPTIONS_SQUAREOFF_DAYS: ${PAPER_OPTIONS_SQUAREOFF_DAYS:-1}
+      PAPER_OPTIONS_PLAN_TTL_SECONDS: ${PAPER_OPTIONS_PLAN_TTL_SECONDS:-300}
+      # JSON, e.g. {"futures_stt_sell_pct": 0.0002}: a published cost rate that has changed.
+      PAPER_FRICTION_OVERRIDES: ${PAPER_FRICTION_OVERRIDES:-{}}
       POSTGRES_USER: ${POSTGRES_USER:-tradingos}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradingos}
       POSTGRES_DB: ${POSTGRES_DB:-tradingos}
