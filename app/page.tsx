@@ -257,6 +257,8 @@ export default function Home() {
   const pendingSignoffs = signoff?.approvals.length ?? 0
   const autonomousSubscriptions = liveSubscriptions.filter((s) => s.autonomous_trading_enabled && s.is_active)
   const killSwitchTripped = Boolean(paperKillSwitch?.tripped || liveKillSwitch?.tripped)
+  // A switch we could not read is not a switch that is off: say so instead of "armed".
+  const killSwitchUnknown = !killSwitchTripped && (paperKillSwitch === null || liveKillSwitch === null)
   const liveRunsCount = runs.filter((r) => NON_TERMINAL_RUN_STATUSES.has(r.status)).length
   const activeAgentsCount = agents.filter((a) => a.enabled).length
 
@@ -291,7 +293,20 @@ export default function Home() {
         <div className={pendingSignoffs > 0 ? 'kpi-alert' : ''}><AlertTriangle /><span>PENDING SIGN-OFFS<strong>{pendingSignoffs.toString().padStart(2, '0')}</strong></span></div>
         <div><TrendingUp /><span>TODAY'S REALIZED P&L<strong className={todaysPnl === null ? 'text-muted-foreground' : todaysPnl.realized_pnl < 0 ? 'text-rose-300' : todaysPnl.realized_pnl > 0 ? 'text-emerald-300' : ''}>{todaysPnl === null ? '—' : `${todaysPnl.realized_pnl >= 0 ? '+' : '-'}₹${Math.abs(todaysPnl.realized_pnl).toFixed(0)}`}</strong></span></div>
         <div><LineChart /><span>UNREALIZED P&L{unrealizedPnl ? ` · ${unrealizedPnl.price_source === 'none' ? 'NO PRICE FEED' : unrealizedPnl.price_source.toUpperCase()}${unrealizedPnl.unmanaged_positions > 0 ? ` · ${unrealizedPnl.unmanaged_positions} UNMANAGED` : ''}` : ''}<strong className={unrealizedPnl?.unrealized_pnl == null ? 'text-muted-foreground' : unrealizedPnl.unrealized_pnl < 0 ? 'text-rose-300' : unrealizedPnl.unrealized_pnl > 0 ? 'text-emerald-300' : ''}>{unrealizedPnl?.unrealized_pnl == null ? '—' : `${unrealizedPnl.unrealized_pnl >= 0 ? '+' : '-'}₹${Math.abs(unrealizedPnl.unrealized_pnl).toFixed(0)}`}</strong></span></div>
-        <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : 'OFF · ARMED'}</strong>
+        <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : killSwitchUnknown ? 'text-amber-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : killSwitchUnknown ? 'UNKNOWN' : 'OFF · ARMED'}</strong>
+          {([['paper', paperKillSwitch], ['live', liveKillSwitch]] as const).map(([mode, ks]) =>
+            ks?.tripped ? (
+              <small key={mode} className="mt-1 block text-[11px] font-normal text-rose-200/80">
+                {mode}: {ks.trip_reason ?? 'no reason recorded'}
+                {ks.tripped_at ? ` · since ${new Date(ks.tripped_at).toLocaleString()}` : ''}
+              </small>
+            ) : null,
+          )}
+          {killSwitchUnknown && (
+            <small className="mt-1 block text-[11px] font-normal text-amber-200/80">
+              Could not read the {paperKillSwitch === null ? 'paper' : 'live'} kill switch
+            </small>
+          )}
           {killSwitchTripped && canResetKillSwitch && (
             <span className="kill-switch-reset-controls">
               {paperKillSwitch?.tripped && (

@@ -691,6 +691,10 @@ export default function MissionControlPage() {
   // see the Strategies page's per-strategy autonomy switch instead.)
   const canDecide = role === 'SystemAdministrator' || role === 'RiskManager'
   const [view, setView] = useState<'kanban' | 'queue'>('kanban')
+  // The command palette links to /mission-control?view=queue.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('view') === 'queue') setView('queue')
+  }, [])
   const [runs, setRuns] = useState<OrganizationRun[]>([])
   const [selected, setSelected] = useState<OrganizationRun | null>(null)
   const [runActionError, setRunActionError] = useState<string | null>(null)
@@ -771,7 +775,8 @@ export default function MissionControlPage() {
 
   useWebSocketChannel<ActivityFeedMessage>('/ws/activity-feed', {}, (message) => {
     if (message.type === 'backfill') {
-      setActivities(message.events.slice(0, 30))
+      // The backfill arrives oldest first: keep the newest 30, newest first, like the live events.
+      setActivities(message.events.slice(-30).reverse())
     } else if (message.type === 'event') {
       setActivities((prev) => [message.event, ...prev].slice(0, 30))
     }

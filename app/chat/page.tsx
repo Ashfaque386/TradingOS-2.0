@@ -8,7 +8,7 @@ import {
   type ChatSession,
   ApiError,
   abortChatMessage,
-  chatExportUrl,
+  downloadChatExport,
   createChatSession,
   deleteChatSession,
   listChatMessages,
@@ -36,9 +36,15 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  const messageOf = (err: unknown, fallback: string) =>
+    err instanceof ApiError ? err.message : fallback
+
   async function reloadSessions() {
-    const data = await listChatSessions({ search: search || undefined, pinnedOnly })
-    setSessions(data)
+    try {
+      setSessions(await listChatSessions({ search: search || undefined, pinnedOnly }))
+    } catch (err) {
+      setError(messageOf(err, 'Could not load your chats'))
+    }
   }
 
   useEffect(() => {
@@ -61,9 +67,13 @@ export default function ChatPage() {
   }, [messages, streamingText])
 
   async function handleNewChat() {
-    const session = await createChatSession({})
-    await reloadSessions()
-    setActiveId(session.id)
+    try {
+      const session = await createChatSession({})
+      await reloadSessions()
+      setActiveId(session.id)
+    } catch (err) {
+      setError(messageOf(err, 'Could not start a new chat'))
+    }
   }
 
   async function handleSend(event: FormEvent<HTMLFormElement>) {
@@ -73,10 +83,15 @@ export default function ChatPage() {
 
     let sessionId = activeId
     if (!sessionId) {
-      const session = await createChatSession({ title: userText.slice(0, 60) })
-      await reloadSessions()
-      setActiveId(session.id)
-      sessionId = session.id
+      try {
+        const session = await createChatSession({ title: userText.slice(0, 60) })
+        await reloadSessions()
+        setActiveId(session.id)
+        sessionId = session.id
+      } catch (err) {
+        setError(messageOf(err, 'Could not start a new chat'))
+        return
+      }
     }
 
     setDraft('')
@@ -116,18 +131,39 @@ export default function ChatPage() {
 
   async function handleAbort() {
     if (!activeId) return
-    await abortChatMessage(activeId)
+    try {
+      await abortChatMessage(activeId)
+    } catch (err) {
+      setError(messageOf(err, 'Could not stop the reply'))
+    }
   }
 
   async function handleTogglePin(session: ChatSession) {
-    await updateChatSession(session.id, { pinned: !session.pinned })
+    try {
+      await updateChatSession(session.id, { pinned: !session.pinned })
+    } catch (err) {
+      setError(messageOf(err, 'Could not pin or unpin that chat'))
+    }
     reloadSessions()
   }
 
   async function handleDelete(session: ChatSession) {
-    if (activeId === session.id) setActiveId(null)
-    await deleteChatSession(session.id)
+    try {
+      await deleteChatSession(session.id)
+      if (activeId === session.id) setActiveId(null)
+    } catch (err) {
+      setError(messageOf(err, 'Could not delete that chat'))
+    }
     reloadSessions()
+  }
+
+  async function handleExport(session: ChatSession) {
+    setError(null)
+    try {
+      await downloadChatExport(session.id)
+    } catch (err) {
+      setError(messageOf(err, 'Could not export that chat'))
+    }
   }
 
   const active = sessions.find((s) => s.id === activeId) ?? null
@@ -226,15 +262,10 @@ export default function ChatPage() {
                 )}
               </div>
               {active && (
-                <a
-                  href={chatExportUrl(active.id)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="button-secondary"
-                >
+                <button type="button" onClick={() => handleExport(active)} className="button-secondary">
                   <Download className="size-3" />
                   Export
-                </a>
+                </button>
               )}
             </div>
 
@@ -273,7 +304,7 @@ export default function ChatPage() {
               )}
             </div>
 
-            {error && <p className="px-5 pb-2 text-xs text-rose-300">{error}</p>}
+            {error && <p role="alert" className="px-5 pb-2 text-xs text-rose-300">{error}</p>}
 
             <form onSubmit={handleSend} className="flex items-end gap-2 border-t border-white/8 p-4">
               <textarea

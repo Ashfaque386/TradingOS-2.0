@@ -130,7 +130,7 @@ export default function BacktestsPage() {
       <Panel title="Compare runs" eyebrow="RESEARCH WORKBENCH" className="compare-panel">
         <div className="compare-toolbar">{runs.map((r, i) => <button key={r.id} className={compareIds.includes(r.id) ? 'run-chip selected' : 'run-chip'} onClick={() => setCompareIds(prev => prev.includes(r.id) ? prev.filter(x => x !== r.id) : [...prev, r.id])}><span className={`run-dot dot-${i % 6}`} />{r.symbol} · {r.id.slice(0, 6)}</button>)}</div>
         <div className="mt-3 flex items-center gap-2"><button onClick={handleCompare} disabled={compareIds.length < 2} className="button-secondary">Compare selected ({compareIds.length})</button></div>
-        {comparison && <div className="mt-4"><p className="eyebrow mb-2">PAIRWISE CORRELATION</p><div className="flex flex-col gap-1 font-mono text-xs">{Object.entries(comparison.correlations).map(([pair, value]) => <div key={pair} className="flex justify-between border-b border-white/5 py-1"><span>{pair}</span><span style={{ opacity: 0.4 + Math.abs(value) * 0.6 }}>{value.toFixed(2)}</span></div>)}</div></div>}
+        {comparison && <div className="mt-4"><p className="eyebrow mb-2">PAIRWISE CORRELATION</p><div className="flex flex-col gap-1 font-mono text-xs">{Object.entries(comparison.correlations).map(([pair, value]) => <div key={pair} className="flex justify-between border-b border-white/5 py-1"><span>{pair}</span>{value === null ? <span className="text-muted-foreground" title="Fewer than 10 overlapping days">n/a · under 10 shared days</span> : <span style={{ opacity: 0.4 + Math.abs(value) * 0.6 }}>{value.toFixed(2)}</span>}</div>)}</div></div>}
       </Panel>
     </>}
   </main></ShellLayout>

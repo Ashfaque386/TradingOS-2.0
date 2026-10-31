@@ -485,7 +485,7 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
       </div>
 
       <div className="set-llm-test-row">
-        <button className="set-btn set-btn-secondary" disabled={busy || !status.configured || (!selectedModel && !defaultModel)} onClick={handleTest}>Test connection</button>
+        {canEdit && <button className="set-btn set-btn-secondary" disabled={busy || !status.configured || (!selectedModel && !defaultModel)} onClick={handleTest}>Test connection</button>}
         {testResult && (
           <span className={`set-llm-test-result ${testResult.ok ? 'ok' : 'fail'}`}>{testResult.ok ? <CheckCircle2 className="size-3.5" /> : <XCircle className="size-3.5" />}{testResult.detail}</span>
         )}

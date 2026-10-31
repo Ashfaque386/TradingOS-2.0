@@ -5,6 +5,8 @@ import { Bar, CartesianGrid, ComposedChart, Line, LineChart, Tooltip, XAxis, YAx
 import { Activity, AlertTriangle, Cable, CheckCircle2, Clock3, Database, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles, XCircle } from 'lucide-react'
 import { ShellLayout } from '@/components/shell/shell-layout'
 import { ChartContainer } from '@/components/ui/chart'
+import { ErrorNotice } from '@/components/ui/error-notice'
+import { messageOf } from '@/lib/errors'
 import {
   ApiError,
   type BrokerCircuitBreakerStatus,
@@ -86,18 +88,26 @@ function ChangeTile({ name, change }: { name: string; change: number }) {
 
 function PulseTab() {
   const [pulse, setPulse] = useState<MarketPulse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     async function load() {
-      const data = await getMarketPulse()
-      if (!cancelled) setPulse(data)
+      try {
+        const data = await getMarketPulse()
+        if (!cancelled) { setPulse(data); setError(null) }
+      } catch (err) {
+        // The server answers 503 with its reason when no broker is connected: say that, not "Loading".
+        if (!cancelled) setError(messageOf(err, 'Could not load the market pulse'))
+      }
     }
     load()
     const interval = setInterval(load, 30000)
     return () => { cancelled = true; clearInterval(interval) }
-  }, [])
+  }, [attempt])
 
+  if (error && !pulse) return <div className="p-4"><ErrorNotice message={error} onRetry={() => setAttempt((n) => n + 1)} /></div>
   if (!pulse) return <p className="p-4 text-xs text-muted-foreground">Loading market pulse…</p>
 
   return (
@@ -123,8 +133,19 @@ function TechnicalTab() {
   const [series, setSeries] = useState<IndicatorSeries | null>(null)
   const [overlays, setOverlays] = useState<OverlayId[]>(['sma', 'ema'])
 
-  useEffect(() => { listInstruments().then((data) => { setInstruments(data); setSymbol((prev) => prev ?? data[0]?.symbol ?? null) }) }, [])
-  useEffect(() => { if (symbol) getIndicators(symbol).then(setSeries) }, [symbol])
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listInstruments()
+      .then((data) => { setInstruments(data); setSymbol((prev) => prev ?? data[0]?.symbol ?? null) })
+      .catch((err) => setLoadError(messageOf(err, 'Could not load the instrument list')))
+  }, [])
+  useEffect(() => {
+    if (!symbol) return
+    getIndicators(symbol)
+      .then((data) => { setSeries(data); setLoadError(null) })
+      .catch((err) => { setSeries(null); setLoadError(messageOf(err, `Could not load indicators for ${symbol}`)) })
+  }, [symbol])
 
   const filtered = instruments.filter((i) => i.symbol.toLowerCase().includes(query.toLowerCase())).slice(0, 50)
   const toggleOverlay = (id: OverlayId) => setOverlays((prev) => prev.includes(id) ? prev.filter((o) => o !== id) : [...prev, id])
@@ -149,6 +170,7 @@ function TechnicalTab() {
 
   return (
     <div className="technical-layout">
+      {loadError && <div className="col-span-full"><ErrorNotice message={loadError} /></div>}
       <Panel title="Symbol" eyebrow="SEARCH" className="symbol-panel">
         <label className="symbol-search-box"><Search className="size-3.5" /><input placeholder="Search NSE / BSE symbol..." value={query} onChange={(e) => setQuery(e.target.value)} /></label>
         <div className="symbol-list">{filtered.map((i) => <button key={i.symbol} className={i.symbol === symbol ? 'symbol-chip active' : 'symbol-chip'} onClick={() => setSymbol(i.symbol)}>{i.symbol}</button>)}</div>
@@ -247,18 +269,25 @@ function _statusDot(status: string | null): string {
 function DatalakeStatusTab() {
   const [status, setStatus] = useState<DatalakeStatus | null>(null)
   const [runs, setRuns] = useState<MarketDataProvenanceEntry[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     async function load() {
-      const [s, r] = await Promise.all([getDatalakeStatus(), listProvenance()])
-      if (!cancelled) { setStatus(s); setRuns(r) }
+      try {
+        const [s, r] = await Promise.all([getDatalakeStatus(), listProvenance()])
+        if (!cancelled) { setStatus(s); setRuns(r); setError(null) }
+      } catch (err) {
+        if (!cancelled) setError(messageOf(err, 'Could not load the data lake status'))
+      }
     }
     load()
     const interval = setInterval(load, 30000)
     return () => { cancelled = true; clearInterval(interval) }
-  }, [])
+  }, [attempt])
 
+  if (error && !status) return <div className="p-4"><ErrorNotice message={error} onRetry={() => setAttempt((n) => n + 1)} /></div>
   if (!status) return <p className="p-4 text-xs text-muted-foreground">Loading data lake status…</p>
 
   return (
@@ -306,11 +335,14 @@ function ProvidersTab() {
   const [brokers, setBrokers] = useState<BrokerCredentialStatus[]>([])
   const [breakers, setBreakers] = useState<BrokerCircuitBreakerStatus[]>([])
 
+  const [loadError, setLoadError] = useState<string | null>(null)
+
   useEffect(() => {
-    listLlmProviderStatus().then(setProviders)
-    listBrokerCredentialStatus().then(setBrokers)
-    listBrokerCircuitBreakerStatus().then(setBreakers)
-    const interval = setInterval(() => listBrokerCircuitBreakerStatus().then(setBreakers), 10_000)
+    const failed = (what: string) => (err: unknown) => setLoadError(messageOf(err, `Could not load ${what}`))
+    listLlmProviderStatus().then(setProviders).catch(failed('the LLM provider status'))
+    listBrokerCredentialStatus().then(setBrokers).catch(failed('the broker status'))
+    listBrokerCircuitBreakerStatus().then(setBreakers).catch(failed('the broker circuit breakers'))
+    const interval = setInterval(() => listBrokerCircuitBreakerStatus().then(setBreakers).catch(() => {}), 10_000)
     return () => clearInterval(interval)
   }, [])
 
@@ -318,6 +350,7 @@ function ProvidersTab() {
 
   return (
     <div className="technical-layout">
+      {loadError && <div className="col-span-full"><ErrorNotice message={loadError} /></div>}
       <Panel title="LLM providers" eyebrow="CREDENTIAL + FALLBACK-CHAIN STATUS">
         <div className="provider-status-list">
           {providers.map((p) => (

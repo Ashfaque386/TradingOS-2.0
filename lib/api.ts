@@ -312,6 +312,9 @@ export type KillSwitchState = {
   trip_reason: string | null
   last_drawdown_pct: number | null
   threshold_pct: number
+  tripped_at?: string | null
+  reset_at?: string | null
+  reset_reason?: string | null
 }
 
 export const getKillSwitch = (mode: KillSwitchMode) =>
@@ -1145,7 +1148,8 @@ export type BacktestRun = {
   created_at: string
 }
 
-export type ComparisonResult = { run_ids: string[]; correlations: Record<string, number> }
+// null: fewer than 10 overlapping days, so there is no honest number to show
+export type ComparisonResult = { run_ids: string[]; correlations: Record<string, number | null> }
 
 export const listBacktests = (strategyVersionId?: string) =>
   apiGet<BacktestRun[]>(
@@ -1194,22 +1198,40 @@ export const listAuditEntries = (params: { entityType?: string; entityId?: strin
 }
 export const verifyAuditChain = () => apiPost<AuditChainVerifyResult>('/api/v1/audit/verify')
 
-export async function downloadAuditExport(format: 'csv' | 'ndjson'): Promise<void> {
+// A file the server only hands to a signed-in user. A plain <a href> cannot carry the Bearer token,
+// so the browser would be given a 401 page: fetch it with the token and save the blob instead.
+export async function downloadAuthenticated(path: string, fallbackFilename: string): Promise<void> {
   const token = getAccessToken()
-  const res = await fetch(`${API_BASE_URL}/api/v1/audit/export?format=${format}`, {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   })
-  if (!res.ok) throw new ApiError(res.status, 'Export failed')
+  if (!res.ok) {
+    let detail = 'Download failed'
+    try {
+      const body = (await res.json()) as { detail?: unknown }
+      if (typeof body.detail === 'string') detail = body.detail
+    } catch {
+      // not JSON: keep the generic message
+    }
+    throw new ApiError(res.status, detail)
+  }
+  const named = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `audit_log_export.${format === 'ndjson' ? 'ndjson' : 'csv'}`
+  link.download = named?.[1] ?? fallbackFilename
   document.body.appendChild(link)
   link.click()
   link.remove()
   URL.revokeObjectURL(url)
 }
+
+export const downloadAuditExport = (format: 'csv' | 'ndjson') =>
+  downloadAuthenticated(
+    `/api/v1/audit/export?format=${format}`,
+    `audit_log_export.${format === 'ndjson' ? 'ndjson' : 'csv'}`
+  )
 
 // ---- Unified orders (paper + live) ----
 export type UnifiedExecution = {
@@ -1789,8 +1811,11 @@ export const listChatMessages = (sessionId: string) =>
   apiGet<ChatMessage[]>(`/api/v1/chat/sessions/${sessionId}/messages`)
 export const abortChatMessage = (sessionId: string) =>
   apiPost<void>(`/api/v1/chat/sessions/${sessionId}/abort`)
-export const chatExportUrl = (sessionId: string, format: 'markdown' | 'json' = 'markdown') =>
-  `${API_BASE_URL}/api/v1/chat/sessions/${sessionId}/export?format=${format}`
+export const downloadChatExport = (sessionId: string, format: 'markdown' | 'json' = 'markdown') =>
+  downloadAuthenticated(
+    `/api/v1/chat/sessions/${sessionId}/export?format=${format}`,
+    `chat_${sessionId}.${format === 'json' ? 'json' : 'md'}`
+  )
 
 export type ChatStreamChunk = { text: string; done: boolean; provider: string | null }
 
