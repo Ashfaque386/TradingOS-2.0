@@ -36,7 +36,7 @@ test('Chat export downloads the conversation instead of opening a 401 page', asy
 
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('button', { name: 'Export' }).click(),
+      page.getByRole('button', { name: 'Export', exact: true }).click(),
     ])
 
     expect(download.suggestedFilename()).toBe(`chat_${id}.md`)
@@ -60,7 +60,8 @@ test('Market Analysis says why the pulse is unavailable instead of loading forev
 
   await page.goto('/analysis')
 
-  await expect(page.getByRole('alert')).toContainText('No broker is connected')
+  // Next also renders its own empty role=alert route announcer, so pick ours by its text.
+  await expect(page.getByRole('alert').filter({ hasText: 'No broker is connected' })).toBeVisible()
   await expect(page.getByText('Loading market pulse')).toHaveCount(0)
 })
 
