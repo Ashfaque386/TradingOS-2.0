@@ -79,7 +79,8 @@ test('an alert-level change that fails to save is shown as not saved', async ({ 
     const toggle = slackCard(page).getByRole('button', { name: /on slack$/ }).first()
     const before = await toggle.getAttribute('aria-label')
     await page.route('**/api/v1/notification-channels/slack', async (route) => {
-      if (route.request().method() === 'POST') {
+      // The toggle saves with PATCH (settings only, no secret can travel with it).
+      if (route.request().method() === 'PATCH') {
         await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'boom' }) })
       } else {
         await route.continue()
@@ -91,6 +92,32 @@ test('an alert-level change that fails to save is shown as not saved', async ({ 
     await expect(slackCard(page).getByRole('alert')).toBeVisible()
     // Not left showing a change that was never saved.
     await expect(toggle).toHaveAttribute('aria-label', before as string)
+  } finally {
+    await removeSlack(token)
+  }
+})
+
+test('an alert-level change is saved without losing the channel', async ({ page }) => {
+  const token = await adminToken()
+  await removeSlack(token)
+  await configureSlack(token)
+  try {
+    await login(page, E2E_USERS.admin)
+    await page.goto('/settings?section=notifications')
+    const toggle = slackCard(page).getByRole('button', { name: /on slack$/ }).first()
+
+    await toggle.click()
+
+    await expect
+      .poll(async () => {
+        const res = await fetch(`${API_BASE_URL}/api/v1/notification-channels`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const channels = (await res.json()) as { channel: string; configured: boolean; alert_levels: string[] }[]
+        const slack = channels.find((c) => c.channel === 'slack')
+        return slack ? { configured: slack.configured, levels: slack.alert_levels.length } : null
+      })
+      .toEqual({ configured: true, levels: 1 })
   } finally {
     await removeSlack(token)
   }
