@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, ChevronRight, Code2, Gauge, MessageSquare, RefreshCw, ShieldAlert, ShieldCheck, Sparkles, Terminal, TrendingUp, X, Zap } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
   type EnrollLiveTradingInput,
@@ -350,9 +349,9 @@ export default function StrategiesPage() {
     }
   }
 
-  if (selectedId) return <ShellLayout><Review strategyId={selectedId} onBack={() => setSelectedId(null)} canOperate={canOperate} canSignOffLive={canSignOffLive} /></ShellLayout>
+  if (selectedId) return <><Review strategyId={selectedId} onBack={() => setSelectedId(null)} canOperate={canOperate} canSignOffLive={canSignOffLive} /></>
 
-  return <ShellLayout><div className="mx-auto w-full max-w-[1700px]">
+  return <><div className="mx-auto w-full max-w-[1700px]">
     <div className="strategy-page-header"><div><p className="eyebrow">TRADINGOS // STRATEGY CONTROL PLANE</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Strategy lifecycle</h1><p className="mt-2 text-sm text-slate-400">From generated hypothesis to controlled live capital. Select a strategy to open its review workspace.</p></div><div className="strategy-header-stats"><div><strong>{strategies.length}</strong><span>TRACKED</span></div><div><strong>{strategies.filter(s => !['Ideation', 'Live', 'Deprecated'].includes(stageOf(s))).length.toString().padStart(2, '0')}</strong><span>IN FLIGHT</span></div><div><strong className="text-emerald-300">{strategies.filter(s => stageOf(s) === 'Live').length.toString().padStart(2, '0')}</strong><span>LIVE</span></div></div></div>
     {canOperate && <form onSubmit={handleCreate} className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/[.02] p-3">
       <input value={name} onChange={e => setName(e.target.value)} placeholder="Strategy name" className="min-w-0 flex-1 basis-48 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground" />
@@ -362,5 +361,5 @@ export default function StrategiesPage() {
       {createError && <span className="text-xs text-rose-300">{createError}</span>}
     </form>}
     <div className="strategy-board">{stages.map((stage, index) => <section className="strategy-column" key={stage}><div className="strategy-column-title"><div><span className="stage-index">0{index + 1}</span><h2>{stage}</h2></div><span className="stage-count">{grouped[stage].length}</span></div><div className="strategy-cards">{grouped[stage].map(item => <button className="strategy-card" key={item.id} onClick={() => setSelectedId(item.id)}><div className="flex items-start justify-between gap-2"><Badge tone={item.instrument_class === 'options' ? 'violet' : 'cyan'}>{item.instrument_class}</Badge><span className="font-mono text-[10px] text-slate-500">{item.versions.length} ver</span></div><h3>{item.name}</h3><div className="flex items-center justify-between gap-2"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><TrendingUp className="size-3" /> {item.versions[item.versions.length - 1]?.static_validation_passed ? 'validated' : 'awaiting validation'}</span></div><div className="mt-3 flex items-center justify-between border-t border-white/8 pt-2 text-[10px] text-slate-500"><span>REVIEW WORKSPACE</span><ChevronRight className="size-3.5 text-cyan-300" /></div></button>)}</div></section>)}</div>
-  </div></ShellLayout>
+  </div></>
 }

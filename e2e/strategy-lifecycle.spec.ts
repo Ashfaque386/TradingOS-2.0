@@ -18,7 +18,7 @@ import { E2E_USERS, login } from './utils'
 // page had no input field for it at all -- meaning the live-eligibility
 // sign-off could never actually be approved through the browser, no
 // matter what an operator entered. Fixed alongside this spec (see
-// app/strategies/page.tsx's "Backtest win rate" field).
+// app/(console)/strategies/page.tsx's "Backtest win rate" field).
 test('strategy moves through its full lifecycle to Live Eligible', async ({ page }) => {
   const strategyName = `E2E Lifecycle ${Date.now()}`
 
@@ -35,7 +35,7 @@ test('strategy moves through its full lifecycle to Live Eligible', async ({ page
 
   await expect(page.getByRole('heading', { level: 1, name: strategyName })).toBeVisible()
   // Mission Control's sign-off queue cards identify a strategy only by
-  // "strategy · <8-char id>" (SignoffQueue in app/mission-control/page.tsx),
+  // "strategy · <8-char id>" (SignoffQueue in app/(console)/mission-control/page.tsx),
   // never by name -- capture the id shown here to find the right card later.
   const strategyIdText = await page.locator('.strategy-review-hero').getByText(/STRATEGY ID/).textContent()
   const strategyIdPrefix = strategyIdText!.split('·')[1]!.trim().toLowerCase()

@@ -5,7 +5,6 @@ import { Float, OrbitControls, Sparkles } from '@react-three/drei'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Mesh } from 'three'
 import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi, Zap } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
 import {
@@ -276,7 +275,7 @@ export default function Home() {
   const filteredActivities = filter === 'All' ? activities : activities.filter((a) => a.entity_type === filter)
   const entityTypes = useMemo(() => ['All', ...Array.from(new Set(activities.map((a) => a.entity_type)))], [activities])
 
-  return <ShellLayout><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
+  return <><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
     <div className={`autonomy-banner ${autonomousSubscriptions.length > 0 ? 'autonomy-banner-active' : 'autonomy-banner-idle'}`}>
       {autonomousSubscriptions.length > 0 ? <Zap /> : <ShieldAlert />}
       <div>
@@ -338,5 +337,5 @@ export default function Home() {
     </section>
     <section className="grid gap-5 xl:grid-cols-[1.35fr_1fr]"><article className="pulse-panel overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 p-5"><div><p className="eyebrow">LIVE ACTIVITY FEED</p><p className="mt-1 text-xs text-muted-foreground">Organization-wide agent events · newest first</p></div><div className="flex gap-1 rounded-lg bg-white/4 p-1">{entityTypes.map((item) => <button key={item} onClick={() => setFilter(item)} className={`filter-chip ${filter === item ? 'filter-chip-active' : ''}`}>{item}</button>)}</div></div><div className="activity-list">{filteredActivities.length === 0 && <div className="p-5 text-xs text-muted-foreground">No activity yet. Actions taken across the organization will appear here in real time.</div>}{filteredActivities.map((event) => <div key={event.id} className={`activity-row severity-${severityFor(event)}`}><span className="activity-avatar">{initialsFor(event.actor)}</span><div className="min-w-0 flex-1"><p className="truncate text-sm text-foreground">{event.actor} · {event.action} {event.entity_type} {event.entity_id}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{relativeTime(event.created_at)}</p></div></div>)}</div></article><Vitals /></section>
     <footer className="flex items-center justify-between pb-3 text-[10px] text-muted-foreground"><span className="flex items-center gap-2"><Activity className="size-3" /> Role: {roleLabel(role)} · {isReadOnly ? 'Read-only observability mode' : 'Control plane enabled'}</span><span>TRADINGOS OS · {autonomousSubscriptions.length > 0 ? `LIVE AUTONOMY ON (${autonomousSubscriptions.length})` : 'LIVE AUTONOMY OFF'}</span></footer>
-  </div></ShellLayout>
+  </div></>
 }

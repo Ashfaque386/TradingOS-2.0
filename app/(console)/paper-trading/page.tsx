@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, RefreshCw } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Attention } from '@/components/paper-trading/attention'
 import { CloseDialog, DeactivateDialog, EnrolDialog, SettingsDialog, activate } from '@/components/paper-trading/dialogs'
@@ -133,7 +132,7 @@ export default function PaperTradingPage() {
   }
 
   return (
-    <ShellLayout>
+    <>
       <div className="pt-page">
         <header className="fleet-page-header">
           <div>
@@ -245,6 +244,6 @@ export default function PaperTradingPage() {
           }
         />
       )}
-    </ShellLayout>
+    </>
   )
 }

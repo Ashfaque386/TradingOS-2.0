@@ -32,7 +32,6 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { SigningKeyCard } from '@/components/settings/signing-key-card'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
@@ -1225,7 +1224,7 @@ export default function SettingsPage() {
   }, [])
 
   return (
-    <ShellLayout>
+    <>
       <main className="set-page mx-auto w-full max-w-[1500px] pb-10">
         <header className="set-header">
           <p className="eyebrow">TRADINGOS // CONTROL PLANE</p>
@@ -1261,6 +1260,6 @@ export default function SettingsPage() {
           </section>
         </div>
       </main>
-    </ShellLayout>
+    </>
   )
 }

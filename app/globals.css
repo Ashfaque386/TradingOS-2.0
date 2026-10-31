@@ -575,7 +575,7 @@
   .cmdk-footer { display: flex; gap: 1rem; border-top: 1px solid rgba(255,255,255,.08); padding: .6rem 1rem; color: #64748b; font-size: .58rem; }
   .cmdk-footer span { display: inline-flex; align-items: center; gap: .3rem; }
 
-  /* ---- Paper-trading desk (app/paper-trading) ---- */
+  /* ---- Paper-trading desk (app/(console)/paper-trading) ---- */
   .pt-page { display: grid; gap: 1.1rem; }
   /* two classes deep so a P&L's colour beats the base colour of the element it sits in */
   .pt-page .pt-gain { color: #34d399; } .pt-page .pt-loss { color: #fb7185; } .pt-page .pt-flat { color: #94a3b8; }

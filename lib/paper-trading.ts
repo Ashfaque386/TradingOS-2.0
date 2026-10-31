@@ -1,4 +1,4 @@
-// Pure logic behind the paper-trading desk (app/paper-trading): naming a contract, the cost
+// Pure logic behind the paper-trading desk (app/(console)/paper-trading): naming a contract, the cost
 // waterfall, the at-expiry payoff of an option structure, what needs an operator's attention, and
 // the expiry countdown. Nothing here touches React, the network or the clock (`now` is passed
 // in), so it is tested directly (e2e/paper-trading-logic.spec.ts).

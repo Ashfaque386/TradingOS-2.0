@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { PieChart, RefreshCw, Sparkles, ThumbsDown, ThumbsUp } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
   type PortfolioRecommendation,
@@ -165,7 +164,7 @@ export default function PortfolioPage() {
   }
 
   return (
-    <ShellLayout>
+    <>
       <main className="orders-page mx-auto w-full max-w-[1700px] pb-10">
         <header className="orders-header">
           <div>
@@ -249,6 +248,6 @@ export default function PortfolioPage() {
           </div>
         </Panel>
       </main>
-    </ShellLayout>
+    </>
   )
 }

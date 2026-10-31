@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { Download, MessageSquare, Pin, PinOff, Plus, Search, Send, Square, Trash2 } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import {
   type ChatMessage,
   type ChatSession,
@@ -169,7 +168,7 @@ export default function ChatPage() {
   const active = sessions.find((s) => s.id === activeId) ?? null
 
   return (
-    <ShellLayout>
+    <>
       <div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
         <header className="mission-hero">
           <div>
@@ -335,6 +334,6 @@ export default function ChatPage() {
           </section>
         </div>
       </div>
-    </ShellLayout>
+    </>
   )
 }

@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Clock3, Search, ShieldCheck, Timer, X } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import {
@@ -125,7 +124,7 @@ export default function OrdersPage() {
     runCheck()
   }
 
-  return <ShellLayout><main className="orders-page mx-auto w-full max-w-[1700px] pb-10">
+  return <><main className="orders-page mx-auto w-full max-w-[1700px] pb-10">
     <header className="orders-header"><div><p className="eyebrow">TRADINGOS // EXECUTION CONTROL</p><h1>Orders &amp; Trades</h1><p>Unified paper and live execution ledger</p></div></header>
     {loadError && <ErrorNotice className="mb-4" message={loadError} onRetry={reload} />}
     <section className="orders-summary">
@@ -145,5 +144,5 @@ export default function OrdersPage() {
       </Panel>
       <Panel title="Broker gateways" eyebrow="CIRCUIT BREAKERS">{breakers === null ? <p className="p-4 text-xs text-muted-foreground">Could not read the broker circuit breakers.</p> : breakers.length === 0 ? <p className="p-4 text-xs text-muted-foreground">No broker is configured.</p> : <div className="position-list">{breakers.map(b => <div className="position-row" key={b.broker}><div className="min-w-0"><strong>{b.broker}</strong><small>{b.consecutive_failures} of {b.failure_threshold} failures{b.cooldown_remaining_seconds ? ` · retry in ${Math.ceil(b.cooldown_remaining_seconds)}s` : ''}</small></div><div className="text-right"><strong className={b.state === 'open' ? 'text-rose-300' : 'text-emerald-300'}>{b.state === 'open' ? 'OPEN (blocking)' : 'CLOSED'}</strong></div></div>)}</div>}</Panel>
     </aside></div>
-  </main></ShellLayout>
+  </main></>
 }

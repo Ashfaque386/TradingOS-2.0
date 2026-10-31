@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Bar, CartesianGrid, ComposedChart, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertTriangle, Cable, CheckCircle2, Clock3, Database, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles, XCircle } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { ChartContainer } from '@/components/ui/chart'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { messageOf } from '@/lib/errors'
@@ -529,7 +528,7 @@ export default function MarketAnalysisPage() {
   const [tab, setTab] = useState<TabId>('pulse')
   const active = useMemo(() => TABS.find((t) => t.id === tab), [tab])
   return (
-    <ShellLayout>
+    <>
       <main className="analysis-page mx-auto w-full max-w-[1700px] pb-10">
         <header className="analysis-header">
           <div><p className="eyebrow">TRADINGOS // MARKET INTELLIGENCE</p><h1>Market Analysis</h1><p>Volatility, sector breadth, data health, and derivatives instrument master — real backend state, honest gaps labeled where no live feed exists.</p></div>
@@ -543,6 +542,6 @@ export default function MarketAnalysisPage() {
         {tab === 'providers' && <ProvidersTab />}
         {tab === 'chain' && <OptionChainTab />}
       </main>
-    </ShellLayout>
+    </>
   )
 }

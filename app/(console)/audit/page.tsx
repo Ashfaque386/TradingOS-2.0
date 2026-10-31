@@ -2,7 +2,6 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Download, FileJson, Lock, RefreshCw, Search, ShieldCheck, ShieldOff } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth, roleLabel } from '@/components/auth/auth-provider'
 import type { Role } from '@/lib/api'
 import { type AuditChainVerifyResult, type AuditLogEntry, ApiError, downloadAuditExport, listAuditEntries, verifyAuditChain } from '@/lib/api'
@@ -23,7 +22,7 @@ function DetailsBlock({ details, correlationId }: { details: Record<string, unkn
 
 function AccessRestricted({ role }: { role: Role }) {
   return (
-    <ShellLayout>
+    <>
       <main className="audit-page mx-auto w-full max-w-[1000px] pb-10">
         <div className="restricted-state">
           <div className="restricted-icon"><Lock className="size-6" /></div>
@@ -37,7 +36,7 @@ function AccessRestricted({ role }: { role: Role }) {
           </div>
         </div>
       </main>
-    </ShellLayout>
+    </>
   )
 }
 
@@ -107,7 +106,7 @@ export default function AuditLogPage() {
   if (!canView) return <AccessRestricted role={role} />
 
   return (
-    <ShellLayout>
+    <>
       <main className="audit-page mx-auto w-full max-w-[1700px] pb-10">
         <header className="audit-header">
           <div><p className="eyebrow">TRADINGOS // COMPLIANCE</p><h1>Audit Log</h1><p>Immutable, hash-chained record of every human and agent action across the platform.</p></div>
@@ -165,6 +164,6 @@ export default function AuditLogPage() {
           </div>
         </section>
       </main>
-    </ShellLayout>
+    </>
   )
 }

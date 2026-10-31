@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useState } from 'react'
 import { CalendarRange, FileText, RefreshCw, Sparkles } from 'lucide-react'
-import { ShellLayout } from '@/components/shell/shell-layout'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
   type InvestorReport,
@@ -75,7 +74,7 @@ export default function InvestorReportsPage() {
   }
 
   return (
-    <ShellLayout>
+    <>
       <div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
         <header className="mission-hero">
           <div>
@@ -143,6 +142,6 @@ export default function InvestorReportsPage() {
           </section>
         </div>
       </div>
-    </ShellLayout>
+    </>
   )
 }
