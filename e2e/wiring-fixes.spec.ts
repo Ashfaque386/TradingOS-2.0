@@ -139,13 +139,15 @@ test('the order form is a dry-run pre-trade check: it needs real numbers and sen
   await page.getByLabel('REFERENCE PRICE').fill('100')
   await page.getByLabel('PORTFOLIO VALUE').fill('1000000')
   await run.click()
-  await expect(page.getByText('Would be allowed')).toBeVisible()
-  await expect(page.getByText('Nothing was sent')).toBeVisible()
+  // exact: the panel's intro sentence also says "would be allowed".
+  await expect(page.getByText('Would be allowed', { exact: true })).toBeVisible()
+  await expect(page.getByText(/passes every paper pre-trade check\. Nothing was sent\./)).toBeVisible()
 
   // The same order against a tiny portfolio breaks the position limit: refused, with the reason.
   await page.getByLabel('PORTFOLIO VALUE').fill('1000')
   await run.click()
-  await expect(page.getByText('Would be refused')).toBeVisible()
+  await expect(page.getByText('Would be refused', { exact: true })).toBeVisible()
+  await expect(page.getByText('Would be allowed', { exact: true })).toHaveCount(0)
 
   await expect(page.getByText('Review LIVE order')).toHaveCount(0)
 })
