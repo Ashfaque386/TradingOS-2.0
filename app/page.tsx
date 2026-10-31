@@ -286,7 +286,7 @@ export default function Home() {
       <div className="pulse-header"><div><p className="eyebrow">TRADINGOS // ORGANIZATION PULSE</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">The intelligence layer is <span style={{ color: config.color }}>{state.toLowerCase()}.</span></h1><p className="mt-2 text-sm text-muted-foreground">{config.copy} · NSE / BSE synchronized</p></div></div>
       <div className="pulse-orb"><PulseScene state={state} reduceMotion={powerSave} /><div className="pulse-status" style={{ borderColor: config.color, color: config.color }}><span className="status-dot" />{state}<small>{state === 'AWAITING APPROVAL' ? `${pendingSignoffs} pending` : state === 'RISK ALERT' ? 'PERIMETER BREACH' : 'LIVE'}</small></div></div>
       <div className="kpi-strip">
-        <div><Bot /><span>ACTIVE AGENTS<strong>{activeAgentsCount} / {agents.length || 24}</strong></span></div>
+        <div><Bot /><span>ACTIVE AGENTS<strong>{agents.length ? `${activeAgentsCount} / ${agents.length}` : '—'}</strong></span></div>
         <div><Radio /><span>LIVE RUNS<strong>{liveRunsCount.toString().padStart(2, '0')}</strong></span></div>
         <div className={pendingSignoffs > 0 ? 'kpi-alert' : ''}><AlertTriangle /><span>PENDING SIGN-OFFS<strong>{pendingSignoffs.toString().padStart(2, '0')}</strong></span></div>
         <div><TrendingUp /><span>TODAY'S REALIZED P&L<strong className={todaysPnl === null ? 'text-muted-foreground' : todaysPnl.realized_pnl < 0 ? 'text-rose-300' : todaysPnl.realized_pnl > 0 ? 'text-emerald-300' : ''}>{todaysPnl === null ? '—' : `${todaysPnl.realized_pnl >= 0 ? '+' : '-'}₹${Math.abs(todaysPnl.realized_pnl).toFixed(0)}`}</strong></span></div>

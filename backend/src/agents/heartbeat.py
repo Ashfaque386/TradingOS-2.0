@@ -5,16 +5,17 @@ Phase 1's existing AgentDefaultsConfig.heartbeat_enabled /
 AgentEntryConfig.heartbeat_enabled overrides and
 heartbeat_interval_minutes).
 
-Structural isolation (the critical part of this requirement): this module
-never imports anything from src.execution or src.risk -- the modules that
-hold (future) order-placement and risk-limit-mutation code. That is not a
-convention to remember, it's the literal Python import graph: no name in
-this module's globals resolves to place_order or mutate_risk_limit, so
-calling either from here isn't merely denied by a permission check, it's a
-plain NameError -- those functions are not in scope to call.
-tests/test_agents_heartbeat.py asserts this by trying to import them from
-this module and confirming the import fails, not just that calling them
-raises PermissionError.
+Structural isolation (the critical part of this requirement): importing
+this module must not load any module that can place an order or change a
+risk limit -- src.orchestration (live_trading, paper_trading, risk_gate,
+risk_limits, kill_switch ...), src.brokers or src.engine. That is not a
+convention to remember, it's the literal Python import graph: nothing that
+can reach those functions is in scope here, so calling one from here isn't
+merely denied by a permission check, it's a plain NameError.
+tests/test_agents_heartbeat.py asserts this by importing this module (and
+the scheduler) in a fresh interpreter and listing what ended up in
+sys.modules, so it checks the real closure, including what a dependency
+pulls in, not just the names in this file's globals.
 
 The self-check itself only ever goes through
 src.agents.tools.registry.execute_skill() -- the same grant-gated call path

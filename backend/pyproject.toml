@@ -168,8 +168,8 @@ filterwarnings = [
 # subprocess, which coverage does not trace -- their tests are real
 # (tests/test_engine_sandbox.py, adversarial escapes included). Gating a number
 # that is wrong by construction would just teach everyone to ignore the gate.
-# src/main.py (app wiring), src/workers, src/execution and src/risk (empty
-# stubs) are left out for the same reason: they do not measure what they do.
+# src/main.py (app wiring) and src/workers are left out for the same reason:
+# they do not measure what they do.
 critical_file_floor = 95
 critical_files = [
   # The deterministic safety layer (Non-Negotiable Rule #2) ...

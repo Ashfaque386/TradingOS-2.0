@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import CheckDrawdownRequest, KillSwitchStateResponse, ResetKillSwitchRequest
+from src.audit.service import write_audit_entry
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.engine.risk.kill_switch import KillSwitchMode
@@ -36,6 +37,9 @@ def _to_response(state: KillSwitchState) -> KillSwitchStateResponse:
         trip_reason=state.trip_reason,
         last_drawdown_pct=state.last_drawdown_pct,
         threshold_pct=state.threshold_pct,
+        tripped_at=state.tripped_at.isoformat() if state.tripped_at else None,
+        reset_at=state.reset_at.isoformat() if state.reset_at else None,
+        reset_reason=state.reset_reason,
     )
 
 
@@ -69,15 +73,34 @@ async def check_drawdown_endpoint(
 @router.post("/{mode}/reset")
 async def reset_kill_switch_endpoint(
     mode: KillSwitchMode,
-    _body: ResetKillSwitchRequest,
+    body: ResetKillSwitchRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> KillSwitchStateResponse:
+    reason = (body.reason or "").strip() or None
+    tripped_state = await get_kill_switch_state(db, mode)
+    why_it_tripped = tripped_state.trip_reason
+    drawdown_at_trip = tripped_state.last_drawdown_pct
     try:
-        state = await reset_kill_switch(db, mode, reset_by=str(current_user.id))
+        state = await reset_kill_switch(db, mode, reset_by=str(current_user.id), reason=reason)
     except KillSwitchNotTrippedError as exc:
         # 409, not a 200 no-op: the audit middleware writes a row for every 2xx,
         # and a "reset" row for a switch that was not tripped would put a reset
         # in the permanent trail that never happened.
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc).capitalize()) from exc
+    # The audit middleware records only that a reset happened; the reason a person gave, and what
+    # they were resetting, belong in the permanent trail too.
+    await write_audit_entry(
+        db,
+        actor=current_user.email,
+        action="kill_switch.reset",
+        entity_type="kill-switch",
+        entity_id=mode,
+        details={
+            "reason": reason,
+            "tripped_because": why_it_tripped,
+            "drawdown_pct_at_trip": drawdown_at_trip,
+        },
+    )
+    await db.commit()
     return _to_response(state)

@@ -10,6 +10,63 @@ compose, CI, the frontend pages and the E2E specs, plus the earlier audits
 was measured against a live broker or a live market session, and no security scan, load test or
 penetration test was run. Where a claim rests on a vendor's documentation, it says so.
 
+## 0. Progress and corrections (updated 2026-10-31)
+
+A second pass (six read-only explorers over the gaps, the backend/frontend wiring and the UI) checked every
+claim below against commit `4d32fa2` and found more. The plan to close everything is a twelve-phase one;
+this is where it stands.
+
+**Closed in phase 1 (foundations and quick fixes):**
+
+| Gap | What changed |
+|---|---|
+| G14 | `tests/test_migration_schema_parity.py` builds one database with `alembic upgrade head` and one with `create_all()` and compares what Postgres says about both (columns, constraint definitions, indexes, enum labels, triggers, functions); also runs `alembic check` and asserts a single head. It sees what `alembic check` cannot (CHECKs, enums, defaults, triggers) and names the exact line that differs. |
+| G15 | The two stub packages (`src/execution`, `src/risk`) are deleted; the heartbeat isolation proof is now an import-closure test in a fresh interpreter, with a positive control, instead of a `hasattr` check on names that no longer need to exist. |
+| G16 | Fixed: the local-date tests (`date.today()` against UTC bounds), the fixed 2030 option expiry, and the real-clock lag test (`tests/clock.py` is the shared frozen clock). Still open, as a watch item: four tests that read IST "today" twice and could flake only if a run straddles 00:00 IST. |
+| G25 | Post-trade review, investor reports, the portfolio's "today" P&L, the trading-holiday gauge and the price-history check now cut the day at IST, not UTC. |
+| G3 (code) | Fixed-date holidays are generated to 2040 (they stopped at 2030), Ambedkar Jayanti (14 Apr) is a fixed holiday (2025 was missing it), calendar entries can carry names, and `GET /market-data/holidays?year=` lists a year and warns when the file has nothing for it. **Still open: the 2026-27 movable dates in `config/nse_holidays.json`**, which wait for the operator to confirm them. |
+| G19 | New: the data lake, its backups and the audit archive are on named volumes (they were inside the container and deleted by every `down && up --build`). Upgrading needs the copy-out steps in the README. |
+| G18 | New: saving a notification channel kept nothing it was not sent, so the alert-level toggle emptied the channel's token and chat id. A field left out of a save is now kept; `PATCH /notification-channels/{ch}` changes only non-secret settings; unknown alert levels are rejected; the Settings toggle uses the PATCH. |
+| (reset reason) | A kill-switch reset's reason was sent and discarded. It is stored (`reset_reason`), returned by `GET /kill-switch/{mode}` and written to the audit trail with what was reset. |
+| (suggestions) | `POST /strategies/{id}/suggestions` is Administrator and Portfolio Manager only, like its review and regenerate steps (it was open to every role, the read-only auditor included). |
+
+**Corrections to what this document first said:**
+- Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
+- The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.
+- `ALERT_LEVELS` is in `lib/api.ts`, not `app/settings/page.tsx`; and `alert_levels` was never validated anywhere.
+- The sentence-transformers embedding provider is built (commit `457ab83`) as an optional extra that neither Dockerfile installs.
+- The roster is 30 agents, not 24.
+- `reconcile_pending_trades` exists (every 15 s), so "live trades never reach `filled`" is out of date; what is still missing is that it never corrects the position of a rejected or cancelled order.
+- The heartbeat stubs existed so the isolation proof had something to refer to; the proof is now stronger without them.
+
+**Found since (new gaps, not yet fixed):**
+- **G20** the rate limiter trusts a client-supplied `X-Forwarded-For`; an unknown e-mail returns faster than a wrong password; argon2 hashing blocks the event loop.
+- **G21** `/docs`, `/redoc` and `/openapi.json` are unauthenticated.
+- **G22** live path: `LivePosition` keeps the phantom quantity of rejected/cancelled orders; the live adapter is chosen once at boot; live intents have no staleness guard; the live circuit-band check compares a price with itself; one position row per strategy, not per symbol.
+- **G23** the kill-switch threshold ignores the dual-control limit (`get_effective_risk_limit` has no caller), `POST /check` can overwrite it, and an automatic trip would write no audit row.
+- **G24** the "clean shadow-mode streak" the Go-Live gate asks for is undefined and cannot be derived (`shadow_mode_runs` has no strategy or outcome).
+- **G27** `prom/prometheus`, `grafana/grafana` and `temporalio/temporal` are `:latest`; Python has no lock or constraints file.
+- **G28** per-agent narration is unbuilt; fundamentals, valuation and macro agents have no data source; agent edits are audited as `"cli"`.
+- **G29** `/admin/users*` has no UI.
+
+**Backend/frontend wiring audit (2026-10-30, static read of 182 endpoints and 153 client exports).** No frontend call lacks a backend
+route (138 of 138 method+path pairs, query parameters and WebSocket paths match). 46 backend endpoints have no frontend caller: 26 by
+design (webhooks, OAuth callbacks, health/metrics, scheduler triggers that Mission Control's "Run now" covers, redundant single-item
+GETs) and 20 that are user-facing capabilities with no UI (admin users; backtest create / walk-forward / optimize; the kill-switch
+check and its trip details; shadow mode; paper `backfill-history` and `signals`; live position, orders and trades per strategy;
+audit trade-trace and actor-summary; approvals history). Defects, most serious first:
+- **W1** Chat Export is a plain `<a href>` to a Bearer-only route: 401 for every user.
+- **W2** Alert toggles wiped the channel's secrets (fixed, G18); the inbound allowlist and signing secrets have no UI at all.
+- **W3** Backtests Compare crashes on a `null` correlation (`toFixed`).
+- **W4** Market Analysis opens on a spinner that never resolves (the pulse endpoint answers 503 by design, no catch); five more pages and tabs do the same on a failed load.
+- **W5** Manual order entry persists nothing, claims live exposure, its typed-symbol confirm can be bypassed, and its portfolio value defaults to 1,000,000.
+- **W6** Mission Control's feed shows the six oldest of the latest 30 events.
+- **W7** The Orders status filter does not use the backend's vocabulary (`pending_confirmation`, `failed`).
+- **W8** The kill-switch trip reason, drawdown and threshold are fetched and never shown; "OFF · ARMED" is shown when both fetches failed.
+- **W9** Static labels: "PAPER ENVIRONMENT" while live autonomy may be on, "verified" on every activity row, "SYSTEM ONLINE", "24 agents", "Monday 07:00".
+- **W10** Risk-limit dual control has no effect on enforcement (G23) and its UI has free-text names, no history and no reject.
+- **W11-W23** fabricated "not configured" cards on a failed fetch; Backtests filter and `refusal_reason`; Audit searches only the newest 200 entries; TS types that drop backend fields; "Test connection" shown to roles the backend rejects; Strategies live panel vanishing on a failed fetch; login/register mapping every non-401 to "connectivity"; palette missing three pages and a `?view=queue` link that does nothing; gateway-config read-modify-write that flattens the file and can race; scheduled-job edits that are in memory only; polling load against a 300/min limit and unbounded N+1 list endpoints; accessibility gaps; a Vercel analytics beacon on a self-hosted console; `ShellLayout` mounted inside every page.
+
 ## 1. Where the app stands
 
 | | |

@@ -80,6 +80,7 @@ import {
   writeBrokerCredentials,
   writeBrokerRedirectUri,
   writeLlmProviderCredentials,
+  updateNotificationChannel,
   writeNotificationChannel,
 } from '@/lib/api'
 
@@ -1055,7 +1056,7 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
     setBusy(true)
     setError(null)
     try {
-      await writeNotificationChannel(channel, { enabled: status.enabled, alert_levels: ALERT_LEVELS.filter((l) => next[l]) })
+      await updateNotificationChannel(channel, { alert_levels: ALERT_LEVELS.filter((l) => next[l]) })
       onChanged()
     } catch (err) {
       setPrefs(previous) // the change was not saved: do not leave the toggle showing it

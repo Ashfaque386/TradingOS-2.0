@@ -18,13 +18,15 @@ from typing import Any
 import httpx
 import pandas as pd
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
     DatalakeStatusResponse,
     FreshnessRecordResponse,
+    HolidayEntryResponse,
+    HolidaysResponse,
     IndicatorSeriesResponse,
     InstrumentResponse,
     LiveOptionChainEntryResponse,
@@ -47,6 +49,7 @@ from src.core.rbac import Role, register_policy, require_role
 from src.data.broker_provider import NoRealDataSourceError
 from src.data.lake import read_daily_bars
 from src.data.market_data_factory import get_market_data_provider
+from src.data.nse_calendar import calendar_file_covers_year, holidays_for_year
 from src.data.providers import AnyMarketDataProvider
 from src.engine.indicators import (
     bollinger_bands,
@@ -56,7 +59,7 @@ from src.engine.indicators import (
     simple_moving_average,
 )
 from src.engine.options_pricing import implied_volatility, year_fraction
-from src.engine.paper_trading.market_hours import is_market_open_ist
+from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
 from src.models.instrument import Instrument
 from src.models.market_data_provenance import MarketDataProvenance
@@ -86,6 +89,7 @@ _KNOWN_PIPELINES = (
 )
 
 register_policy("GET", "/api/v1/market-data/market-hours", roles=list(Role))
+register_policy("GET", "/api/v1/market-data/holidays", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/pulse", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/freshness/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/indicators/{symbol}", roles=list(Role))
@@ -153,6 +157,38 @@ async def market_hours_endpoint(
 ) -> MarketHoursResponse:
     now = datetime.now(UTC)
     return MarketHoursResponse(is_open=is_market_open_ist(now), as_of=now.isoformat())
+
+
+@router.get("/holidays")
+async def holidays_endpoint(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    _current_user: User = Depends(require_role),
+) -> HolidaysResponse:
+    """The trading holidays the calendar knows for a year (default: this IST year), and whether
+    its movable-holiday file has anything for that year at all."""
+    target_year = year if year is not None else datetime.now(IST).year
+    covered = calendar_file_covers_year(target_year)
+    return HolidaysResponse(
+        year=target_year,
+        holidays=[
+            HolidayEntryResponse(
+                date=holiday.day.isoformat(),
+                weekday=holiday.day.strftime("%A"),
+                name=holiday.name,
+                source=holiday.source,
+                on_weekend=holiday.on_weekend,
+            )
+            for holiday in holidays_for_year(target_year)
+        ],
+        calendar_file_covers_year=covered,
+        warning=None
+        if covered
+        else (
+            f"The holiday calendar file lists no movable holidays for {target_year}: Holi, Eid, "
+            "Diwali and the other movable holidays are being treated as trading days. Update "
+            "config/nse_holidays.json from NSE's circular."
+        ),
+    )
 
 
 @router.get("/pulse")

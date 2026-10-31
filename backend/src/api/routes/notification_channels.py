@@ -14,6 +14,7 @@ simulated success.
 """
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx
@@ -27,6 +28,7 @@ from src.api.schemas import (
     NotificationChannelStatusResponse,
     TestNotificationChannelRequest,
     TestNotificationChannelResponse,
+    UpdateNotificationChannelRequest,
     WriteNotificationChannelRequest,
 )
 from src.audit.service import write_audit_entry
@@ -50,6 +52,7 @@ _WRITE_ROLES = [Role.SYSTEM_ADMINISTRATOR]
 
 register_policy("GET", "/api/v1/notification-channels", roles=list(Role))
 register_policy("POST", "/api/v1/notification-channels/{channel}", roles=_WRITE_ROLES)
+register_policy("PATCH", "/api/v1/notification-channels/{channel}", roles=_WRITE_ROLES)
 register_policy("DELETE", "/api/v1/notification-channels/{channel}", roles=_WRITE_ROLES)
 register_policy("POST", "/api/v1/notification-channels/{channel}/test", roles=_WRITE_ROLES)
 register_policy("POST", "/api/v1/notification-channels/telegram/detect-chat-id", roles=_WRITE_ROLES)
@@ -110,30 +113,59 @@ async def write_notification_channel_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     parsed_channel = _require_known_channel(channel)
-    store.set_config(
-        parsed_channel,
-        NotificationChannelConfig(
-            enabled=body.enabled,
-            bot_token=body.bot_token,
-            chat_id=body.chat_id,
-            webhook_url=body.webhook_url,
-            webhook_secret_token=body.webhook_secret_token,
-            public_key=body.public_key,
-            signing_secret=body.signing_secret,
-            allowed_sender_ids=body.allowed_sender_ids,
-            alert_levels=body.alert_levels,
-        ),
-    )
+    # A field the request leaves out keeps what is stored; one sent as null/[] clears it.
+    given = {name: getattr(body, name) for name in body.model_fields_set}
+    stored = store.get_config(parsed_channel)
+    merged = replace(stored if stored is not None else NotificationChannelConfig(), **given)
+    store.set_config(parsed_channel, merged)
     await write_audit_entry(
         db,
         actor=current_user.email,
         action="notification_channels.updated",
         entity_type="notification_channel",
         entity_id=channel,
-        details={"enabled": body.enabled, "alert_levels": body.alert_levels},
+        details={
+            "enabled": merged.enabled,
+            "alert_levels": merged.alert_levels,
+            "fields_sent": sorted(given),
+        },
     )
     await db.commit()
     logger.info("notification_channels.updated", channel=channel, updated_by=str(current_user.id))
+
+
+@router.patch("/{channel}", status_code=status.HTTP_204_NO_CONTENT)
+async def update_notification_channel_endpoint(
+    channel: str,
+    body: UpdateNotificationChannelRequest,
+    current_user: User = Depends(require_role),
+    store: NotificationChannelStore = Depends(get_channel_store),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    parsed_channel = _require_known_channel(channel)
+    changes = body.model_dump(exclude_none=True)
+    if not changes:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "send at least one of enabled, alert_levels, allowed_sender_ids",
+        )
+    stored = store.get_config(parsed_channel)
+    if stored is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"the {channel} channel is not configured")
+    store.set_config(parsed_channel, replace(stored, **changes))
+    await write_audit_entry(
+        db,
+        actor=current_user.email,
+        action="notification_channels.settings_changed",
+        entity_type="notification_channel",
+        entity_id=channel,
+        details={
+            "before": {name: getattr(stored, name) for name in changes},
+            "after": changes,
+        },
+    )
+    await db.commit()
+    logger.info("notification_channels.settings_changed", channel=channel, fields=sorted(changes))
 
 
 @router.delete("/{channel}", status_code=status.HTTP_204_NO_CONTENT)

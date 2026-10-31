@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
+from src.engine.paper_trading.market_hours import IST
 from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
 from src.models.order import Order
@@ -79,7 +80,7 @@ async def test_review_reports_real_win_loss_and_pnl_for_paper_trades(db_session_
         strategy_id = strategy.id
 
     async with db_session_factory() as db:
-        findings = await run_post_trade_review(db, as_of=date.today())
+        findings = await run_post_trade_review(db, as_of=datetime.now(IST).date())
 
     paper = next(f for f in findings if f.strategy_id == strategy_id and f.mode == "paper")
     assert paper.trades_reviewed == 3
@@ -144,7 +145,7 @@ async def test_review_reports_live_fills_with_cumulative_pnl_never_blended_with_
         strategy_id = strategy.id
 
     async with db_session_factory() as db:
-        findings = await run_post_trade_review(db, as_of=date.today())
+        findings = await run_post_trade_review(db, as_of=datetime.now(IST).date())
 
     live = next(f for f in findings if f.strategy_id == strategy_id and f.mode == "live")
     assert live.trades_reviewed == 1
@@ -178,14 +179,15 @@ async def test_run_post_trade_review_is_idempotent_per_date(db_session_factory):
         )
         await db.commit()
 
+    review_day = datetime.now(IST).date()  # read once: two reads can straddle IST midnight
     async with db_session_factory() as db:
-        await run_post_trade_review(db, as_of=date.today())
-        await run_post_trade_review(db, as_of=date.today())
+        await run_post_trade_review(db, as_of=review_day)
+        await run_post_trade_review(db, as_of=review_day)
 
         rows = (
             (
                 await db.execute(
-                    select(TradeReviewFinding).where(TradeReviewFinding.review_date == date.today())
+                    select(TradeReviewFinding).where(TradeReviewFinding.review_date == review_day)
                 )
             )
             .scalars()
@@ -204,3 +206,44 @@ async def test_latest_finding_for_strategy_returns_none_when_never_reviewed(db_s
         result = await latest_finding_for_strategy(db, strategy.id)
 
     assert result is None
+
+
+async def test_a_fill_made_after_midnight_ist_is_reviewed_on_the_ist_day_it_belongs_to(
+    db_session_factory,
+):
+    """22:00 UTC is 03:30 IST the next morning. The review cuts the day at IST midnight (the
+    scheduler names the day in IST), so that fill belongs to the IST date, not to the UTC date."""
+    async with db_session_factory() as db:
+        strategy = await create_strategy(db, name="IstBoundaryDemo", objective="obj")
+        version = await create_version_with_validation(db, strategy, _VALID_CODE)
+        subscription = PaperTradingSubscription(
+            strategy_version_id=version.id, symbol="RELIANCE", builtin_strategy="always_long"
+        )
+        db.add(subscription)
+        await db.flush()
+        db.add(
+            PaperFill(
+                subscription_id=subscription.id,
+                symbol="RELIANCE",
+                side="sell",
+                order_group_id=uuid.uuid4(),
+                requested_quantity=5,
+                filled_quantity=5,
+                avg_fill_price=2500.0,
+                fully_filled=True,
+                realized_pnl=500.0,
+                created_at=datetime(2026, 3, 10, 22, 0, tzinfo=UTC),
+            )
+        )
+        await db.commit()
+        strategy_id = strategy.id
+
+    async with db_session_factory() as db:
+        on_the_ist_day = await run_post_trade_review(db, as_of=date(2026, 3, 11))
+    async with db_session_factory() as db:
+        on_the_utc_day = await run_post_trade_review(db, as_of=date(2026, 3, 10))
+
+    reviewed = next(f for f in on_the_ist_day if f.strategy_id == strategy_id and f.mode == "paper")
+    assert reviewed.trades_reviewed == 1
+    assert reviewed.realized_pnl == 500.0
+    assert not [f for f in on_the_utc_day if f.strategy_id == strategy_id and f.mode == "paper"]

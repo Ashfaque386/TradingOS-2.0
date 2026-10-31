@@ -26,6 +26,7 @@ from src.brokers.base import BrokerAdapter
 from src.brokers.factory import build_configured_adapter
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.engine.paper_trading.market_hours import IST
 from src.models.live_position import LivePosition
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
@@ -164,13 +165,14 @@ async def portfolio_summary_endpoint(
         )
     ).scalar_one()
 
-    start_of_day_utc = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    # The start of today in IST, like /paper-trading/pnl/today: "today" is a trading day.
+    start_of_day = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     paper_realized_pnl_today, paper_costs_today = (
         await db.execute(
             select(
                 func.coalesce(func.sum(PaperFill.realized_pnl), 0.0),
                 func.coalesce(func.sum(PaperFill.costs_total), 0.0),
-            ).where(PaperFill.created_at >= start_of_day_utc)
+            ).where(PaperFill.created_at >= start_of_day)
         )
     ).one()
 

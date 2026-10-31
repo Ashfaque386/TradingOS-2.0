@@ -36,6 +36,8 @@ class KillSwitchState(Base):
 
     reset_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Why the latest reset was done, in the words of the person who did it.
+    reset_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

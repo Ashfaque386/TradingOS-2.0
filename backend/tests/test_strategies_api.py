@@ -170,3 +170,38 @@ async def test_suggestion_flow_end_to_end(client, make_user):
     assert regen_resp.json()["status"] == "regenerated"
     assert regen_resp.json()["regenerated_version_id"] is not None
     assert regen_resp.json()["regeneration_diff"] is not None
+
+
+async def test_only_operators_can_submit_a_suggestion(client, make_user):
+    await make_user("sug-admin@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
+    admin = await _login(client, "sug-admin@example.com", "supersecret1")
+    created = await client.post(
+        "/api/v1/strategies",
+        json={"name": "SugRbac", "objective": "obj"},
+        headers={"Authorization": f"Bearer {admin}"},
+    )
+    strategy_id = created.json()["id"]
+    version_id = created.json()["versions"][0]["id"]
+    body = {"base_version_id": version_id, "suggestion_text": "Add a stop-loss"}
+
+    for email, role in (
+        ("sug-auditor@example.com", Role.READ_ONLY_AUDITOR),
+        ("sug-risk@example.com", Role.RISK_MANAGER),
+    ):
+        await make_user(email, "supersecret1", role)
+        token = await _login(client, email, "supersecret1")
+        resp = await client.post(
+            f"/api/v1/strategies/{strategy_id}/suggestions",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 403, role
+
+    await make_user("sug-pm@example.com", "supersecret1", Role.PORTFOLIO_MANAGER)
+    pm = await _login(client, "sug-pm@example.com", "supersecret1")
+    allowed = await client.post(
+        f"/api/v1/strategies/{strategy_id}/suggestions",
+        json=body,
+        headers={"Authorization": f"Bearer {pm}"},
+    )
+    assert allowed.status_code == 201

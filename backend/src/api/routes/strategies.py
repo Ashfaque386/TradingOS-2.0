@@ -52,7 +52,10 @@ _LIVE_SIGNOFF_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.RISK_MANAGER]
 register_policy("POST", "/api/v1/strategies", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/strategies", roles=list(Role))
 register_policy("GET", "/api/v1/strategies/{strategy_id}", roles=list(Role))
-register_policy("POST", "/api/v1/strategies/{strategy_id}/suggestions", roles=list(Role))
+# Submitting a suggestion writes a row and feeds the regeneration flow, so it is an operator
+# action like its review and regenerate steps; it was open to every role, the read-only
+# auditor included.
+register_policy("POST", "/api/v1/strategies/{strategy_id}/suggestions", roles=_OPERATOR_ROLES)
 register_policy(
     "POST",
     "/api/v1/strategies/{strategy_id}/suggestions/{suggestion_id}/review",

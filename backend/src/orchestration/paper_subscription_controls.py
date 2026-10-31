@@ -159,7 +159,9 @@ def contract_problem(subscription: PaperTradingSubscription, now: datetime) -> s
 def _history_problem(price_provider: PriceDataProvider, symbol: str, as_of: datetime) -> str | None:
     try:
         price_provider.daily_bars(
-            symbol, as_of=pd.Timestamp(as_of.date()), lookback_days=HISTORY_LOOKBACK_DAYS
+            symbol,
+            as_of=pd.Timestamp(as_of.astimezone(IST).date()),
+            lookback_days=HISTORY_LOOKBACK_DAYS,
         )
     except InsufficientHistoryError as exc:
         return str(exc)

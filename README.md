@@ -1,6 +1,6 @@
 # TradingOS 2.0
 
-An AI multi-agent trading operating system for Indian equity and F&O markets (NSE/BSE). A 24-agent
+An AI multi-agent trading operating system for Indian equity and F&O markets (NSE/BSE). A 30-agent
 LLM organisation researches markets, writes and validates strategies, backtests them and runs them in
 paper trading. Live capital runs autonomously once a strategy has earned live eligibility and its own
 master switch is on; from then on only the deterministic safety layer (kill switch, compliance,
@@ -15,7 +15,7 @@ self-hosted, single-operator system, not a multi-tenant product.
 
 | Area | What it does |
 |---|---|
-| **Agent organisation** | 24 agents under one gateway config (`config/tradingos.config.json`, hot-reloaded, versioned, audited). Orchestration engine, LangGraph strategy pipeline, a multi-provider LLM router, long-term vector memory (Qdrant). |
+| **Agent organisation** | 30 agents under one gateway config (`config/tradingos.config.json`, hot-reloaded, versioned, audited). Orchestration engine, LangGraph strategy pipeline, a multi-provider LLM router, long-term vector memory (Qdrant). |
 | **Strategies and backtests** | Objective → generated strategy → AST ban-list and lint → process-isolated sandbox → backtest with the Indian cost model, walk-forward, Monte Carlo, Optuna sweeps. |
 | **Paper trading** | Runs on **real broker quotes and 5-level depth only**; with no real feed a subscription halts and says why, it never trades generated prices. Equities, monthly futures (lots, margin estimate, roll) and defined-risk option spreads (per-leg positions, expiry square-off), charged brokerage, STT, exchange fees, SEBI fee, stamp duty and GST per fill. |
 | **The Paper Desk** (`/paper-trading`) | Today's result as *price result − costs = net*, what needs attention, one lane per subscription (legs, payoff at expiry, costs and fills, settings), add / switch off / close / edit dialogs with live previews and typed confirmation. |
@@ -77,12 +77,25 @@ with the URL you need (`docker compose build frontend`).
 
 ```bash
 docker run -d -p 8080:8080 --security-opt seccomp=deploy/seccomp/backend.json \
-  -v tradingos_secrets:/app/secrets \
+  -v tradingos_secrets:/app/secrets -v tradingos_data_lake:/app/data_lake \
+  -v tradingos_data_lake_backups:/app/data_lake_backups -v tradingos_audit_archive:/app/audit_archive \
   -e SECRETS_ENCRYPTION_KEY=<fernet key> -e JWT_SECRET_KEY=<long random string> \
   ghcr.io/ashfaque386/tradingos-2.0-allinone:latest
 ```
 
 The seccomp profile is required for strategy creation (the sandbox needs `unshare`).
+
+**What lives where.** Everything the app writes is on a named volume, so `docker compose down && docker compose up --build`
+keeps it: `tradingos-2.0_pgdata` (the database), `…_secrets` (the encrypted broker, LLM and channel stores; useless without
+`SECRETS_ENCRYPTION_KEY`), `…_data_lake`, `…_data_lake_backups` and `…_audit_archive`. The last three were inside the
+container until recently, so every rebuild deleted them. **Upgrading an existing stack:** before the first rebuild that
+includes the volumes, copy them out of the running container, then copy them back in afterwards:
+
+```bash
+for d in data_lake data_lake_backups audit_archive; do docker cp TradingOS-2.0-Backend:/app/$d ./$d.keep; done
+docker compose down && docker compose up --build -d
+for d in data_lake data_lake_backups audit_archive; do docker cp ./$d.keep/. TradingOS-2.0-Backend:/app/$d; done
+```
 
 ## Developing and testing
 

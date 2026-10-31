@@ -165,6 +165,7 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         "tests/test_memory.py::test_remember_query_and_forget_round_trip",
     ),
     ("POST", "/notification-channels/{channel}"): (S, "saves a channel"),
+    ("PATCH", "/notification-channels/{channel}"): (S, "changes a channel non-secret settings"),
     ("DELETE", "/notification-channels/{channel}"): (
         X,
         f"{SWEEP}::test_deleting_credentials_that_are_not_stored_is_a_404_and_not_audited",

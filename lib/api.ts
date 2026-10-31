@@ -1500,6 +1500,14 @@ export type WriteNotificationChannelInput = {
 export const listNotificationChannels = () => apiGet<NotificationChannelStatus[]>('/api/v1/notification-channels')
 export const writeNotificationChannel = (channel: string, body: WriteNotificationChannelInput) =>
   apiPost<void>(`/api/v1/notification-channels/${channel}`, body)
+// Non-secret settings only (no token can travel here): what the alert-level toggles use.
+export type UpdateNotificationChannelInput = {
+  enabled?: boolean
+  alert_levels?: string[]
+  allowed_sender_ids?: string[]
+}
+export const updateNotificationChannel = (channel: string, body: UpdateNotificationChannelInput) =>
+  apiPatch<void>(`/api/v1/notification-channels/${channel}`, body)
 export const deleteNotificationChannel = (channel: string) => apiDelete<void>(`/api/v1/notification-channels/${channel}`)
 export type TestNotificationChannelResult = {
   channel: string

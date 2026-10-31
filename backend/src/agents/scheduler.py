@@ -3,8 +3,9 @@ loop that runs src.agents.heartbeat.run_heartbeat for every currently
 eligible agent. Same "asyncio.Task started from FastAPI's lifespan,
 cancelled on shutdown" shape as
 src.orchestration.task_engine.start_stall_sweep_loop -- deliberately
-imports nothing from src.execution or src.risk either, for the same
-structural-isolation reason as src.agents.heartbeat.
+loads nothing from src.orchestration, src.brokers or src.engine either, for
+the same structural-isolation reason as src.agents.heartbeat (the same test
+covers both).
 """
 
 import asyncio

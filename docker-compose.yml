@@ -149,6 +149,16 @@ services:
       # Useless without the same SECRETS_ENCRYPTION_KEY each boot -- back
       # that key up alongside this volume.
       - tradingos-2.0_secrets:/app/secrets
+      # The three folders the app writes under its working directory (src/core/config.py: the data
+      # lake, its nightly backups, and the audit log's tamper-evident archive). Without a volume
+      # each lived in the container's own filesystem, so the documented `docker compose down && up
+      # --build` recreate deleted the lake, the backups made *of* the lake, and the audit archive
+      # (which is then rebuilt from the database, so its independent copy of the chain was gone).
+      # Moving to volumes: copy the old folders out of a running container first, see the README's
+      # upgrade note.
+      - tradingos-2.0_data_lake:/app/data_lake
+      - tradingos-2.0_data_lake_backups:/app/data_lake_backups
+      - tradingos-2.0_audit_archive:/app/audit_archive
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -325,6 +335,12 @@ volumes:
     name: tradingos-2.0_pgdata
   tradingos-2.0_secrets:
     name: tradingos-2.0_secrets
+  tradingos-2.0_data_lake:
+    name: tradingos-2.0_data_lake
+  tradingos-2.0_data_lake_backups:
+    name: tradingos-2.0_data_lake_backups
+  tradingos-2.0_audit_archive:
+    name: tradingos-2.0_audit_archive
   tradingos-2.0_qdrant_data:
     name: tradingos-2.0_qdrant_data
   tradingos-2.0_prometheus_data:

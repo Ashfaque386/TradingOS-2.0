@@ -109,11 +109,12 @@ async def check_drawdown(
 
 
 async def reset_kill_switch(
-    db: AsyncSession, mode: KillSwitchMode, *, reset_by: str
+    db: AsyncSession, mode: KillSwitchMode, *, reset_by: str, reason: str | None = None
 ) -> KillSwitchState:
     """The only function in this codebase that may set `tripped=False`.
     `reset_by` is required and never defaulted -- an automated or anonymous
-    reset is not a valid call, only a human-attributed one."""
+    reset is not a valid call, only a human-attributed one. `reason` is what that
+    person wrote; it is kept beside `reset_by`."""
     if not reset_by:
         raise ValueError("reset_kill_switch requires an explicit reset_by actor")
 
@@ -124,6 +125,7 @@ async def reset_kill_switch(
     state.trip_reason = None
     state.tripped_at = None
     state.reset_by = reset_by
+    state.reset_reason = reason
     state.reset_at = datetime.now(UTC)
     state.updated_at = datetime.now(UTC)
 

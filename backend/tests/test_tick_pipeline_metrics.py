@@ -6,9 +6,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from prometheus_client import REGISTRY
 
+import src.brokers.tick_source as tick_source_module
 from src.brokers.base import BrokerQuote, quote_from_row
 from src.brokers.tick_source import BrokerQuoteTickSource
 from src.engine.risk.circuit_breaker import BrokerServerError
+from tests.clock import freeze_clock
 
 
 def _sample(name: str, labels: dict[str, str]) -> float:
@@ -91,17 +93,19 @@ async def test_a_quote_call_is_timed_by_broker_and_outcome():
 # ---- the exchange lag ----
 
 
-async def test_a_quotes_exchange_lag_is_recorded_when_the_broker_sends_one():
+async def test_a_quotes_exchange_lag_is_recorded_when_the_broker_sends_one(monkeypatch):
     labels = {"broker": "zerodha"}
     count = "tradingos_paper_quote_exchange_lag_seconds_count"
     total = "tradingos_paper_quote_exchange_lag_seconds_sum"
     before_count, before_total = _sample(count, labels), _sample(total, labels)
-    stamp = datetime.now(UTC) - timedelta(seconds=7)
+    now = datetime(2026, 3, 10, 5, 0, tzinfo=UTC)
+    freeze_clock(monkeypatch, tick_source_module, now)  # so "7 seconds old" is exactly 7
+    stamp = now - timedelta(seconds=7)
     await BrokerQuoteTickSource(_Broker("zerodha", {"INFY": _quote("INFY", stamp)})).next_ticks(
         ["INFY"]
     )
     assert _sample(count, labels) == before_count + 1
-    assert _sample(total, labels) - before_total == pytest.approx(7.0, abs=1.0)
+    assert _sample(total, labels) - before_total == pytest.approx(7.0, abs=1e-6)
 
 
 async def test_a_missing_or_future_exchange_stamp_is_counted_not_measured():

@@ -18,9 +18,9 @@ class HeartbeatStatus(StrEnum):
 class HeartbeatLog(Base):
     """One row per heartbeat self-check (Build Spec §17) — read-only by
     construction: src/agents/heartbeat.py, which writes these rows, never
-    imports src.execution or src.risk (see that module's docstring), so
-    nothing that produces a HeartbeatLog can also be what placed an order
-    or mutated a risk limit.
+    loads src.orchestration, src.brokers or src.engine (see that module's
+    docstring), so nothing that produces a HeartbeatLog can also be what
+    placed an order or mutated a risk limit.
     """
 
     __tablename__ = "heartbeat_logs"

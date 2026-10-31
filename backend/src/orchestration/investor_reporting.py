@@ -8,12 +8,13 @@ honest report saying so, not a suppressed one (same posture as the
 notification and audit schedulers).
 """
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.engine.paper_trading.market_hours import IST
 from src.models.investor_report import InvestorReport
 from src.models.live_position import LivePosition
 from src.models.paper_fill import PaperFill
@@ -28,16 +29,19 @@ logger = structlog.get_logger(__name__)
 INVESTOR_REPORTING_ACTOR = "system:investor-reporting-agent"
 
 
-def _period_bounds_utc(period_start: date, period_end: date) -> tuple[datetime, datetime]:
-    start = datetime.combine(period_start, time.min, tzinfo=UTC)
-    end = datetime.combine(period_end, time.min, tzinfo=UTC) + timedelta(days=1)
+def _period_bounds_ist(period_start: date, period_end: date) -> tuple[datetime, datetime]:
+    """The IST calendar days period_start..period_end inclusive, as UTC-comparable bounds.
+
+    IST because the scheduler names the period in IST days."""
+    start = datetime.combine(period_start, time.min, tzinfo=IST)
+    end = datetime.combine(period_end, time.min, tzinfo=IST) + timedelta(days=1)
     return start, end
 
 
 async def generate_investor_report(
     db: AsyncSession, *, period_start: date, period_end: date, cadence: str = "weekly"
 ) -> InvestorReport:
-    start, end = _period_bounds_utc(period_start, period_end)
+    start, end = _period_bounds_ist(period_start, period_end)
 
     total_realized_pnl = (
         await db.execute(

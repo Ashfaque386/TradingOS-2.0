@@ -9,7 +9,7 @@ where "12 fills, win rate 58%" computed on a random walk reads exactly like a me
 
 import time
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 import httpx
 import pandas as pd
@@ -19,6 +19,7 @@ from sqlalchemy import select
 from src.brokers.base import BrokerCredentials
 from src.brokers.tick_source import BrokerQuoteTickSource
 from src.brokers.zerodha import ZerodhaKiteAdapter
+from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import MockOrderBookProvider
 from src.engine.paper_trading.price_data import FakeDailyPriceProvider
 from src.engine.paper_trading.tick_feed import (
@@ -418,7 +419,7 @@ async def _paper_strategy_with_fills(db_session_factory, sources: list[str]):
 
 async def _paper_finding(db_session_factory, strategy_id):
     async with db_session_factory() as db:
-        findings = await run_post_trade_review(db, as_of=date.today())
+        findings = await run_post_trade_review(db, as_of=datetime.now(IST).date())
     return next(f for f in findings if f.strategy_id == strategy_id and f.mode == "paper")
 
 
@@ -512,7 +513,7 @@ async def test_a_live_review_is_labelled_by_its_trades(db_session_factory):
         strategy_id = strategy.id
 
     async with db_session_factory() as db:
-        findings = await run_post_trade_review(db, as_of=date.today())
+        findings = await run_post_trade_review(db, as_of=datetime.now(IST).date())
 
     live = next(f for f in findings if f.strategy_id == strategy_id and f.mode == "live")
     assert live.data_source == R and "Data:" not in live.commentary

@@ -3,7 +3,7 @@ from datetime import date as date_type
 from datetime import datetime as datetime_type
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from src.core.roles import Role
 from src.engine.backtest.signals import BuiltinStrategy as EngineBuiltinStrategy
@@ -511,6 +511,9 @@ class KillSwitchStateResponse(BaseModel):
     trip_reason: str | None
     last_drawdown_pct: float | None
     threshold_pct: float
+    tripped_at: str | None = None
+    reset_at: str | None = None
+    reset_reason: str | None = None
 
 
 class CheckDrawdownRequest(BaseModel):
@@ -520,7 +523,7 @@ class CheckDrawdownRequest(BaseModel):
 
 
 class ResetKillSwitchRequest(BaseModel):
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class StageRiskLimitChangeRequest(BaseModel):
@@ -1138,6 +1141,23 @@ class MarketHoursResponse(BaseModel):
     as_of: str
 
 
+class HolidayEntryResponse(BaseModel):
+    date: str
+    weekday: str
+    name: str | None
+    source: str
+    on_weekend: bool
+
+
+class HolidaysResponse(BaseModel):
+    year: int
+    holidays: list[HolidayEntryResponse]
+    # False: the calendar file lists nothing for this year, so its movable holidays (Holi, Eid,
+    # Diwali ...) are being treated as trading days. `warning` says so in words.
+    calendar_file_covers_year: bool
+    warning: str | None
+
+
 class IndicatorSeriesResponse(BaseModel):
     symbol: str
     dates: list[str]
@@ -1329,12 +1349,30 @@ class AuditActorSummaryResponse(BaseModel):
 # --- Phase 12: Notifications & Omni-Channel (Build Spec §18) ----------------
 
 
+def _check_alert_levels(levels: list[str] | None) -> list[str] | None:
+    """Only the fixed alert levels can be subscribed to: an unknown string used to be stored and
+    never matched, so the channel silently received nothing."""
+    from src.notifications.types import AlertLevel
+
+    if levels is None:
+        return levels
+    known = {level.value for level in AlertLevel}
+    unknown = sorted(set(levels) - known)
+    if unknown:
+        raise ValueError(f"unknown alert level(s) {unknown}; known: {sorted(known)}")
+    return levels
+
+
 class WriteNotificationChannelRequest(BaseModel):
     """Write-only by design (Build Spec §20), same posture as
     WriteBrokerCredentialsRequest above -- no response schema echoes
     bot_token/webhook_url/webhook_secret_token/public_key/signing_secret
     back. allowed_sender_ids/alert_levels/enabled are not secrets and do
-    come back on NotificationChannelStatusResponse."""
+    come back on NotificationChannelStatusResponse.
+
+    A field that is **absent** from the request keeps the channel's stored value; a field sent
+    as `null` (or `[]`) clears it. Before, an absent field was cleared, so saving only the alert
+    levels erased the channel's token and chat id."""
 
     enabled: bool = True
     bot_token: str | None = None
@@ -1345,6 +1383,26 @@ class WriteNotificationChannelRequest(BaseModel):
     signing_secret: str | None = None
     allowed_sender_ids: list[str] = Field(default_factory=list)
     alert_levels: list[str] = Field(default_factory=list)
+
+    @field_validator("alert_levels")
+    @classmethod
+    def _known_alert_levels(cls, levels: list[str]) -> list[str]:
+        return _check_alert_levels(levels) or []
+
+
+class UpdateNotificationChannelRequest(BaseModel):
+    """Change a configured channel's non-secret settings. It cannot carry a secret, so a client
+    that only toggles an alert level has no way to touch the token. At least one field is needed;
+    `alert_levels: []` unsubscribes the channel from everything."""
+
+    enabled: bool | None = None
+    alert_levels: list[str] | None = None
+    allowed_sender_ids: list[str] | None = None
+
+    @field_validator("alert_levels")
+    @classmethod
+    def _known_alert_levels(cls, levels: list[str] | None) -> list[str] | None:
+        return _check_alert_levels(levels)
 
 
 class NotificationChannelStatusResponse(BaseModel):

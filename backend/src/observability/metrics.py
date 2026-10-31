@@ -13,12 +13,13 @@ be over-engineering for a self-hosted, solo-operator deployment).
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime
 
 import structlog
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 from src.data.nse_calendar import is_nse_trading_day
+from src.engine.paper_trading.market_hours import IST
 
 logger = structlog.get_logger(__name__)
 
@@ -118,7 +119,7 @@ def render_latest_metrics() -> tuple[bytes, str]:
 
 
 def _update_trading_holiday_gauge() -> None:
-    today = datetime.now(UTC).date()
+    today = datetime.now(IST).date()  # the market's calendar day, not UTC's
     trading_holiday_gauge.set(0 if is_nse_trading_day(today) else 1)
 
 

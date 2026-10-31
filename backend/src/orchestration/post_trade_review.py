@@ -17,12 +17,13 @@ F's realized-vs-unrealized P&L split is the precedent).
 """
 
 import uuid
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.engine.paper_trading.market_hours import IST
 from src.models.data_source import combine, provenance_note
 from src.models.live_position import LivePosition
 from src.models.order import Order
@@ -37,13 +38,19 @@ logger = structlog.get_logger(__name__)
 POST_TRADE_REVIEW_ACTOR = "system:post-trade-review-agent"
 
 
-def _day_bounds_utc(as_of: date) -> tuple[datetime, datetime]:
-    start = datetime.combine(as_of, time.min, tzinfo=UTC)
+def _day_bounds_ist(as_of: date) -> tuple[datetime, datetime]:
+    """The IST calendar day `as_of`, as UTC-comparable bounds.
+
+    IST, not UTC: the scheduler passes the IST date of the session. A cut at UTC midnight is 05:30
+    IST, so a row written between 00:00 and 05:30 IST (an expiry square-off or an administrative
+    close, say) landed in the previous day's review.
+    """
+    start = datetime.combine(as_of, time.min, tzinfo=IST)
     return start, start + timedelta(days=1)
 
 
 async def _review_paper_trades(db: AsyncSession, *, as_of: date) -> list[TradeReviewFinding]:
-    start, end = _day_bounds_utc(as_of)
+    start, end = _day_bounds_ist(as_of)
     rows = (
         await db.execute(
             select(
@@ -156,7 +163,7 @@ async def _review_paper_trades(db: AsyncSession, *, as_of: date) -> list[TradeRe
 
 
 async def _review_live_trades(db: AsyncSession, *, as_of: date) -> list[TradeReviewFinding]:
-    start, end = _day_bounds_utc(as_of)
+    start, end = _day_bounds_ist(as_of)
     rows = (
         await db.execute(
             select(Order.strategy_id, func.count(Trade.id))

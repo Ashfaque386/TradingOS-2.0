@@ -186,3 +186,23 @@ async def test_a_refused_second_reset_leaves_the_record_of_the_real_one_intact(
     async with db_session_factory() as db:
         state = await get_kill_switch_state(db, "paper")
     assert (state.reset_by, state.reset_at) == (who, when) == ("risk-manager-1", when)
+
+
+async def test_reset_kill_switch_keeps_the_reason_it_is_given(db_session_factory):
+    async with db_session_factory() as db:
+        await check_drawdown(db, "paper", current_equity=70000, peak_equity=100000)
+        state = await reset_kill_switch(db, "paper", reset_by="operator-1", reason="a stale quote")
+        assert state.reset_reason == "a stale quote"
+
+    async with db_session_factory() as db:
+        stored = await get_kill_switch_state(db, "paper")
+    assert stored.reset_reason == "a stale quote"
+    assert stored.reset_by == "operator-1"
+
+
+async def test_reset_kill_switch_without_a_reason_stores_none(db_session_factory):
+    async with db_session_factory() as db:
+        await check_drawdown(db, "live", current_equity=70000, peak_equity=100000)
+        state = await reset_kill_switch(db, "live", reset_by="operator-2")
+
+    assert state.reset_reason is None

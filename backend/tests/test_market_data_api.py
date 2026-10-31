@@ -489,13 +489,15 @@ async def test_live_option_chain_computes_zerodha_iv_from_ltp_via_black_scholes(
     black_scholes_price itself (not a hand-picked number), so this is a
     real round-trip against the exact same math the route uses, not a
     coincidence."""
-    from datetime import UTC, date, datetime
+    from datetime import UTC, datetime, timedelta
 
     from src.core.config import get_settings
     from src.engine.options_pricing import black_scholes_price, year_fraction
 
-    expiry = date(2030, 12, 31)
+    # A year out from the real today, never a fixed date: a fixed 2030 expiry makes
+    # year_fraction go negative once that date passes and the computed IV disappears.
     today = datetime.now(UTC).date()
+    expiry = today + timedelta(days=365)
     time_to_expiry = year_fraction(expiry, today)
     rate = get_settings().risk_free_rate
     true_vol = 0.35
@@ -751,3 +753,58 @@ async def test_live_option_chain_readable_by_every_role(client: AsyncClient, mak
             assert resp.status_code == 503, f"role {role} was denied read access"
     finally:
         _clear_broker_adapter_override()
+
+
+async def test_holidays_endpoint_lists_the_year_and_warns_when_the_file_has_none(
+    client: AsyncClient, make_user, monkeypatch, tmp_path
+):
+    from src.core.config import get_settings
+
+    calendar = tmp_path / "holidays.json"
+    calendar.write_text('{"holidays": [{"date": "2026-03-03", "name": "Holi"}]}', encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "nse_holidays_path", str(calendar))
+    await make_user("hol1@example.com", "supersecret1", Role.READ_ONLY_AUDITOR)
+    token = await _login(client, "hol1@example.com", "supersecret1")
+
+    listed = await client.get("/api/v1/market-data/holidays?year=2026", headers=_auth(token))
+    unlisted = await client.get("/api/v1/market-data/holidays?year=2027", headers=_auth(token))
+
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["year"] == 2026
+    assert body["calendar_file_covers_year"] is True
+    assert body["warning"] is None
+    holi = next(h for h in body["holidays"] if h["date"] == "2026-03-03")
+    assert holi["name"] == "Holi" and holi["weekday"] == "Tuesday"
+    assert holi["source"] == "calendar file" and holi["on_weekend"] is False
+    assert any(h["name"] == "Republic Day" for h in body["holidays"])
+
+    assert unlisted.status_code == 200
+    body = unlisted.json()
+    assert body["calendar_file_covers_year"] is False
+    assert "2027" in body["warning"] and "trading days" in body["warning"]
+    assert body["holidays"]  # the fixed-date holidays are still listed
+
+
+async def test_holidays_endpoint_defaults_to_this_ist_year_and_rejects_nonsense(
+    client: AsyncClient, make_user
+):
+    from datetime import datetime
+
+    from src.engine.paper_trading.market_hours import IST
+
+    await make_user("hol2@example.com", "supersecret1", Role.PORTFOLIO_MANAGER)
+    token = await _login(client, "hol2@example.com", "supersecret1")
+
+    default = await client.get("/api/v1/market-data/holidays", headers=_auth(token))
+    absurd = await client.get("/api/v1/market-data/holidays?year=1066", headers=_auth(token))
+
+    assert default.status_code == 200
+    assert default.json()["year"] == datetime.now(IST).year
+    assert absurd.status_code == 422
+
+
+async def test_holidays_endpoint_requires_a_login(client: AsyncClient):
+    resp = await client.get("/api/v1/market-data/holidays")
+
+    assert resp.status_code in (401, 403)
