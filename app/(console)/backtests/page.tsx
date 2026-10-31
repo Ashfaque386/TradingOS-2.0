@@ -15,6 +15,7 @@ import {
   listStrategies,
   runMonteCarlo,
 } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 function Panel({ title, eyebrow, children, className = '' }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string }) {
   return <section className={`backtest-panel ${className}`}><div className="flex items-start justify-between gap-3 border-b border-white/8 px-4 py-3"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2 className="mt-1 text-sm font-semibold text-white">{title}</h2></div><SlidersHorizontal className="size-4 text-slate-500" /></div>{children}</section>
@@ -43,7 +44,7 @@ export default function BacktestsPage() {
   // _OPERATOR_ROLES) -- this page had no role gate at all before, so a
   // RiskManager/ReadOnlyAuditor saw an enabled "Run Monte Carlo" button
   // that would 403.
-  const canOperate = role === 'SystemAdministrator' || role === 'PortfolioManager'
+  const canOperate = can(role, 'POST /api/v1/backtests/{run_id}/monte-carlo')
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [strategyFilter, setStrategyFilter] = useState<string>('all')

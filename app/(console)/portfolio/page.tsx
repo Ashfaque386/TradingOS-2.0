@@ -15,6 +15,7 @@ import {
   listPortfolioRecommendations,
   rejectPortfolioRecommendation,
 } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 function Panel({ title, eyebrow, children, actions }: { title: string; eyebrow?: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
@@ -125,7 +126,7 @@ function RecommendationCard({
 
 export default function PortfolioPage() {
   const { role } = useAuth()
-  const canManage = role === 'SystemAdministrator' || role === 'PortfolioManager'
+  const canManage = can(role, 'POST /api/v1/portfolio/recommendations/generate')
 
   const [summary, setSummary] = useState<PortfolioSummary | null>(null)
   const [riskMetrics, setRiskMetrics] = useState<PortfolioRiskMetrics | null>(null)

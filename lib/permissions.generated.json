@@ -1,0 +1,812 @@
+{
+  "DELETE /api/v1/broker-credentials/{broker}": [
+    "SystemAdministrator"
+  ],
+  "DELETE /api/v1/chat/sessions/{session_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "DELETE /api/v1/memory/settings": [
+    "SystemAdministrator"
+  ],
+  "DELETE /api/v1/memory/{kind}/{memory_id}": [
+    "SystemAdministrator"
+  ],
+  "DELETE /api/v1/notification-channels/{channel}": [
+    "SystemAdministrator"
+  ],
+  "DELETE /api/v1/settings/llm-providers/{provider}": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/admin/ping": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/admin/users": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents/analytics/summary": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents/analytics/trend": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents/pipeline/events": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents/{agent_id}/activity": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents/{agent_id}/prompt-versions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/approvals": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/audit/actors/{actor}/summary": [
+    "ReadOnlyAuditor",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/audit/entries": [
+    "ReadOnlyAuditor",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/audit/export": [
+    "ReadOnlyAuditor",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/audit/trades/{entity_id}/trace": [
+    "ReadOnlyAuditor",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/backtests": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/backtests/{run_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/broker-credentials": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/broker-credentials/circuit-breaker": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/broker-credentials/upstox/login-url": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/broker-credentials/zerodha/login-url": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/canvas/state": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/chat/sessions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/chat/sessions/{session_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/chat/sessions/{session_id}/export": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/chat/sessions/{session_id}/messages": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/gateway/config": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/gateway/config/versions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/investor-reports": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/investor-reports/{report_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/kill-switch/{mode}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/intents": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/intents/{intent_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/orders/{order_id}/trades": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/strategies/{strategy_id}/orders": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/strategies/{strategy_id}/position": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/subscriptions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/live-trading/subscriptions/{subscription_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/datalake/status": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/freshness/{symbol}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/holidays": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/indicators/{symbol}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/instruments": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/market-hours": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/option-chain/{underlying}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/option-expiries/{underlying}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/provenance": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/market-data/pulse": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/memory/query": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/memory/settings": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/memory/status": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/notification-channels": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/operator-guidance": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/orchestration/runs": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/orchestration/runs/{run_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/orders": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/orders/positions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/enrol-preview": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/pnl/today": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/pnl/unrealized": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions/{subscription_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions/{subscription_id}/close-preview": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions/{subscription_id}/fills": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions/{subscription_id}/position": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions/{subscription_id}/positions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/subscriptions/{subscription_id}/signals": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/paper-trading/symbols": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/portfolio/recommendations": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/portfolio/recommendations/{recommendation_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/portfolio/risk-metrics": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/portfolio/summary": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/risk-limits": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/risk-limits/changes": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/settings/llm-providers": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/settings/llm-providers/{provider}/models": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/shadow-mode/runs": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/strategies": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/strategies/{strategy_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/system/jwt-signing-key": [
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/system/scheduled-jobs": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/history": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/system/vitals": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "PATCH /api/v1/admin/users/{user_id}/role": [
+    "SystemAdministrator"
+  ],
+  "PATCH /api/v1/chat/sessions/{session_id}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "PATCH /api/v1/notification-channels/{channel}": [
+    "SystemAdministrator"
+  ],
+  "PATCH /api/v1/paper-trading/subscriptions/{subscription_id}/settings": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/admin/users": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/admin/users/{user_id}/deactivate": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/admin/users/{user_id}/reactivate": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/admin/users/{user_id}/revoke-sessions": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/agents/pipeline/run": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/agents/pipeline/runs/{run_id}/cancel": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/agents/{agent_id}/prompt-versions": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/agents/{agent_id}/prompt-versions/{version_id}/activate": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/approvals/{approval_id}/decide": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/audit/verify": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/backtests": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/backtests/compare": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/backtests/optimize": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/backtests/{run_id}/monte-carlo": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/backtests/{run_id}/walk-forward": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/broker-credentials/{broker}": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/chat/sessions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/chat/sessions/{session_id}/abort": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/chat/sessions/{session_id}/messages": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/gateway/config/validate": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/gateway/config/versions/{version_id}/rollback": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/investor-reports/generate": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/kill-switch/{mode}/check": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/kill-switch/{mode}/reset": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/live-trading/daily-signal-run": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/live-trading/subscriptions": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/live-trading/subscriptions/{subscription_id}/autonomy": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/live-trading/subscriptions/{subscription_id}/generate-intent": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/backup": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/bhavcopy-fallback": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/catalog-refresh": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/ingest/corporate-actions": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/ingest/daily": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/ingest/instrument-master": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/market-data/ingest/intraday": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/memory/{kind}": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/notification-channels/telegram/detect-chat-id": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/notification-channels/{channel}": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/notification-channels/{channel}/test": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/operator-guidance": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/operator-guidance/{guidance_id}/deactivate": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/orchestration/runs": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/orchestration/runs/{run_id}/cancel": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/orchestration/runs/{run_id}/continue": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/orchestration/runs/{run_id}/pause": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/orchestration/runs/{run_id}/rerun": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/orchestration/runs/{run_id}/retry": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/daily-signal-run": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/subscriptions": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/subscriptions/{subscription_id}/activate": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/subscriptions/{subscription_id}/backfill-history": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/subscriptions/{subscription_id}/close-position": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/subscriptions/{subscription_id}/deactivate": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/paper-trading/subscriptions/{subscription_id}/tick": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/portfolio/recommendations/generate": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/portfolio/recommendations/{recommendation_id}/accept": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/portfolio/recommendations/{recommendation_id}/reject": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/risk-limits/stage": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/risk-limits/{change_id}/apply": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/risk-limits/{change_id}/confirm": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/risk/go-live-readiness": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/risk/order-intents": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/settings/llm-providers/{provider}": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/settings/llm-providers/{provider}/test": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/shadow-mode/check": [
+    "PortfolioManager",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/approve-live-eligibility": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/promote": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/request-live-eligibility": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/request-promotion": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/suggestions": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/suggestions/{suggestion_id}/regenerate": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/strategies/{strategy_id}/suggestions/{suggestion_id}/review": [
+    "PortfolioManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/system/jwt-signing-key/rotate": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/run-now": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/agents/{agent_id}/identity": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/broker-credentials/{broker}/redirect-uri": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/gateway/config": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/memory/settings": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/settings/llm-providers/{provider}/default-model": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule": [
+    "SystemAdministrator"
+  ]
+}

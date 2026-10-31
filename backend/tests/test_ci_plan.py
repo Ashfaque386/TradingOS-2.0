@@ -63,6 +63,14 @@ def test_a_frontend_change_skips_the_backend_and_the_mutation_jobs():
     assert plan.mutation_modules == []
 
 
+@pytest.mark.parametrize("path", ["lib/api.ts", "lib/permissions.generated.json"])
+def test_a_change_to_a_file_the_backend_tests_read_runs_the_backend(path):
+    plan = cp.plan([path], MODULES)
+
+    assert _jobs(plan) == {"backend", "frontend", "e2e", "images"}
+    assert plan.mutation_modules == []
+
+
 def test_a_test_only_change_does_not_build_images():
     plan = cp.plan(["backend/tests/test_chat.py"], MODULES)
 

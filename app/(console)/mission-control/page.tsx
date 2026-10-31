@@ -42,6 +42,7 @@ import {
   updateScheduledJobSchedule,
 } from '@/lib/api'
 import { useWebSocketChannel } from '@/lib/ws'
+import { can } from '@/lib/permissions'
 
 // Same severity/relative-time/initials conventions as the Overview page's
 // LIVE ACTIVITY FEED panel (app/page.tsx) -- both read the identical real
@@ -681,14 +682,14 @@ export default function MissionControlPage() {
   const { role } = useAuth()
   const readOnly = role === 'ReadOnlyAuditor'
   const isSystemAdmin = role === 'SystemAdministrator'
-  const canCreateRun = role === 'SystemAdministrator' || role === 'PortfolioManager'
+  const canCreateRun = can(role, 'POST /api/v1/orchestration/runs')
   // Strategy-promotion approvals (POST /approvals/{id}/decide) are
   // SystemAdministrator/RiskManager-only server-side -- narrower than
   // "not ReadOnlyAuditor". A PortfolioManager must see this disabled,
   // not a button that 403s silently. (Live order intents no longer go
   // through a sign-off step at all -- Phase 18, Non-Negotiable Rule #1 --
   // see the Strategies page's per-strategy autonomy switch instead.)
-  const canDecide = role === 'SystemAdministrator' || role === 'RiskManager'
+  const canDecide = can(role, 'POST /api/v1/approvals/{approval_id}/decide')
   const [view, setView] = useState<'kanban' | 'queue'>('kanban')
   // The command palette links to /mission-control?view=queue.
   useEffect(() => {

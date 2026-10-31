@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, Bot, LockKeyhole, Pause, Plus, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, X, Zap } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { type AgentActivity, type AgentSummary, type PromptVersion, ApiError, activatePromptVersion, createPromptVersion, getAgentActivity, getAgents, getGatewayConfig, listPromptVersions, putAgentIdentity, putGatewayConfig } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 type AgentStatus = 'active' | 'degraded' | 'disabled' | 'executing'
 type Department = 'Executive' | 'Market Intelligence' | 'Research' | 'Fundamental Research' | 'Quant' | 'Risk & Governance' | 'Portfolio' | 'Operations'
@@ -146,7 +147,7 @@ function AgentWorkspace({ agent, onClose, canEdit, onChanged }: { agent: AgentSu
 
 export default function AgentFleetPage() {
   const { role } = useAuth()
-  const canEdit = role === 'SystemAdministrator'
+  const canEdit = can(role, 'PUT /api/v1/agents/{agent_id}/identity')
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [query, setQuery] = useState('')

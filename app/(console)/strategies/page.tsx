@@ -28,6 +28,7 @@ import {
   setLiveAutonomy,
   submitSuggestion,
 } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 type Stage = 'Ideation' | 'Coding' | 'Backtesting' | 'Paper Trading' | 'Live Eligible' | 'Live' | 'Deprecated'
 const stages: Stage[] = ['Ideation', 'Coding', 'Backtesting', 'Paper Trading', 'Live Eligible', 'Live', 'Deprecated']
@@ -307,8 +308,8 @@ function Review({ strategyId, onBack, canOperate, canSignOffLive }: { strategyId
 
 export default function StrategiesPage() {
   const { role } = useAuth()
-  const canOperate = role === 'SystemAdministrator' || role === 'PortfolioManager'
-  const canSignOffLive = role === 'SystemAdministrator' || role === 'RiskManager'
+  const canOperate = can(role, 'POST /api/v1/strategies')
+  const canSignOffLive = can(role, 'POST /api/v1/strategies/{strategy_id}/approve-live-eligibility')
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [name, setName] = useState('')

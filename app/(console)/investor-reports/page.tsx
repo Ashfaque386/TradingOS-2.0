@@ -11,6 +11,7 @@ import {
   getInvestorReport,
   listInvestorReports,
 } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
@@ -26,7 +27,7 @@ export default function InvestorReportsPage() {
   const { role } = useAuth()
   // POST /investor-reports/generate is SystemAdministrator/PortfolioManager-only
   // server-side (src/api/routes/investor_reports.py's _OPERATOR_ROLES).
-  const canGenerate = role === 'SystemAdministrator' || role === 'PortfolioManager'
+  const canGenerate = can(role, 'POST /api/v1/investor-reports/generate')
   const [reports, setReports] = useState<InvestorReportSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selected, setSelected] = useState<InvestorReport | null>(null)

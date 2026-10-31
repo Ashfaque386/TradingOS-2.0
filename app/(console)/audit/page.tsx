@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Download, FileJson, Lock, RefreshCw, Search,
 import { useAuth, roleLabel } from '@/components/auth/auth-provider'
 import type { Role } from '@/lib/api'
 import { type AuditChainVerifyResult, type AuditLogEntry, ApiError, downloadAuditExport, listAuditEntries, verifyAuditChain } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 const PAGE_SIZE = 10
 
@@ -42,7 +43,7 @@ function AccessRestricted({ role }: { role: Role }) {
 
 export default function AuditLogPage() {
   const { role } = useAuth()
-  const canView = role === 'ReadOnlyAuditor' || role === 'SystemAdministrator'
+  const canView = can(role, 'GET /api/v1/audit/entries')
 
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
   const [search, setSearch] = useState('')

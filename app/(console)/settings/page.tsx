@@ -82,6 +82,7 @@ import {
   updateNotificationChannel,
   writeNotificationChannel,
 } from '@/lib/api'
+import { can } from '@/lib/permissions'
 
 type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'security'
 
@@ -185,7 +186,7 @@ function StatusStrip({ onNavigate, refreshKey }: { onNavigate: (s: SectionId) =>
 
 function GatewaySection() {
   const { role } = useAuth()
-  const canEdit = role === 'SystemAdministrator'
+  const canEdit = can(role, 'PUT /api/v1/gateway/config')
   const [tab, setTab] = useState<'form' | 'raw'>('form')
   const [config, setConfig] = useState<GatewayConfigResponse | null>(null)
   const [rawText, setRawText] = useState('')
@@ -561,7 +562,7 @@ function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit
 
 function LlmProvidersSection({ onStatusChanged }: { onStatusChanged: () => void }) {
   const { role } = useAuth()
-  const canEdit = role === 'SystemAdministrator'
+  const canEdit = can(role, 'POST /api/v1/settings/llm-providers/{provider}')
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([])
   const [order, setOrder] = useState<string[]>([])
 
@@ -790,7 +791,7 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
 
 function BrokerConfigSection({ oauthBanner, onStatusChanged }: { oauthBanner: { broker: string; ok: boolean; error?: string } | null; onStatusChanged: () => void }) {
   const { role } = useAuth()
-  const canEdit = role === 'SystemAdministrator'
+  const canEdit = can(role, 'POST /api/v1/broker-credentials/{broker}')
   const [statuses, setStatuses] = useState<BrokerCredentialStatus[]>([])
 
   async function reload() {
@@ -830,7 +831,7 @@ async function patchAgentSkills(agentId: string, skills: string[]) {
 
 function SkillsSection() {
   const { role } = useAuth()
-  const canEdit = role === 'SystemAdministrator'
+  const canEdit = can(role, 'PUT /api/v1/gateway/config')
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [query, setQuery] = useState('')
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
@@ -1089,7 +1090,7 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
 
 function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void }) {
   const { role } = useAuth()
-  const canEdit = role === 'SystemAdministrator'
+  const canEdit = can(role, 'POST /api/v1/notification-channels/{channel}')
   const [statuses, setStatuses] = useState<NotificationChannelStatus[]>([])
 
   async function reload() {
@@ -1112,7 +1113,7 @@ function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void
 
 function RiskSection() {
   const { role, user } = useAuth()
-  const canOperate = role === 'SystemAdministrator' || role === 'RiskManager'
+  const canOperate = can(role, 'POST /api/v1/risk-limits/stage')
   const [limits, setLimits] = useState<RiskLimit[]>([])
   const [changes, setChanges] = useState<RiskLimitChange[]>([])
   const [limitName, setLimitName] = useState('')

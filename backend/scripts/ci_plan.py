@@ -43,6 +43,11 @@ CI_DEFINITION = frozenset({".github/workflows/ci.yml", "backend/scripts/ci_plan.
 # and the e2e backend run under; `config/` is the gateway config the backend loads.
 BACKEND_PREFIXES = ("backend/", "config/", "deploy/")
 
+# Frontend files the backend's own tests read: the console's API client (checked against the routes
+# by tests/test_frontend_wiring.py) and the RBAC export (tests/test_frontend_permissions.py).
+# Changing one of them is a backend-contract change even though no backend file moved.
+BACKEND_CONTRACT_FILES = frozenset({"lib/api.ts", "lib/permissions.generated.json"})
+
 # Not part of any Docker image (so a change here needs no image build).
 NOT_IN_IMAGES_PREFIXES = ("backend/tests/", "e2e/", ".github/")
 
@@ -104,7 +109,9 @@ def plan(changed: list[str], modules: list[MutationModule]) -> Plan:
 
     plan_ = Plan()
 
-    backend_files = [f for f in relevant if f.startswith(BACKEND_PREFIXES)]
+    backend_files = [
+        f for f in relevant if f.startswith(BACKEND_PREFIXES) or f in BACKEND_CONTRACT_FILES
+    ]
     # Everything else that is not CI plumbing is the frontend side (app, components, lib, e2e,
     # package manifests, Dockerfiles, root scripts): conservative on purpose.
     frontend_files = [

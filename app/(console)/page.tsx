@@ -32,6 +32,7 @@ import {
   resetKillSwitch,
 } from '@/lib/api'
 import { useWebSocketChannel } from '@/lib/ws'
+import { can } from '@/lib/permissions'
 
 type PulseState = 'IDLE' | 'RESEARCHING' | 'EXECUTING' | 'AWAITING APPROVAL' | 'RISK ALERT'
 
@@ -180,7 +181,7 @@ export default function Home() {
   const [unrealizedPnl, setUnrealizedPnl] = useState<UnrealizedPaperPnl | null>(null)
   const [liveSubscriptions, setLiveSubscriptions] = useState<LiveTradingSubscriptionDto[]>([])
 
-  const canResetKillSwitch = role === 'SystemAdministrator' || role === 'RiskManager'
+  const canResetKillSwitch = can(role, 'POST /api/v1/kill-switch/{mode}/reset')
 
   const load = useCallback(async () => {
     const [agentsRes, runsRes, paperKs, liveKs, hours, pnl, unrealizedPnlRes, liveSubsRes] = await Promise.allSettled([

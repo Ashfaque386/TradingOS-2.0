@@ -17,6 +17,7 @@ import {
   listPaperSubscriptions,
 } from '@/lib/api'
 import { type AttentionItem, attentionItems } from '@/lib/paper-trading'
+import { can } from '@/lib/permissions'
 
 type Filter = 'all' | 'active' | 'attention' | 'off'
 const FILTERS: { id: Filter; label: string }[] = [
@@ -38,7 +39,7 @@ type Dialog =
 
 export default function PaperTradingPage() {
   const { role } = useAuth()
-  const canManage = role === 'SystemAdministrator' || role === 'PortfolioManager'
+  const canManage = can(role, 'POST /api/v1/paper-trading/subscriptions')
   const isAdmin = role === 'SystemAdministrator'
 
   const [subs, setSubs] = useState<PaperSubscription[] | null>(null)

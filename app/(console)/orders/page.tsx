@@ -19,6 +19,7 @@ import {
   submitOrderIntent,
 } from '@/lib/api'
 import { messageOf } from '@/lib/errors'
+import { can } from '@/lib/permissions'
 
 function Panel({ title, eyebrow, children }: { title: string; eyebrow?: string; children: React.ReactNode }) {
   return <section className="orders-panel"><div className="orders-panel-head"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div></div>{children}</section>
@@ -26,7 +27,7 @@ function Panel({ title, eyebrow, children }: { title: string; eyebrow?: string; 
 
 export default function OrdersPage() {
   const { role } = useAuth()
-  const canTrade = role === 'SystemAdministrator' || role === 'PortfolioManager'
+  const canTrade = can(role, 'POST /api/v1/risk/order-intents')
   const [orders, setOrders] = useState<UnifiedExecution[]>([])
   const [intents, setIntents] = useState<LiveOrderIntentDto[]>([])
   const [positions, setPositions] = useState<PositionByStrategy[]>([])

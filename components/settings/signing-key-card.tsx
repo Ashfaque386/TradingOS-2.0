@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, KeyRound, RefreshCw } from 'lucide-react'
 import { type JwtSigningKeyStatus, ApiError, getJwtSigningKeyStatus, rotateJwtSigningKey } from '@/lib/api'
 import { useAuth } from '@/components/auth/auth-provider'
+import { can } from '@/lib/permissions'
 
 // The key that signs every session. A deployment started with the defaults used
 // to be seeded with a public placeholder (and the database copy wins over .env
@@ -16,7 +17,7 @@ const when = (iso: string) => new Date(iso).toLocaleString()
 
 export function SigningKeyCard() {
   const { role, signOut } = useAuth()
-  const isAdmin = role === 'SystemAdministrator'
+  const isAdmin = can(role, 'POST /api/v1/system/jwt-signing-key/rotate')
   const [status, setStatus] = useState<JwtSigningKeyStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
