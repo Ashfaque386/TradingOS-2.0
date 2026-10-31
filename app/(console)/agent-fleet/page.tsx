@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, Bot, LockKeyhole, Pause, Plus, RotateCcw, Save, Search, ShieldCheck, X, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, Bot, LockKeyhole, Plus, RotateCcw, Save, Search, ShieldCheck, X, Zap } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { type AgentActivity, type AgentSummary, type PromptVersion, ApiError, activatePromptVersion, createPromptVersion, getAgentActivity, getAgents, getGatewayConfig, listPromptVersions, putAgentIdentity, putGatewayConfig } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'

@@ -53,8 +53,13 @@ test('an admin can save the embedding choice, it persists across a reload, and c
   const form = panel(page).getByLabel('Memory embedding settings')
   await expect(form).toBeVisible()
 
-  await form.getByLabel('Embedding provider').selectOption('ollama')
-  await form.getByLabel('Embedding model').fill('nomic-embed-text')
+  // The dev server can re-render this page while a route finishes compiling, which would drop what was
+  // typed: type again until the form holds both values, then save.
+  await expect(async () => {
+    await form.getByLabel('Embedding provider').selectOption('ollama')
+    await form.getByLabel('Embedding model').fill('nomic-embed-text')
+    await expect(form.getByRole('button', { name: 'Save' })).toBeEnabled({ timeout: 2_000 })
+  }).toPass({ timeout: 30_000 })
   await form.getByRole('button', { name: 'Save' }).click()
   await expect(form.getByText(/Saved by e2e\.admin@example\.com/)).toBeVisible()
 

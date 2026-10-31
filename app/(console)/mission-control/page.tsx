@@ -1,7 +1,7 @@
 'use client'
 
 import { AnimatePresence, motion } from 'framer-motion'
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertCircle, ArrowRight, Ban, BarChart3, Beaker, CalendarClock, Check, CheckCircle2, ChevronRight, Clock3, Inbox, Layers3, MessageSquarePlus, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, Trash2, X } from 'lucide-react'
 import { AgentPipelinePanel } from '@/components/mission-control/agent-pipeline-panel'

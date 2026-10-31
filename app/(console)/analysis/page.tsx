@@ -19,7 +19,6 @@ import {
   type LiveOptionChain,
   type LlmProviderStatus,
   type MarketDataProvenanceEntry,
-  type MarketPulse,
   LLM_PROVIDER_LABELS,
   getDatalakeStatus,
   getFreshness,
