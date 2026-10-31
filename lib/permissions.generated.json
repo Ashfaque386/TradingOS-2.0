@@ -465,6 +465,12 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/strategies/{strategy_id}/go-live-evidence": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/system/jwt-signing-key": [
     "SystemAdministrator"
   ],

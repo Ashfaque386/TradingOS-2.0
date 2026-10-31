@@ -273,6 +273,7 @@ async def _persist_fill(
     data_source: str = DataSource.UNKNOWN,
     charge_costs: bool = True,
     symbol: str | None = None,
+    administrative: bool = False,
 ) -> PaperPosition:
     costs, breakdown = (
         fill_costs(side, fill, instrument_kind=subscription.instrument_kind)
@@ -313,6 +314,7 @@ async def _persist_fill(
             costs_total=costs,
             costs_breakdown=breakdown,
             data_source=data_source,
+            administrative=administrative,
         )
     )
     await db.commit()

@@ -28,6 +28,7 @@ import {
   createRun,
   deactivateOperatorGuidance,
   decideApproval,
+  listApprovals,
   getAgentAnalyticsSummary,
   getAgentAnalyticsTrend,
   getCanvasState,
@@ -42,6 +43,8 @@ import {
   updateScheduledJobSchedule,
 } from '@/lib/api'
 import { useWebSocketChannel } from '@/lib/ws'
+import { ApprovalsHistory, describeApproval } from '@/components/mission-control/approvals-history'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { can } from '@/lib/permissions'
@@ -827,12 +830,12 @@ export default function MissionControlPage() {
     await refreshRuns()
   }
 
-  async function handleDecideApproval(approval: ApprovalRequestDto, approve: boolean) {
+  async function handleDecideApproval(approval: ApprovalRequestDto, approve: boolean, reason?: string) {
     setDecisionError(null)
     try {
-      await decideApproval(approval.id, approve)
+      await decideApproval(approval.id, approve, reason)
     } catch (err) {
-      setDecisionError(err instanceof ApiError ? err.message : 'Failed to record decision')
+      throw new Error(err instanceof ApiError ? err.message : 'Failed to record decision')
     }
   }
 
@@ -863,15 +866,34 @@ export default function MissionControlPage() {
   </div>{selected && <TaskDrawer key={selected.id} run={selected} onClose={() => { setSelected(null); setRunActionError(null) }} onAction={(action) => handleRunAction(selected, action)} canAct={!readOnly} actionError={runActionError} />}</>
 }
 
-function SignoffQueue({ signoff, canDecide, decisionError, onDecideApproval }: { signoff: SignoffSnapshot | null; canDecide: boolean; decisionError: string | null; onDecideApproval: (approval: ApprovalRequestDto, approve: boolean) => void }) {
+function SignoffQueue({ signoff, canDecide, decisionError, onDecideApproval }: { signoff: SignoffSnapshot | null; canDecide: boolean; decisionError: string | null; onDecideApproval: (approval: ApprovalRequestDto, approve: boolean, reason?: string) => Promise<void> }) {
   const approvals = signoff?.approvals ?? []
+  // The live queue carries ids only: the labelled list says which strategy, and who asked.
+  const labelled = usePolling(() => listApprovals(), { intervalMs: 15_000 })
+  const labels = new Map((labelled.data ?? []).map((a) => [a.id, a]))
+  const [deciding, setDeciding] = useState<{ approval: ApprovalRequestDto; approve: boolean } | null>(null)
   return <div className="grid gap-5 xl:grid-cols-[1fr_1.25fr]">
     {decisionError && <div className="xl:col-span-2 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{decisionError}</div>}
     {!canDecide && <div className="xl:col-span-2 rounded-lg border border-amber-300/20 bg-amber-300/[.06] p-3 text-xs text-amber-100">Your role can view the sign-off queue but only SystemAdministrator/RiskManager can approve or reject.</div>}
     <section className="pulse-panel p-5"><div className="flex items-start justify-between"><div><p className="eyebrow">STRATEGY PROMOTIONS</p><p className="mt-1 text-xs text-muted-foreground">Human review before a strategy advances (promotion, live-eligibility).</p></div><TimerReset className="size-4 text-violet-300" /></div><div className="mt-5 flex flex-col gap-3">
       {approvals.length === 0 && <p className="text-xs text-muted-foreground">Nothing pending. Approved and rejected requests drop off this list.</p>}
-      {approvals.map((approval) => <div key={approval.id} className="queue-card"><div className="flex items-start justify-between"><div><h3 className="text-sm font-semibold">{approval.subject_type} · {approval.subject_id.slice(0, 8)}</h3><p className="mt-1 text-xs text-muted-foreground">{approval.transition_type} · requested by {approval.requested_by ?? 'unknown'}</p></div><span className="status-chip status-amber">REVIEW</span></div><div className="mt-4 flex flex-wrap gap-2"><button disabled={!canDecide} onClick={() => onDecideApproval(approval, true)} className="button-primary"><Check className="size-3" />Approve</button><button disabled={!canDecide} onClick={() => onDecideApproval(approval, false)} className="button-danger"><X className="size-3" />Reject</button></div></div>)}
+      {approvals.map((approval) => <div key={approval.id} className="queue-card"><div className="flex items-start justify-between"><div><h3 className="text-sm font-semibold">{describeApproval(labels.get(approval.id) ?? approval)}</h3><p className="mt-1 text-xs text-muted-foreground">requested by {labels.get(approval.id)?.requested_by_label ?? approval.requested_by ?? 'unknown'} · {new Date(approval.created_at).toLocaleString()}</p></div><span className="status-chip status-amber">REVIEW</span></div><div className="mt-4 flex flex-wrap gap-2"><button disabled={!canDecide} onClick={() => setDeciding({ approval, approve: true })} className="button-primary"><Check className="size-3" />Approve</button><button disabled={!canDecide} onClick={() => setDeciding({ approval, approve: false })} className="button-danger"><X className="size-3" />Reject</button></div></div>)}
     </div></section>
     <section className="pulse-panel p-5"><div className="flex items-start justify-between"><div><p className="eyebrow">LIVE ORDER INTENTS</p><p className="mt-1 text-xs text-muted-foreground">Phase 18: no per-order sign-off exists anymore. Once a strategy's autonomy switch is on (Strategies page), every real signal submits straight to the broker -- only the Kill Switch, Compliance Checker, Correlation Constraint, and that subscription's own standing rate/notional caps can stop it.</p></div><Play className="size-4 text-cyan-300" /></div><div className="mt-5 flex flex-col gap-2 text-xs text-muted-foreground"><span>See the Strategies page to enroll a subscription and flip its autonomy switch.</span><span>See Orders &amp; Trades for the full, real-time history of every autonomously-resolved intent.</span></div></section>
+    {deciding && (
+      <ConfirmDialog
+        title={`${deciding.approve ? 'Approve' : 'Reject'}: ${describeApproval(labels.get(deciding.approval.id) ?? deciding.approval)}`}
+        description={deciding.approve ? 'The strategy may then move to the next stage. A reason helps whoever reads the history.' : 'The request is closed and the strategy stays where it is. Say why, so the person who asked knows what to fix.'}
+        confirmLabel={deciding.approve ? 'Approve' : 'Reject'}
+        tone={deciding.approve ? 'default' : 'danger'}
+        reason={{ label: 'Reason (optional)', minLength: 0 }}
+        onConfirm={async (reason) => {
+          await onDecideApproval(deciding.approval, deciding.approve, reason || undefined)
+          await labelled.refresh()
+        }}
+        onClose={() => setDeciding(null)}
+      />
+    )}
+    <ApprovalsHistory approvals={labelled.data} error={labelled.error} onRetry={() => void labelled.refresh()} />
   </div>
 }

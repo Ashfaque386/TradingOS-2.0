@@ -718,8 +718,17 @@ export type ApprovalRequestDto = {
   reason: string | null
   decided_by: string | null
   decided_at: string | null
+  // What the decider wrote when they approved or rejected; `reason` is why it was asked for.
+  decision_reason?: string | null
   created_at: string
+  // What the ids stand for, where known: the strategy's name, the people by e-mail.
+  subject_label?: string | null
+  requested_by_label?: string | null
+  decided_by_label?: string | null
 }
+
+export const listApprovals = (statusFilter?: string) =>
+  apiGet<ApprovalRequestDto[]>(`/api/v1/approvals${statusFilter ? `?status_filter=${statusFilter}` : ''}`)
 
 export const decideApproval = (approvalId: string, approve: boolean, reason?: string) =>
   apiPost<ApprovalRequestDto>(`/api/v1/approvals/${approvalId}/decide`, { approve, reason })
@@ -1138,8 +1147,64 @@ export const promoteStrategy = (strategyId: string) =>
   apiPost<Strategy>(`/api/v1/strategies/${strategyId}/promote`)
 export const requestLiveEligibility = (strategyId: string) =>
   apiPost<ApprovalRequestDto>(`/api/v1/strategies/${strategyId}/request-live-eligibility`)
-export const approveLiveEligibility = (strategyId: string, body: GoLiveReadinessInput) =>
-  apiPost<Strategy>(`/api/v1/strategies/${strategyId}/approve-live-eligibility`, body)
+// Sign a strategy off for live eligibility. With no override the gate is judged on the evidence the
+// system derived from its own records; an override puts typed numbers in their place, needs a reason,
+// and is recorded in the audit trail beside the derived figures.
+export type GoLiveOverride = GoLiveReadinessInput & { reason: string }
+export const approveLiveEligibility = (strategyId: string, override?: GoLiveOverride) =>
+  apiPost<Strategy>(`/api/v1/strategies/${strategyId}/approve-live-eligibility`, override ? { override } : {})
+export type GoLiveEvidence = {
+  strategy_id: string
+  as_of: string
+  inputs: Required<GoLiveReadinessInput>
+  thresholds: {
+    min_trades: number
+    min_calendar_days: number
+    min_clean_shadow_days: number
+    max_win_rate_divergence_pp: number
+  }
+  eligible: boolean
+  checks: Record<string, boolean>
+  reasons: string[]
+  counted_closing_fills: number
+  counted_fills: number
+  excluded_unreal_fills: number
+  excluded_administrative_fills: number
+  first_counted_fill_at: string | null
+  backtest_run_id: string | null
+  backtest_data_source: string | null
+  shadow_clean_days_real_sandbox: number
+  shadow_runs_failed_recently: number
+  // inputs the records could not support, and why
+  not_derived: Array<{ input: string; reason: string }>
+}
+export const getGoLiveEvidence = (strategyId: string) =>
+  apiGet<GoLiveEvidence>(`/api/v1/strategies/${strategyId}/go-live-evidence`)
+
+// ---- Shadow Mode (dry-run order checks) ----
+export type ShadowModeRun = {
+  id: string
+  broker_name: string
+  has_sandbox: boolean
+  // real_sandbox_dry_run: the broker's own sandbox answered; local_payload_only: the order was built, nothing sent
+  confidence: 'real_sandbox_dry_run' | 'local_payload_only'
+  symbol: string
+  side: string
+  quantity: number
+  created_at: string
+  strategy_id: string | null
+  outcome: 'ok' | 'failed'
+  failure_reason: string | null
+}
+export const listShadowModeRuns = (strategyId?: string) =>
+  apiGet<ShadowModeRun[]>(`/api/v1/shadow-mode/runs${strategyId ? `?strategy_id=${strategyId}` : ''}`)
+export const runShadowModeCheck = (body: {
+  broker: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  strategy_id?: string
+}) => apiPost<ShadowModeRun>('/api/v1/shadow-mode/check', body)
 export const checkGoLiveReadiness = (body: GoLiveReadinessInput) =>
   apiPost<GoLiveReadinessResult>('/api/v1/risk/go-live-readiness', body)
 

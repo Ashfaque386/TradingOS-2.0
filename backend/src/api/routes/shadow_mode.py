@@ -8,6 +8,8 @@ one place an adapter gets constructed for this purpose, not left to the
 caller to remember.
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +21,7 @@ from src.brokers.factory import KNOWN_BROKERS, build_broker_adapter
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.models.shadow_mode_run import ShadowModeRun
+from src.models.strategy import Strategy
 from src.models.user import User
 from src.orchestration.shadow_mode import run_shadow_order_check
 from src.security.secrets_store import SecretsStore
@@ -43,6 +46,9 @@ def _run_response(run: ShadowModeRun) -> ShadowModeRunResponse:
         order_payload=run.order_payload,
         broker_response=run.broker_response,
         created_at=run.created_at.isoformat(),
+        strategy_id=run.strategy_id,
+        outcome=run.outcome,
+        failure_reason=run.failure_reason,
     )
 
 
@@ -59,6 +65,8 @@ async def run_shadow_mode_check_endpoint(
             f"unknown broker: {body.broker!r} (known: {', '.join(KNOWN_BROKERS)})",
         )
 
+    if body.strategy_id is not None and await db.get(Strategy, body.strategy_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no strategy {body.strategy_id}")
     credentials = store.get_credentials(body.broker)
     if credentials is None:
         raise HTTPException(
@@ -76,18 +84,23 @@ async def run_shadow_mode_check_endpoint(
         price=body.price,
         product=body.product,
     )
-    run = await run_shadow_order_check(db, adapter=adapter, order=order)
+    run = await run_shadow_order_check(
+        db, adapter=adapter, order=order, strategy_id=body.strategy_id
+    )
     return _run_response(run)
 
 
 @router.get("/runs")
 async def list_shadow_mode_runs_endpoint(
     broker: str | None = None,
+    strategy_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> list[ShadowModeRunResponse]:
     query = select(ShadowModeRun).order_by(ShadowModeRun.created_at.desc())
     if broker is not None:
         query = query.where(ShadowModeRun.broker_name == broker)
+    if strategy_id is not None:
+        query = query.where(ShadowModeRun.strategy_id == strategy_id)
     result = await db.execute(query)
     return [_run_response(run) for run in result.scalars().all()]

@@ -2,7 +2,17 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Integer, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,6 +22,11 @@ from src.models.base import Base
 class ShadowModeConfidence:
     REAL_SANDBOX_DRY_RUN = "real_sandbox_dry_run"
     LOCAL_PAYLOAD_ONLY = "local_payload_only"
+
+
+class ShadowModeOutcome:
+    OK = "ok"
+    FAILED = "failed"
 
 
 class ShadowModeRun(Base):
@@ -36,6 +51,7 @@ class ShadowModeRun(Base):
             "confidence IN ('real_sandbox_dry_run','local_payload_only')",
             name="ck_shadow_mode_runs_confidence",
         ),
+        CheckConstraint("outcome IN ('ok','failed')", name="ck_shadow_mode_runs_outcome"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -49,6 +65,17 @@ class ShadowModeRun(Base):
 
     order_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     broker_response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # Which strategy's readiness this check counts toward (NULL: a broker-level check nobody tied to
+    # one), and whether it worked. A dry run that raised used to leave no row at all, so a streak of
+    # "clean" days could not be told from a streak of days nothing was tried.
+    strategy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=True, index=True
+    )
+    outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=ShadowModeOutcome.OK, server_default="ok"
+    )
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

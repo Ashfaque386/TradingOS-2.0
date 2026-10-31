@@ -69,6 +69,11 @@ class PaperFill(Base):
         Float, nullable=False, default=0.0, server_default="0"
     )
     costs_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # A close done by hand without the risk gate (a SystemAdministrator's cleanup): not a trade the
+    # strategy made, so the Go-Live evidence leaves it out.
+    administrative: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

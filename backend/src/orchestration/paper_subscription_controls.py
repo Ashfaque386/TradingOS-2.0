@@ -418,6 +418,7 @@ async def close_position(
         data_source=data_source,
         charge_costs=not administrative,  # a cleanup is not a trade: no broker would charge it
         symbol=leg,
+        administrative=administrative,
     )
     latest = (
         await db.execute(

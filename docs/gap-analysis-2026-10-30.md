@@ -56,6 +56,16 @@ this is where it stands.
 | G22 (ledger part) | The live position moves only on a broker-confirmed fill, at the broker's price, with estimated costs; a rejected or cancelled order moves nothing; one row per strategy and symbol. **Still open (Phase 6):** the live adapter is resolved once at boot, live intents have no staleness guard, and the live circuit-band check compares a price with itself. |
 | W10 | The risk-limit screen offers real limits and their range, shows every change with who and when, and can reject. |
 
+**Closed in phase 4 (Go-Live evidence from the records):**
+
+| Gap | What changed |
+|---|---|
+| G2 | The gate is judged on evidence derived from the paper fills (real-price closing fills only; generated, typed and administrative ones set aside and counted), a real-data backtest and the Shadow Mode record, shown with where each number came from and what could not be derived. Typed numbers are an override that needs a reason and a typed confirmation, and the audit trail keeps them beside the derived ones. |
+| G24 | A clean Shadow Mode day is defined (a dry run for the strategy that worked and none that failed, on an NSE trading day) and derivable: runs carry their strategy and outcome, a failed run is stored, and a daily job makes the check. |
+| (approvals) | Sign-off cards name the strategy and the asker, a decision can carry a reason, and decided requests stay in a history. |
+
+**Still open from this phase:** until backtests can be run from the data lake (Phase 9) a backtest on real data does not exist, so the win-rate condition can only be met through the override.
+
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
 - The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.

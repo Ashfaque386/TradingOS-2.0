@@ -343,7 +343,13 @@ class ApprovalRequestResponse(BaseModel):
     reason: str | None
     decided_by: str | None
     decided_at: datetime_type | None
+    # What the decider wrote when they approved or rejected (`reason` is why it was asked for).
+    decision_reason: str | None = None
     created_at: datetime_type
+    # What the ids stand for, where known: the strategy's name, and the people by e-mail.
+    subject_label: str | None = None
+    requested_by_label: str | None = None
+    decided_by_label: str | None = None
 
 
 class PortfolioAllocationEntry(BaseModel):
@@ -621,6 +627,66 @@ class GoLiveReadinessResponse(BaseModel):
     eligible: bool
     checks: dict[str, bool]
     reasons: list[str]
+
+
+class GoLiveInputsResponse(BaseModel):
+    num_trades: int
+    calendar_days_running: int
+    clean_shadow_mode_streak_days: int
+    live_win_rate: float | None
+    backtest_win_rate: float | None
+
+
+class GoLiveThresholdsResponse(BaseModel):
+    min_trades: int
+    min_calendar_days: int
+    min_clean_shadow_days: int
+    max_win_rate_divergence_pp: float
+
+
+class NotDerivedResponse(BaseModel):
+    input: str
+    reason: str
+
+
+class GoLiveEvidenceResponse(BaseModel):
+    """The Go-Live inputs as the system worked them out from its own records, judged by the gate,
+    with what was counted, what was set aside and what could not be derived."""
+
+    strategy_id: uuid.UUID
+    as_of: str
+    inputs: GoLiveInputsResponse
+    thresholds: GoLiveThresholdsResponse
+    eligible: bool
+    checks: dict[str, bool]
+    reasons: list[str]
+    counted_closing_fills: int
+    counted_fills: int
+    excluded_unreal_fills: int
+    excluded_administrative_fills: int
+    first_counted_fill_at: str | None
+    backtest_run_id: uuid.UUID | None
+    backtest_data_source: str | None
+    shadow_clean_days_real_sandbox: int
+    shadow_runs_failed_recently: int
+    not_derived: list[NotDerivedResponse]
+
+
+class GoLiveOverride(BaseModel):
+    """Numbers a person puts in place of the derived evidence. Allowed, but never silent: the
+    reason is required, and the audit trail keeps what was supplied beside what the records said."""
+
+    num_trades: int = Field(ge=0)
+    calendar_days_running: int = Field(ge=0)
+    clean_shadow_mode_streak_days: int = Field(ge=0)
+    live_win_rate: float | None = Field(default=None, ge=0, le=1)
+    backtest_win_rate: float | None = Field(default=None, ge=0, le=1)
+    reason: str = Field(min_length=10, max_length=500)
+
+
+class ApproveLiveEligibilityRequest(BaseModel):
+    # Absent: the gate is judged on the derived evidence.
+    override: GoLiveOverride | None = None
 
 
 class OrderIntentRequest(BaseModel):
@@ -1055,6 +1121,8 @@ class BrokerOAuthLoginUrlResponse(BaseModel):
 
 class ShadowModeCheckRequest(BaseModel):
     broker: str = Field(min_length=1)
+    # The strategy whose Go-Live readiness this check counts toward.
+    strategy_id: uuid.UUID | None = None
     symbol: str = Field(min_length=1, max_length=32)
     side: Literal["buy", "sell"]
     quantity: int = Field(gt=0)
@@ -1074,6 +1142,9 @@ class ShadowModeRunResponse(BaseModel):
     order_payload: dict[str, Any]
     broker_response: dict[str, Any] | None
     created_at: str
+    strategy_id: uuid.UUID | None = None
+    outcome: str = "ok"
+    failure_reason: str | None = None
 
 
 # --- Live Trading (Build Spec §12) ------------------------------------------

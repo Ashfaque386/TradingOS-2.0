@@ -98,16 +98,18 @@ async def _promote_to_live_eligible(client: AsyncClient, admin_token: str, risk_
         headers=_auth(risk_token),
     )
 
+    # A fresh test strategy has no recorded history, so it is signed off by the explicit override.
     readiness_body = {
         "num_trades": 50,
         "calendar_days_running": 30,
         "clean_shadow_mode_streak_days": 15,
         "live_win_rate": 0.55,
         "backtest_win_rate": 0.5,
+        "reason": "test fixture: a strategy with no recorded history",
     }
     approve_resp = await client.post(
         f"/api/v1/strategies/{strategy_id}/approve-live-eligibility",
-        json=readiness_body,
+        json={"override": readiness_body},
         headers=_auth(risk_token),
     )
     assert approve_resp.status_code == 200

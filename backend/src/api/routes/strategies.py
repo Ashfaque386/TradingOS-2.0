@@ -6,6 +6,7 @@ the ApprovalRequest this flow's /promote depends on).
 """
 
 import uuid
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -14,16 +15,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.routes.memory import memory_service_dependency
 from src.api.schemas import (
     ApprovalRequestResponse,
+    ApproveLiveEligibilityRequest,
     CreateStrategyRequest,
-    GoLiveReadinessRequest,
+    GoLiveEvidenceResponse,
+    GoLiveInputsResponse,
+    GoLiveThresholdsResponse,
+    NotDerivedResponse,
     StrategyResponse,
     StrategyVersionResponse,
     SubmitSuggestionRequest,
     SuggestionResponse,
 )
+from src.audit.service import write_audit_entry
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
-from src.engine.risk.go_live_gate import GoLiveReadinessInput
+from src.engine.risk.go_live_gate import (
+    DEFAULT_MAX_WIN_RATE_DIVERGENCE_PP,
+    DEFAULT_MIN_CALENDAR_DAYS,
+    DEFAULT_MIN_CLEAN_SHADOW_DAYS,
+    DEFAULT_MIN_TRADES,
+    GoLiveReadinessInput,
+)
 from src.memory.service import MemoryService, get_pipeline_memory
 from src.models.strategy import Strategy
 from src.models.strategy_suggestion import StrategySuggestion
@@ -32,6 +44,7 @@ from src.models.user import User
 from src.orchestration import strategies as strategies_orch
 from src.orchestration import strategy_suggestions as suggestions_orch
 from src.orchestration.approvals import create_approval_request
+from src.orchestration.go_live_evidence import GoLiveEvidence, derive_go_live_evidence
 from src.orchestration.strategies import (
     LIVE_ELIGIBILITY_TRANSITION_TYPE,
     PROMOTION_TRANSITION_TYPE,
@@ -52,6 +65,7 @@ _LIVE_SIGNOFF_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.RISK_MANAGER]
 register_policy("POST", "/api/v1/strategies", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/strategies", roles=list(Role))
 register_policy("GET", "/api/v1/strategies/{strategy_id}", roles=list(Role))
+register_policy("GET", "/api/v1/strategies/{strategy_id}/go-live-evidence", roles=list(Role))
 # Submitting a suggestion writes a row and feeds the regeneration flow, so it is an operator
 # action like its review and regenerate steps; it was open to every role, the read-only
 # auditor included.
@@ -235,24 +249,82 @@ async def request_live_eligibility_endpoint(
     return ApprovalRequestResponse.model_validate(request)
 
 
+def _evidence_response(evidence: GoLiveEvidence) -> GoLiveEvidenceResponse:
+    result = evidence.readiness()
+    return GoLiveEvidenceResponse(
+        strategy_id=evidence.strategy_id,
+        as_of=evidence.as_of.isoformat(),
+        inputs=GoLiveInputsResponse(
+            num_trades=evidence.inputs.num_trades,
+            calendar_days_running=evidence.inputs.calendar_days_running,
+            clean_shadow_mode_streak_days=evidence.inputs.clean_shadow_mode_streak_days,
+            live_win_rate=evidence.inputs.live_win_rate,
+            backtest_win_rate=evidence.inputs.backtest_win_rate,
+        ),
+        thresholds=GoLiveThresholdsResponse(
+            min_trades=DEFAULT_MIN_TRADES,
+            min_calendar_days=DEFAULT_MIN_CALENDAR_DAYS,
+            min_clean_shadow_days=DEFAULT_MIN_CLEAN_SHADOW_DAYS,
+            max_win_rate_divergence_pp=DEFAULT_MAX_WIN_RATE_DIVERGENCE_PP,
+        ),
+        eligible=result.eligible,
+        checks=result.checks,
+        reasons=result.reasons,
+        counted_closing_fills=evidence.counted_closing_fills,
+        counted_fills=evidence.counted_fills,
+        excluded_unreal_fills=evidence.excluded_unreal_fills,
+        excluded_administrative_fills=evidence.excluded_administrative_fills,
+        first_counted_fill_at=(
+            evidence.first_counted_fill_at.isoformat() if evidence.first_counted_fill_at else None
+        ),
+        backtest_run_id=evidence.backtest_run_id,
+        backtest_data_source=evidence.backtest_data_source,
+        shadow_clean_days_real_sandbox=evidence.shadow_clean_days_real_sandbox,
+        shadow_runs_failed_recently=evidence.shadow_runs_failed_recently,
+        not_derived=[
+            NotDerivedResponse(input=n.input, reason=n.reason) for n in evidence.not_derived
+        ],
+    )
+
+
+@router.get("/{strategy_id}/go-live-evidence")
+async def go_live_evidence_endpoint(
+    strategy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> GoLiveEvidenceResponse:
+    if await db.get(Strategy, strategy_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no strategy {strategy_id}")
+    return _evidence_response(await derive_go_live_evidence(db, strategy_id))
+
+
 @router.post("/{strategy_id}/approve-live-eligibility")
 async def approve_live_eligibility_endpoint(
     strategy_id: uuid.UUID,
-    body: GoLiveReadinessRequest,
+    body: ApproveLiveEligibilityRequest | None = None,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role),
+    current_user: User = Depends(require_role),
 ) -> StrategyResponse:
+    """Sign a strategy off for live eligibility. The gate is judged on the evidence the system
+    derived from its own records. A person can instead supply the numbers, but only with a reason,
+    and the audit trail then holds the supplied figures beside the derived ones."""
+    if await db.get(Strategy, strategy_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no strategy {strategy_id}")
+    evidence = await derive_go_live_evidence(db, strategy_id)
+    override = body.override if body else None
+    if override is None:
+        readiness_input = evidence.inputs
+    else:
+        readiness_input = GoLiveReadinessInput(
+            num_trades=override.num_trades,
+            calendar_days_running=override.calendar_days_running,
+            clean_shadow_mode_streak_days=override.clean_shadow_mode_streak_days,
+            live_win_rate=override.live_win_rate,
+            backtest_win_rate=override.backtest_win_rate,
+        )
     try:
         applied = await strategies_orch.approve_strategy_for_live_eligibility(
-            db,
-            strategy_id,
-            readiness_input=GoLiveReadinessInput(
-                num_trades=body.num_trades,
-                calendar_days_running=body.calendar_days_running,
-                clean_shadow_mode_streak_days=body.clean_shadow_mode_streak_days,
-                live_win_rate=body.live_win_rate,
-                backtest_win_rate=body.backtest_win_rate,
-            ),
+            db, strategy_id, readiness_input=readiness_input
         )
     except ApprovalRequiredError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -265,4 +337,20 @@ async def approve_live_eligibility_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail="Strategy is not in PaperTrading status (or does not exist)",
         )
+    if override is not None:
+        await write_audit_entry(
+            db,
+            actor=current_user.email,
+            action="strategy.go_live_evidence_overridden",
+            entity_type="strategy",
+            entity_id=str(strategy_id),
+            details={
+                "reason": override.reason,
+                "supplied": asdict(readiness_input),
+                "derived": asdict(evidence.inputs),
+                "derived_eligible": evidence.readiness().eligible,
+                "not_derived": [n.input for n in evidence.not_derived],
+            },
+        )
+        await db.commit()
     return await _load_strategy_response(db, strategy_id)

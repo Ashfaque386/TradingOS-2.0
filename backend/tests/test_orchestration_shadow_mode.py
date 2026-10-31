@@ -138,3 +138,90 @@ async def test_shadow_run_writes_an_audit_log_entry_with_the_same_confidence(db_
     assert entries[0].entity_id == "zerodha"
     assert entries[0].details["confidence"] == run.confidence
     assert entries[0].details["has_sandbox"] is False
+
+
+# Phase 4: a run belongs to a strategy, and a run that failed is a run.
+
+
+async def test_a_run_is_tied_to_the_strategy_it_counts_toward_and_records_that_it_worked(
+    db_session_factory,
+):
+    from src.orchestration.strategies import create_strategy
+
+    adapter = ZerodhaKiteAdapter(
+        _CREDENTIALS, transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+    )
+    async with db_session_factory() as db:
+        strategy = await create_strategy(db, name="ShadowOwner", objective="o")
+        run = await run_shadow_order_check(
+            db, adapter=adapter, order=_ORDER, strategy_id=strategy.id
+        )
+        entry = (
+            (await db.execute(select(AuditLog).where(AuditLog.action == "shadow_mode.dry_run")))
+            .scalars()
+            .one()
+        )
+
+    assert run.strategy_id == strategy.id
+    assert run.outcome == "ok"
+    assert run.failure_reason is None
+    assert entry.details["outcome"] == "ok"
+    assert entry.details["strategy_id"] == str(strategy.id)
+
+
+async def test_a_run_nobody_tied_to_a_strategy_has_none(db_session_factory):
+    adapter = ZerodhaKiteAdapter(
+        _CREDENTIALS, transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+    )
+    async with db_session_factory() as db:
+        run = await run_shadow_order_check(db, adapter=adapter, order=_ORDER)
+
+    assert run.strategy_id is None
+
+
+async def test_a_sandbox_call_that_fails_is_recorded_as_a_failed_run_with_its_reason(
+    db_session_factory,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"errors": [{"message": "sandbox is down"}]})
+
+    adapter = UpstoxAdapter(
+        _CREDENTIALS,
+        sandbox=True,
+        transport=httpx.MockTransport(handler),
+        instruments=_FixedInstruments(),
+    )
+    async with db_session_factory() as db:
+        run = await run_shadow_order_check(db, adapter=adapter, order=_ORDER)
+        entry = (
+            (await db.execute(select(AuditLog).where(AuditLog.action == "shadow_mode.dry_run")))
+            .scalars()
+            .one()
+        )
+
+    assert run.outcome == "failed"
+    assert run.failure_reason
+    assert run.confidence == ShadowModeConfidence.REAL_SANDBOX_DRY_RUN
+    assert run.broker_response is None
+    assert run.order_payload  # what would have been sent is still recorded
+    assert entry.details["outcome"] == "failed"
+    assert entry.details["failure_reason"] == run.failure_reason
+
+
+async def test_a_payload_that_cannot_be_built_is_a_failed_run_with_an_empty_payload(
+    db_session_factory,
+):
+    class _Broken:
+        broker_name = "zerodha"
+        has_sandbox = False
+
+        def build_order_payload(self, order):
+            raise ValueError("unsupported product " + "x" * 800)
+
+    async with db_session_factory() as db:
+        run = await run_shadow_order_check(db, adapter=_Broken(), order=_ORDER)  # type: ignore[arg-type]
+
+    assert run.outcome == "failed"
+    assert run.order_payload == {}
+    assert run.failure_reason.startswith("unsupported product")
+    assert len(run.failure_reason) == 500  # kept short enough to store and show

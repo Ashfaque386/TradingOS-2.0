@@ -82,7 +82,9 @@ async def seed(peak: float) -> None:
     for position in open_positions:
         await publish_tick(
             redis,
-            Tick(symbol=position.symbol, price=position.avg_cost, timestamp_ms=now_ms, source="real"),
+            Tick(
+                symbol=position.symbol, price=position.avg_cost, timestamp_ms=now_ms, source="real"
+            ),
         )
     await redis.aclose()
     print(f"peak={peak}")

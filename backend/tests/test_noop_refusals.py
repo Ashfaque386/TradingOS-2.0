@@ -94,11 +94,14 @@ async def test_approving_live_eligibility_for_a_strategy_not_in_paper_trading_is
         )
     ).json()
     body = {
-        "num_trades": 30,
-        "calendar_days_running": 21,
-        "clean_shadow_mode_streak_days": 10,
-        "live_win_rate": 0.55,
-        "backtest_win_rate": 0.5,
+        "override": {
+            "num_trades": 30,
+            "calendar_days_running": 21,
+            "clean_shadow_mode_streak_days": 10,
+            "live_win_rate": 0.55,
+            "backtest_win_rate": 0.5,
+            "reason": "test fixture: nothing is being signed off here",
+        }
     }
 
     resp = await client.post(

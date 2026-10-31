@@ -183,6 +183,7 @@ critical_files = [
   "src/engine/options_grounding.py",
   "src/orchestration/kill_switch.py",
   "src/orchestration/drawdown_monitor.py",
+  "src/orchestration/go_live_evidence.py",
   "src/orchestration/equity.py",
   "src/orchestration/risk_gate.py",
   "src/orchestration/risk_limits.py",
@@ -253,6 +254,13 @@ max_survivors = 6
 path = "src/orchestration/drawdown_monitor.py"
 tests = ["tests/test_orchestration_drawdown_monitor.py"]
 max_survivors = 0
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/go_live_evidence.py"
+tests = ["tests/test_orchestration_go_live_evidence.py"]
+# One survivor, equivalent: `break` to `continue` in the streak loop, which looks at the same
+# day again until the lookback runs out and returns the same count.
+max_survivors = 1
 
 [[tool.tradingos.mutation.module]]
 path = "src/orchestration/risk_gate.py"
