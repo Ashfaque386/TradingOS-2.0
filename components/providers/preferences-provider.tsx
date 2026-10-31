@@ -8,6 +8,7 @@ import {
   useMemo,
   useState,
 } from 'react'
+import { readChoice, readFlag, writeSetting } from '@/lib/safe-storage'
 
 export const PALETTES = [
   { id: 'nominal', label: 'Nominal', color: '#06b6d4' },
@@ -51,10 +52,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
 
   // Hydrate persisted preferences.
   useEffect(() => {
-    const savedPalette = localStorage.getItem('tradingos-palette')
-    const savedPowerSave = localStorage.getItem('tradingos-power-save')
-    if (savedPalette) setPaletteState(savedPalette)
-    if (savedPowerSave) setPowerSaveState(JSON.parse(savedPowerSave))
+    setPaletteState(readChoice('tradingos-palette', PALETTES.map((p) => p.id), 'nominal'))
+    setPowerSaveState(readFlag('tradingos-power-save', false))
   }, [])
 
   // Track OS-level reduced-motion preference, independent of the manual toggle.
@@ -77,18 +76,18 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
 
   const setPalette = useCallback((next: string) => {
     setPaletteState(next)
-    localStorage.setItem('tradingos-palette', next)
+    writeSetting('tradingos-palette', next)
   }, [])
 
   const setPowerSave = useCallback((enabled: boolean) => {
     setPowerSaveState(enabled)
-    localStorage.setItem('tradingos-power-save', JSON.stringify(enabled))
+    writeSetting('tradingos-power-save', enabled)
   }, [])
 
   const togglePowerSave = useCallback(() => {
     setPowerSaveState((current) => {
       const next = !current
-      localStorage.setItem('tradingos-power-save', JSON.stringify(next))
+      writeSetting('tradingos-power-save', next)
       return next
     })
   }, [])

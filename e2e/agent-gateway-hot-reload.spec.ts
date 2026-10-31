@@ -1,9 +1,8 @@
 import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { E2E_USERS, login } from './utils'
+import { E2E_USERS, login, API_BASE_URL } from './utils'
 
-const API_BASE_URL = 'http://localhost:8000'
 const CONFIG_PATH = path.resolve(__dirname, '../config/tradingos.config.json')
 
 // Build Spec §21-22 hardening pass: src/gateway/watcher.py hot-reloads

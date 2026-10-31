@@ -37,6 +37,7 @@ E2E_USERS: dict[str, tuple[str, Role]] = {
     "e2e.admin@example.com": ("E2eAdminPass!2026", Role.SYSTEM_ADMINISTRATOR),
     "e2e.pm@example.com": ("E2ePmPass!2026", Role.PORTFOLIO_MANAGER),
     "e2e.risk@example.com": ("E2eRiskPass!2026", Role.RISK_MANAGER),
+    "e2e.auditor@example.com": ("E2eAuditorPass!2026", Role.READ_ONLY_AUDITOR),
 }
 
 

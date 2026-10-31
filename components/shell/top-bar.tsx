@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Search,
   Command,
@@ -47,6 +48,7 @@ export function TopBar({
   role = 'ReadOnlyAuditor',
   onLogout,
 }: TopBarProps) {
+  const router = useRouter()
   const [showPaletteMenu, setShowPaletteMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
 
@@ -183,10 +185,13 @@ export function TopBar({
                 <span className="block">{userName}</span>
                 <span className="mt-1 block font-mono text-[9px] uppercase tracking-wider text-cyan-300/70">{roleLabel(role)}</span>
               </div>
-              <button className="w-full text-left px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200">
-                Profile
-              </button>
-              <button className="w-full text-left px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200">
+              <button
+                onClick={() => {
+                  setShowUserMenu(false)
+                  router.push('/settings')
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all duration-200"
+              >
                 Settings
               </button>
               <button onClick={onLogout} className="w-full text-left px-3 py-2 text-sm text-destructive hover:bg-white/5 transition-all duration-200 border-t border-[var(--glass-border)]">

@@ -38,9 +38,14 @@ export default function InvestorReportsPage() {
   const [error, setError] = useState<string | null>(null)
 
   async function reload() {
-    const data = await listInvestorReports()
-    setReports(data)
-    setSelectedId((prev) => prev ?? data[0]?.id ?? null)
+    try {
+      const data = await listInvestorReports()
+      setReports(data)
+      setSelectedId((prev) => prev ?? data[0]?.id ?? null)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? `Could not load the reports: ${err.message}` : 'Could not load the reports')
+    }
   }
 
   useEffect(() => {
@@ -52,7 +57,12 @@ export default function InvestorReportsPage() {
       setSelected(null)
       return
     }
-    getInvestorReport(selectedId).then(setSelected).catch(() => setSelected(null))
+    getInvestorReport(selectedId)
+      .then(setSelected)
+      .catch((err) => {
+        setSelected(null)
+        setError(err instanceof Error && err.message ? `Could not open that report: ${err.message}` : 'Could not open that report')
+      })
   }, [selectedId])
 
   async function handleGenerate(event: FormEvent<HTMLFormElement>) {

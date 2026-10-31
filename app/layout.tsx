@@ -1,4 +1,3 @@
-import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
 import { AuthProvider } from '@/components/auth/auth-provider'
@@ -8,7 +7,6 @@ import { CommandPalette } from '@/components/shell/command-palette'
 export const metadata: Metadata = {
   title: 'TradingOS 2.0',
   description: 'AI-native trading operations control console',
-  generator: 'v0.app',
   icons: {
     icon: [
       {
@@ -53,7 +51,6 @@ export default function RootLayout({
             <CommandPalette />
           </AuthProvider>
         </PreferencesProvider>
-        {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
   )

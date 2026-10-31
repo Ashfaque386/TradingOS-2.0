@@ -61,6 +61,12 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ): "drives one tick for tests and drills; the scheduler does this in service",
     # ---- by design: a single-item read that the list endpoint already covers ----
     ("GET", "/api/v1/chat/sessions/{}"): "the list and the messages endpoint cover it",
+    ("GET", "/api/v1/orchestration/runs/{}"): "the runs list carries the same row",
+    ("GET", "/api/v1/backtests/{}"): "the backtests list carries the same row",
+    (
+        "GET",
+        "/api/v1/portfolio/recommendations/{}",
+    ): "the recommendations list carries the same row",
     ("GET", "/api/v1/live-trading/intents/{}"): "the intents list carries the same row",
     ("GET", "/api/v1/live-trading/subscriptions/{}"): "the subscriptions list carries the same row",
     (
@@ -90,6 +96,7 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
         "/api/v1/live-trading/strategies/{}/position",
     ): "Phase 9: live orders and trades per strategy",
     ("GET", "/api/v1/market-data/holidays"): "Phase 9: holiday calendar on Market Analysis",
+    ("GET", "/api/v1/approvals"): "Phase 4: approvals history in Mission Control",
     ("GET", "/api/v1/shadow-mode/runs"): "Phase 4: shadow-mode tab",
     ("POST", "/api/v1/shadow-mode/check"): "Phase 4: shadow-mode tab",
     ("POST", "/api/v1/backtests"): "Phase 9: create a backtest from the lake",

@@ -1,7 +1,7 @@
 'use client'
 
 import { AnimatePresence, motion } from 'framer-motion'
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertCircle, ArrowRight, Ban, BarChart3, Beaker, CalendarClock, Check, CheckCircle2, ChevronRight, Clock3, Inbox, Layers3, MessageSquarePlus, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Sparkles, TimerReset, Trash2, X } from 'lucide-react'
 import { AgentPipelinePanel } from '@/components/mission-control/agent-pipeline-panel'
@@ -42,7 +42,11 @@ import {
   updateScheduledJobSchedule,
 } from '@/lib/api'
 import { useWebSocketChannel } from '@/lib/ws'
+import { ErrorNotice } from '@/components/ui/error-notice'
+import { TabList } from '@/components/ui/tab-list'
 import { can } from '@/lib/permissions'
+import { useFocusTrap } from '@/lib/use-focus-trap'
+import { usePolling } from '@/lib/use-polling'
 
 // Same severity/relative-time/initials conventions as the Overview page's
 // LIVE ACTIVITY FEED panel (app/page.tsx) -- both read the identical real
@@ -661,9 +665,11 @@ function runStatusLabel(run: OrganizationRun): string {
 type RunAction = 'pause' | 'continue' | 'retry' | 'rerun' | 'cancel'
 
 function TaskDrawer({ run, onClose, onAction, canAct, actionError }: { run: OrganizationRun; onClose: () => void; onAction: (action: RunAction) => void; canAct: boolean; actionError: string | null }) {
+  const drawerRef = useRef<HTMLElement>(null)
+  useFocusTrap(drawerRef, onClose)
   const [confirmingCancel, setConfirmingCancel] = useState(false)
   const canCancel = ['pending', 'planning', 'running', 'paused'].includes(run.status)
-  return <AnimatePresence><motion.aside initial={{ x: 440 }} animate={{ x: 0 }} exit={{ x: 440 }} className="fixed right-0 top-0 z-[60] flex h-full w-full max-w-[440px] flex-col border-l border-cyan-300/15 bg-[#080b1b]/95 p-6 shadow-2xl shadow-cyan-950/30 backdrop-blur-2xl"><div className="flex items-start justify-between"><div><p className="eyebrow">RUN INSPECTOR</p><h2 className="mt-2 text-xl font-semibold">{run.objective}</h2><p className="mt-1 font-mono text-xs text-cyan-200">RUN-{run.id.slice(0, 8).toUpperCase()} · {runElapsed(run)} · {run.status}</p></div><button onClick={onClose} aria-label="Close task inspector" className="icon-button"><X className="size-4" /></button></div>
+  return <AnimatePresence><motion.aside ref={drawerRef} role="dialog" aria-modal="true" aria-label={`Run inspector: ${run.objective}`} tabIndex={-1} initial={{ x: 440 }} animate={{ x: 0 }} exit={{ x: 440 }} className="fixed right-0 top-0 z-[60] flex outline-none h-full w-full max-w-[440px] flex-col border-l border-cyan-300/15 bg-[#080b1b]/95 p-6 shadow-2xl shadow-cyan-950/30 backdrop-blur-2xl"><div className="flex items-start justify-between"><div><p className="eyebrow">RUN INSPECTOR</p><h2 className="mt-2 text-xl font-semibold">{run.objective}</h2><p className="mt-1 font-mono text-xs text-cyan-200">RUN-{run.id.slice(0, 8).toUpperCase()} · {runElapsed(run)} · {run.status}</p></div><button onClick={onClose} aria-label="Close task inspector" className="icon-button"><X className="size-4" /></button></div>
     {run.error && <div className="mt-4 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{run.error}</div>}
     <div className="mt-6"><p className="eyebrow">TASK GRAPH ({run.tasks.length})</p><div className="mt-3 flex flex-col gap-3">{run.tasks.length === 0 && <p className="text-xs text-muted-foreground">No tasks planned yet.</p>}{run.tasks.map((task) => <div key={task.id} className="flex gap-3 text-xs"><span className={`mt-1 size-1.5 shrink-0 rounded-full ${task.status === 'succeeded' ? 'bg-emerald-300' : task.status === 'failed' ? 'bg-rose-400' : task.status === 'running' ? 'bg-cyan-300' : task.status === 'cancelled' ? 'bg-slate-500' : 'bg-white/30'}`} /><span className="text-muted-foreground">{task.name} <small className="ml-2 font-mono text-[9px] text-cyan-200/60">{task.status}</small>{task.last_error && <span className="mt-1 block text-rose-300">{task.last_error}</span>}</span></div>)}</div></div>
     {canAct && <div className="mt-6 flex flex-wrap gap-2">
@@ -706,72 +712,28 @@ export default function MissionControlPage() {
   const canGuide = !readOnly
 
   const [activities, setActivities] = useState<ActivityEvent[]>([])
-  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([])
-  const [heartbeatSeconds, setHeartbeatSeconds] = useState<number | null>(null)
-  const [canvasState, setCanvasState] = useState<CanvasState | null>(null)
-  const [analyticsTrend, setAnalyticsTrend] = useState<AgentAnalyticsTrendPoint[]>([])
-  const [analyticsSummary, setAnalyticsSummary] = useState<AgentAnalyticsSummaryRow[]>([])
-  const [guidance, setGuidance] = useState<OperatorGuidanceDto[]>([])
   const [guidanceMessage, setGuidanceMessage] = useState('')
   const [guidanceSubmitting, setGuidanceSubmitting] = useState(false)
   const [guidanceError, setGuidanceError] = useState<string | null>(null)
 
-  const refreshSchedule = useCallback(async () => {
-    try {
-      const data = await getScheduledJobs()
-      setScheduledJobs(data.jobs)
-      setHeartbeatSeconds(data.heartbeat_interval_seconds)
-    } catch {
-      // best-effort poll -- panel just keeps its last known state
-    }
-  }, [])
-
-  const refreshCanvas = useCallback(async () => {
-    try {
-      setCanvasState(await getCanvasState())
-    } catch {
-      // best-effort poll -- panel just keeps its last known state
-    }
-  }, [])
-
-  const refreshAnalytics = useCallback(async () => {
-    try {
-      const [trend, summary] = await Promise.all([
-        getAgentAnalyticsTrend(),
-        getAgentAnalyticsSummary(),
-      ])
-      setAnalyticsTrend(trend)
-      setAnalyticsSummary(summary)
-    } catch {
-      // best-effort poll -- panel just keeps its last known state
-    }
-  }, [])
-
-  const refreshGuidance = useCallback(async () => {
-    try {
-      setGuidance(await listOperatorGuidance())
-    } catch {
-      // best-effort poll
-    }
-  }, [])
-
-  useEffect(() => {
-    refreshSchedule()
-    refreshGuidance()
-    const interval = setInterval(refreshSchedule, 30000)
-    return () => clearInterval(interval)
-  }, [refreshSchedule, refreshGuidance])
-
-  useEffect(() => {
-    refreshCanvas()
-    refreshAnalytics()
-    const canvasInterval = setInterval(refreshCanvas, 15000)
-    const analyticsInterval = setInterval(refreshAnalytics, 60000)
-    return () => {
-      clearInterval(canvasInterval)
-      clearInterval(analyticsInterval)
-    }
-  }, [refreshCanvas, refreshAnalytics])
+  // Each panel polls on its own rhythm; one that cannot be read says so (below) instead of freezing quietly.
+  const schedulePoll = usePolling(getScheduledJobs, { intervalMs: 30_000 })
+  const canvasPoll = usePolling(getCanvasState, { intervalMs: 15_000 })
+  const analyticsPoll = usePolling(
+    async () => {
+      const [trend, summary] = await Promise.all([getAgentAnalyticsTrend(), getAgentAnalyticsSummary()])
+      return { trend, summary }
+    },
+    { intervalMs: 60_000 },
+  )
+  const guidancePoll = usePolling(listOperatorGuidance, { intervalMs: 60_000 })
+  const scheduledJobs: ScheduledJob[] = schedulePoll.data?.jobs ?? []
+  const heartbeatSeconds: number | null = schedulePoll.data?.heartbeat_interval_seconds ?? null
+  const canvasState: CanvasState | null = canvasPoll.data
+  const analyticsTrend: AgentAnalyticsTrendPoint[] = analyticsPoll.data?.trend ?? []
+  const analyticsSummary: AgentAnalyticsSummaryRow[] = analyticsPoll.data?.summary ?? []
+  const guidance: OperatorGuidanceDto[] = guidancePoll.data ?? []
+  const refreshGuidance = guidancePoll.refresh
 
   useWebSocketChannel<ActivityFeedMessage>('/ws/activity-feed', {}, (message) => {
     if (message.type === 'backfill') {
@@ -808,21 +770,23 @@ export default function MissionControlPage() {
     }
   }
 
-  const refreshRuns = useCallback(async () => {
-    try {
+  const runsPoll = usePolling(
+    async () => {
       const data = await listRuns()
       setRuns(data)
       setSelected((prev) => (prev ? (data.find((r) => r.id === prev.id) ?? null) : null))
-    } catch {
-      // best-effort poll -- next tick / WS-triggered refresh retries
-    }
-  }, [])
+    },
+    { intervalMs: 8_000 },
+  )
+  const refreshRuns = runsPoll.refresh
 
-  useEffect(() => {
-    refreshRuns()
-    const interval = setInterval(refreshRuns, 8000)
-    return () => clearInterval(interval)
-  }, [refreshRuns])
+  const feedProblems = [
+    runsPoll.error && `the runs (${runsPoll.error})`,
+    schedulePoll.error && `the schedule (${schedulePoll.error})`,
+    canvasPoll.error && `the pipeline canvas (${canvasPoll.error})`,
+    analyticsPoll.error && `the agent analytics (${analyticsPoll.error})`,
+    guidancePoll.error && `the operator guidance (${guidancePoll.error})`,
+  ].filter((problem): problem is string => Boolean(problem))
 
   useWebSocketChannel<OrganizationEventMessage>('/ws/organization-events', {}, () => {
     refreshRuns()
@@ -872,13 +836,13 @@ export default function MissionControlPage() {
     }
   }
 
-  return <><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5"><header className="mission-hero"><div><p className="eyebrow flex items-center gap-2"><Sparkles className="size-3 text-cyan-300" />CONTROL PLANE // MISSION CONTROL</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">Operator command center</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Coordinate the agent organization and review strategy promotions -- live order intents now execute autonomously per strategy, see the Strategies page.</p></div><div className="flex items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[.06] px-3 py-2 text-xs text-amber-100"><AlertCircle className="size-4" />{pendingCount ? `${pendingCount} item${pendingCount === 1 ? '' : 's'} pending sign-off` : 'No approvals waiting'}</div></header>
+  return <><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">{feedProblems.length > 0 && <ErrorNotice message={`Not updating: ${feedProblems.join('; ')}. What you see may be out of date.`} onRetry={() => void Promise.all([runsPoll.refresh(), schedulePoll.refresh(), canvasPoll.refresh(), analyticsPoll.refresh(), guidancePoll.refresh()])} />}<header className="mission-hero"><div><p className="eyebrow flex items-center gap-2"><Sparkles className="size-3 text-cyan-300" />CONTROL PLANE // MISSION CONTROL</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">Operator command center</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Coordinate the agent organization and review strategy promotions -- live order intents now execute autonomously per strategy, see the Strategies page.</p></div><div className="flex items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[.06] px-3 py-2 text-xs text-amber-100"><AlertCircle className="size-4" />{pendingCount ? `${pendingCount} item${pendingCount === 1 ? '' : 's'} pending sign-off` : 'No approvals waiting'}</div></header>
     {canCreateRun && <form onSubmit={handleCreateRun} className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/[.02] p-3"><Inbox className="size-4 shrink-0 text-cyan-300" /><input value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="Give the organization a new objective..." className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground" /><button type="submit" disabled={creating || !objective.trim()} className="button-primary">{creating ? <RefreshCw className="size-3 animate-spin" /> : <ArrowRight className="size-3" />}Dispatch</button>{createError && <span className="text-xs text-rose-300">{createError}</span>}</form>}
     <AgentPipelinePanel canRun={canCreateRun} />
     <AgentMemoryPanel canWrite={canCreateRun} canDelete={isSystemAdmin} canConfigure={isSystemAdmin} />
     <div className="grid gap-4 xl:grid-cols-3">
       <LiveActivityPanel activities={activities} />
-      <AutomationSchedulePanel jobs={scheduledJobs} heartbeatSeconds={heartbeatSeconds} canManage={isSystemAdmin} onChanged={refreshSchedule} />
+      <AutomationSchedulePanel jobs={scheduledJobs} heartbeatSeconds={heartbeatSeconds} canManage={isSystemAdmin} onChanged={() => void schedulePoll.refresh()} />
       <OperatorGuidancePanel
         guidance={guidance}
         canSubmit={canGuide}
@@ -894,8 +858,8 @@ export default function MissionControlPage() {
       <LiveCanvasPanel state={canvasState} />
       <AgentAnalyticsPanel trend={analyticsTrend} summary={analyticsSummary} />
     </div>
-    <div className="flex items-center justify-between border-b border-white/10"><div className="flex gap-1"><button className={`mission-tab ${view === 'kanban' ? 'mission-tab-active' : ''}`} onClick={() => setView('kanban')}><Layers3 className="size-4" />Kanban board</button><button className={`mission-tab ${view === 'queue' ? 'mission-tab-active' : ''}`} onClick={() => setView('queue')}><ShieldCheck className="size-4" />Sign-off queue <span className="badge-count">{pendingCount}</span></button></div><span className="hidden font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">approvals and run control</span></div>
-    {view === 'kanban' ? <div className="flex gap-3 overflow-x-auto pb-3">{columns.map((column) => { const columnRuns = runs.filter((run) => columnForRun(run) === column); return <section key={column} className="kanban-column"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-cyan-300 shadow-[0_0_12px_currentColor]" /><h2 className="text-xs font-semibold uppercase tracking-wider">{column}</h2></div><span className="font-mono text-[10px] text-muted-foreground">{columnRuns.length.toString().padStart(2, '0')}</span></div><div className="flex min-h-40 flex-col gap-3">{columnRuns.map((run) => <motion.article layoutId={run.id} onClick={() => setSelected(run)} key={run.id} className="task-card"><div className="flex items-start gap-2"><h3 className="flex-1 text-xs font-medium leading-relaxed">{run.objective}</h3><ChevronRight className="size-3 text-muted-foreground" /></div><div className="mt-4 flex items-center justify-between"><div className="avatar-stack">{agentInitials(run).map((agent, i) => <span key={`${run.id}-${agent}-${i}`}>{agent}</span>)}</div><span className="font-mono text-[10px] text-muted-foreground"><Clock3 className="mr-1 inline size-3" />{runElapsed(run)}</span></div><div className="mt-3 flex items-center gap-2"><span className="font-mono text-[9px] uppercase tracking-wide shrink-0" style={{ color: accentFor(run) }}>{runStatusLabel(run)}</span><div className="progress-track flex-1"><span style={{ width: `${runProgress(run)}%`, background: accentFor(run) }} /></div><span className="font-mono text-[9px]" style={{ color: accentFor(run) }}>{runProgress(run)}%</span></div></motion.article>)}</div></section> })}</div> : <SignoffQueue signoff={signoff} canDecide={canDecide} decisionError={decisionError} onDecideApproval={handleDecideApproval} />}
+    <div className="flex items-center justify-between border-b border-white/10"><TabList label="Mission Control views" className="flex gap-1"><button role="tab" aria-selected={view === 'kanban'} tabIndex={view === 'kanban' ? 0 : -1} className={`mission-tab ${view === 'kanban' ? 'mission-tab-active' : ''}`} onClick={() => setView('kanban')}><Layers3 className="size-4" />Kanban board</button><button role="tab" aria-selected={view === 'queue'} tabIndex={view === 'queue' ? 0 : -1} className={`mission-tab ${view === 'queue' ? 'mission-tab-active' : ''}`} onClick={() => setView('queue')}><ShieldCheck className="size-4" />Sign-off queue <span className="badge-count">{pendingCount}</span></button></TabList><span className="hidden font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">approvals and run control</span></div>
+    {view === 'kanban' ? <div className="flex gap-3 overflow-x-auto pb-3">{columns.map((column) => { const columnRuns = runs.filter((run) => columnForRun(run) === column); return <section key={column} className="kanban-column"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-cyan-300 shadow-[0_0_12px_currentColor]" /><h2 className="text-xs font-semibold uppercase tracking-wider">{column}</h2></div><span className="font-mono text-[10px] text-muted-foreground">{columnRuns.length.toString().padStart(2, '0')}</span></div><div className="flex min-h-40 flex-col gap-3">{columnRuns.map((run) => <motion.article layoutId={run.id} onClick={() => setSelected(run)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(run) } }} role="button" tabIndex={0} aria-label={`Open run: ${run.objective}`} key={run.id} className="task-card"><div className="flex items-start gap-2"><h3 className="flex-1 text-xs font-medium leading-relaxed">{run.objective}</h3><ChevronRight className="size-3 text-muted-foreground" /></div><div className="mt-4 flex items-center justify-between"><div className="avatar-stack">{agentInitials(run).map((agent, i) => <span key={`${run.id}-${agent}-${i}`}>{agent}</span>)}</div><span className="font-mono text-[10px] text-muted-foreground"><Clock3 className="mr-1 inline size-3" />{runElapsed(run)}</span></div><div className="mt-3 flex items-center gap-2"><span className="font-mono text-[9px] uppercase tracking-wide shrink-0" style={{ color: accentFor(run) }}>{runStatusLabel(run)}</span><div className="progress-track flex-1"><span style={{ width: `${runProgress(run)}%`, background: accentFor(run) }} /></div><span className="font-mono text-[9px]" style={{ color: accentFor(run) }}>{runProgress(run)}%</span></div></motion.article>)}</div></section> })}</div> : <SignoffQueue signoff={signoff} canDecide={canDecide} decisionError={decisionError} onDecideApproval={handleDecideApproval} />}
   </div>{selected && <TaskDrawer key={selected.id} run={selected} onClose={() => { setSelected(null); setRunActionError(null) }} onAction={(action) => handleRunAction(selected, action)} canAct={!readOnly} actionError={runActionError} />}</>
 }
 

@@ -10,6 +10,7 @@ import { useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
 import type { Role } from '@/lib/api'
 import { ConsoleStateProvider, useConsoleState } from './console-state'
+import { KillSwitchBanner } from './kill-switch-banner'
 
 interface ShellLayoutProps {
   children: React.ReactNode
@@ -123,7 +124,10 @@ function ShellFrame({
         className="shell-main transition-all duration-300"
         data-collapsed={sidebarCollapsed}
       >
-        <div className="shell-main-inner">{children}</div>
+        <div className="shell-main-inner">
+          <KillSwitchBanner role={role} />
+          {children}
+        </div>
       </main>
 
       {/* Bottom tab bar + drawer (mobile) */}

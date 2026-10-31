@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { E2E_USERS, login, parseSeedOutput, runSeedScript } from './utils'
+import { E2E_USERS, login, parseSeedOutput, runSeedScript, API_BASE_URL, tokenFor } from './utils'
 
 // Build Spec §21-22 hardening pass, Phase 18 redesign: the per-order
 // human-approval gate (this file used to be signoff-queue.spec.ts,
@@ -16,16 +16,9 @@ import { E2E_USERS, login, parseSeedOutput, runSeedScript } from './utils'
 // that one prerequisite state directly and this spec spends its own
 // UI-driving budget on the part unique to Phase 18.
 
-const API_BASE_URL = 'http://localhost:8000'
 
 async function adminToken(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(E2E_USERS.admin),
-  })
-  const { access_token } = (await res.json()) as { access_token: string }
-  return access_token
+  return tokenFor(E2E_USERS.admin)
 }
 
 async function runDailySignal(token: string): Promise<void> {
@@ -62,7 +55,7 @@ async function openStrategy(page: import('@playwright/test').Page, name: string)
 }
 
 async function enroll(page: import('@playwright/test').Page, symbol: string, maxIntentsPerWindow?: number) {
-  await page.getByRole('button', { name: 'Lifecycle', exact: true }).click()
+  await page.getByRole('tab', { name: 'Lifecycle', exact: true }).click()
   await expect(page.getByText('Current stage: Live Eligible')).toBeVisible({ timeout: 15_000 })
   await page.getByLabel('Symbol').fill(symbol)
   if (maxIntentsPerWindow !== undefined) {
@@ -72,10 +65,19 @@ async function enroll(page: import('@playwright/test').Page, symbol: string, max
   await expect(page.getByText('Autonomous trading is OFF')).toBeVisible({ timeout: 15_000 })
 }
 
+/** With autonomy on, a tick can send a real order, so the page asks for the symbol first. */
+async function generateIntent(page: import('@playwright/test').Page, symbol: string) {
+  await page.getByRole('button', { name: /^Generate intent$/i }).click()
+  const dialog = page.getByRole('dialog', { name: /Simulate a tick/i })
+  await dialog.getByLabel(`Type ${symbol} to confirm`).fill(symbol)
+  await dialog.getByRole('button', { name: 'Run the tick' }).click()
+}
+
 async function enableAutonomy(page: import('@playwright/test').Page, symbol: string) {
   await page.getByRole('button', { name: /^Enable autonomous trading$/i }).click()
-  await page.getByPlaceholder(`Type ${symbol} to confirm`).fill(symbol)
-  await page.getByRole('button', { name: /Confirm and enable autonomy/i }).click()
+  const dialog = page.getByRole('dialog', { name: /Enable live autonomous trading/i })
+  await dialog.getByLabel(`Type ${symbol} to confirm`).fill(symbol)
+  await dialog.getByRole('button', { name: /Confirm and enable autonomy/i }).click()
   await expect(page.getByText('LIVE AUTONOMOUS TRADING IS ON')).toBeVisible({ timeout: 15_000 })
 }
 
@@ -134,7 +136,7 @@ test('enabling autonomy through the confirmation modal auto-resolves the next re
   await runDailySignal(token)
 
   await page.getByPlaceholder('tick price').fill('106')
-  await page.getByRole('button', { name: /^Generate intent$/i }).click()
+  await generateIntent(page, symbol)
   await expect(page.getByText(/status\s+(SUBMITTED|FAILED)/i)).toBeVisible({ timeout: 15_000 })
 
   const intents = await listIntentsForStrategy(token, strategyId)
@@ -146,7 +148,7 @@ test('enabling autonomy through the confirmation modal auto-resolves the next re
   // record of what the safety layer let through or blocked, independent
   // of this workspace's own transient "Last result" line.
   await page.goto('/orders')
-  await page.getByRole('button', { name: /Live Order Intents/i }).click()
+  await page.getByRole('tab', { name: /Live Order Intents/i }).click()
   const historyRow = page.locator('.intent-row', { hasText: symbol }).first()
   await expect(historyRow).toBeVisible({ timeout: 15_000 })
   await expect(historyRow.locator('.outcome')).not.toContainText(/GENERATED|PENDING/i)
@@ -173,11 +175,11 @@ test('a tripped kill switch blocks generation even with autonomy enabled', async
 
   try {
     await page.getByPlaceholder('tick price').fill('106')
-    await page.getByRole('button', { name: /^Generate intent$/i }).click()
+    await generateIntent(page, symbol)
     // The panel surfaces the real backend error (KillSwitchTrippedError's
     // own message via ApiError), not a generic fallback -- assert on the
     // substance (kill switch tripped), not the exact wording.
-    await expect(page.getByText(/kill switch is tripped/i)).toBeVisible({
+    await expect(page.getByRole('dialog').getByText(/kill switch is tripped/i)).toBeVisible({
       timeout: 15_000,
     })
 
@@ -208,13 +210,13 @@ test('the standing rate cap blocks a runaway signal independent of the kill swit
 
   // First tick: a real attempt, consuming the cap's one slot for this window.
   await page.getByPlaceholder('tick price').fill('106')
-  await page.getByRole('button', { name: /^Generate intent$/i }).click()
+  await generateIntent(page, symbol)
   await expect(page.getByText(/status\s+(GENERATED|SUBMITTED|FAILED)/i)).toBeVisible({ timeout: 15_000 })
 
   // Second tick, immediately after: the cap must block it before it's
   // ever attempted -- no Kill Switch involved at all here.
   await page.getByPlaceholder('tick price').fill('107')
-  await page.getByRole('button', { name: /^Generate intent$/i }).click()
+  await generateIntent(page, symbol)
   await expect(page.getByText(/status\s+CAPPED/i)).toBeVisible({ timeout: 15_000 })
 
   const intents = await listIntentsForStrategy(token, strategyId)

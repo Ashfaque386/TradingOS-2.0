@@ -5,7 +5,7 @@ const nextConfig = {
   // conflicts with it, so never set it there.
   ...(process.env.VERCEL ? {} : { output: 'standalone' }),
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   images: {
     unoptimized: true,

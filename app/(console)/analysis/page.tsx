@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { usePolling } from '@/lib/use-polling'
 import { Bar, CartesianGrid, ComposedChart, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertTriangle, Cable, CheckCircle2, Clock3, Database, Globe2, LineChart as LineChartIcon, ListTree, Search, Sparkles, XCircle } from 'lucide-react'
 import { ChartContainer } from '@/components/ui/chart'
 import { ErrorNotice } from '@/components/ui/error-notice'
+import { TabList } from '@/components/ui/tab-list'
 import { messageOf } from '@/lib/errors'
 import {
   ApiError,
@@ -86,27 +88,10 @@ function ChangeTile({ name, change }: { name: string; change: number }) {
 }
 
 function PulseTab() {
-  const [pulse, setPulse] = useState<MarketPulse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [attempt, setAttempt] = useState(0)
+  // The server answers 503 with its reason when no broker is connected: say that, not "Loading".
+  const { data: pulse, error, refresh } = usePolling(getMarketPulse, { intervalMs: 30_000 })
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const data = await getMarketPulse()
-        if (!cancelled) { setPulse(data); setError(null) }
-      } catch (err) {
-        // The server answers 503 with its reason when no broker is connected: say that, not "Loading".
-        if (!cancelled) setError(messageOf(err, 'Could not load the market pulse'))
-      }
-    }
-    load()
-    const interval = setInterval(load, 30000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [attempt])
-
-  if (error && !pulse) return <div className="p-4"><ErrorNotice message={error} onRetry={() => setAttempt((n) => n + 1)} /></div>
+  if (error && !pulse) return <div className="p-4"><ErrorNotice message={error} onRetry={() => void refresh()} /></div>
   if (!pulse) return <p className="p-4 text-xs text-muted-foreground">Loading market pulse…</p>
 
   return (
@@ -236,13 +221,25 @@ function FreshnessTab() {
   const [records, setRecords] = useState<FreshnessRecord[]>([])
   const [query, setQuery] = useState('')
 
-  useEffect(() => { listInstruments().then((data) => { setInstruments(data); setSymbol((prev) => prev ?? data[0]?.symbol ?? null) }) }, [])
-  useEffect(() => { if (symbol) getFreshness(symbol).then(setRecords) }, [symbol])
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listInstruments()
+      .then((data) => { setInstruments(data); setSymbol((prev) => prev ?? data[0]?.symbol ?? null) })
+      .catch((err) => setLoadError(messageOf(err, 'Could not load the instrument list')))
+  }, [])
+  useEffect(() => {
+    if (!symbol) return
+    getFreshness(symbol)
+      .then((data) => { setRecords(data); setLoadError(null) })
+      .catch((err) => { setRecords([]); setLoadError(messageOf(err, `Could not load the data freshness for ${symbol}`)) })
+  }, [symbol])
 
   const filtered = instruments.filter((i) => i.symbol.toLowerCase().includes(query.toLowerCase())).slice(0, 50)
 
   return (
     <div className="technical-layout">
+      {loadError && <div className="col-span-full"><ErrorNotice message={loadError} /></div>}
       <Panel title="Symbol" eyebrow="SEARCH" className="symbol-panel">
         <label className="symbol-search-box"><Search className="size-3.5" /><input placeholder="Search NSE / BSE symbol..." value={query} onChange={(e) => setQuery(e.target.value)} /></label>
         <div className="symbol-list">{filtered.map((i) => <button key={i.symbol} className={i.symbol === symbol ? 'symbol-chip active' : 'symbol-chip'} onClick={() => setSymbol(i.symbol)}>{i.symbol}</button>)}</div>
@@ -266,27 +263,17 @@ function _statusDot(status: string | null): string {
 }
 
 function DatalakeStatusTab() {
-  const [status, setStatus] = useState<DatalakeStatus | null>(null)
-  const [runs, setRuns] = useState<MarketDataProvenanceEntry[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [attempt, setAttempt] = useState(0)
+  const { data: lake, error, refresh } = usePolling(
+    async () => {
+      const [status, runs] = await Promise.all([getDatalakeStatus(), listProvenance()])
+      return { status, runs }
+    },
+    { intervalMs: 30_000 },
+  )
+  const status: DatalakeStatus | null = lake?.status ?? null
+  const runs: MarketDataProvenanceEntry[] = lake?.runs ?? []
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const [s, r] = await Promise.all([getDatalakeStatus(), listProvenance()])
-        if (!cancelled) { setStatus(s); setRuns(r); setError(null) }
-      } catch (err) {
-        if (!cancelled) setError(messageOf(err, 'Could not load the data lake status'))
-      }
-    }
-    load()
-    const interval = setInterval(load, 30000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [attempt])
-
-  if (error && !status) return <div className="p-4"><ErrorNotice message={error} onRetry={() => setAttempt((n) => n + 1)} /></div>
+  if (error && !status) return <div className="p-4"><ErrorNotice message={error} onRetry={() => void refresh()} /></div>
   if (!status) return <p className="p-4 text-xs text-muted-foreground">Loading data lake status…</p>
 
   return (
@@ -330,26 +317,28 @@ function DatalakeStatusTab() {
 }
 
 function ProvidersTab() {
-  const [providers, setProviders] = useState<LlmProviderStatus[]>([])
-  const [brokers, setBrokers] = useState<BrokerCredentialStatus[]>([])
-  const [breakers, setBreakers] = useState<BrokerCircuitBreakerStatus[]>([])
-
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const failed = (what: string) => (err: unknown) => setLoadError(messageOf(err, `Could not load ${what}`))
-    listLlmProviderStatus().then(setProviders).catch(failed('the LLM provider status'))
-    listBrokerCredentialStatus().then(setBrokers).catch(failed('the broker status'))
-    listBrokerCircuitBreakerStatus().then(setBreakers).catch(failed('the broker circuit breakers'))
-    const interval = setInterval(() => listBrokerCircuitBreakerStatus().then(setBreakers).catch(() => {}), 10_000)
-    return () => clearInterval(interval)
-  }, [])
+  const statuses = usePolling(
+    async () => {
+      const [providers, brokers] = await Promise.all([listLlmProviderStatus(), listBrokerCredentialStatus()])
+      return { providers, brokers }
+    },
+    { intervalMs: 60_000 },
+  )
+  const circuit = usePolling(listBrokerCircuitBreakerStatus, { intervalMs: 10_000 })
+  const providers: LlmProviderStatus[] = statuses.data?.providers ?? []
+  const brokers: BrokerCredentialStatus[] = statuses.data?.brokers ?? []
+  const breakers: BrokerCircuitBreakerStatus[] = circuit.data ?? []
+  const loadError = statuses.error ?? circuit.error
 
   const breakerByBroker = Object.fromEntries(breakers.map((b) => [b.broker, b]))
 
   return (
     <div className="technical-layout">
-      {loadError && <div className="col-span-full"><ErrorNotice message={loadError} /></div>}
+      {loadError && (
+        <div className="col-span-full">
+          <ErrorNotice message={`Could not load the provider status: ${loadError}`} onRetry={() => void Promise.all([statuses.refresh(), circuit.refresh()])} />
+        </div>
+      )}
       <Panel title="LLM providers" eyebrow="CREDENTIAL + FALLBACK-CHAIN STATUS">
         <div className="provider-status-list">
           {providers.map((p) => (
@@ -368,12 +357,13 @@ function ProvidersTab() {
           {brokers.map((b) => {
             const breaker = breakerByBroker[b.broker]
             const tripped = breaker?.state === 'open'
+            const rejected = Boolean(b.feed_rejected_at) // the broker refused the token: the clock says valid, the broker says no
             return (
               <div className="provider-status-row" key={b.broker}>
-                <span className={`provider-status-dot ${tripped ? 'red' : b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
+                <span className={`provider-status-dot ${tripped || rejected ? 'red' : b.token_status === 'valid' ? 'green' : b.token_status === 'expired' ? 'amber' : 'gray'}`} />
                 <div className="min-w-0 flex-1">
                   <strong className="capitalize">{b.broker}</strong>
-                  <small>{b.token_status === 'valid' ? 'token valid' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+                  <small>{rejected ? `${b.broker} refused the stored token${b.feed_rejection_status ? ` (HTTP ${b.feed_rejection_status})` : ''}, so live quotes are not flowing — reconnect in Settings` : b.token_status === 'valid' ? 'token valid (by the clock)' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
                   <small>
                     {tripped
                       ? `circuit OPEN — ${breaker.consecutive_failures} consecutive failures${breaker.cooldown_remaining_seconds != null ? `, retry in ${Math.ceil(breaker.cooldown_remaining_seconds)}s` : ''}`
@@ -509,13 +499,19 @@ function OptionChainTab() {
   const [instruments, setInstruments] = useState<Instrument[]>([])
   const [underlying, setUnderlying] = useState('NIFTY')
 
-  useEffect(() => { listInstruments().then(setInstruments) }, [])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  useEffect(() => {
+    listInstruments()
+      .then(setInstruments)
+      .catch((err) => setLoadError(messageOf(err, 'Could not load the instrument list')))
+  }, [])
 
   const options = instruments.filter((i) => i.instrument_type === 'option' && i.underlying_symbol === underlying)
   const underlyings = Array.from(new Set(instruments.filter((i) => i.instrument_type === 'option').map((i) => i.underlying_symbol).filter((s): s is string => Boolean(s))))
 
   return (
     <div className="flex flex-col gap-5">
+      {loadError && <ErrorNotice message={loadError} />}
       <LiveOptionChainPanel />
       <Panel title="Option instrument master" eyebrow={`${underlying} · STATIC INSTRUMENT MASTER`} actions={<select value={underlying} onChange={(e) => setUnderlying(e.target.value)} className="backtest-select">{underlyings.length > 0 ? underlyings.map((s) => <option key={s}>{s}</option>) : <option>{underlying}</option>}</select>}>
         <div className="overflow-x-auto mt-4"><table className="option-chain-table"><thead><tr><th>Symbol</th><th>Strike</th><th>Type</th><th>Expiry</th><th>Lot size</th><th>Tick size</th></tr></thead><tbody>{options.map((o) => <tr key={o.symbol}><td className="mono">{o.symbol}</td><td className="strike-cell">{o.strike_price}</td><td>{o.option_type}</td><td className="mono">{o.expiry_date}</td><td className="mono">{o.lot_size}</td><td className="mono">{o.tick_size}</td></tr>)}{options.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-xs text-muted-foreground">No option instruments found for this underlying.</td></tr>}</tbody></table></div>
@@ -534,7 +530,7 @@ export default function MarketAnalysisPage() {
           <div><p className="eyebrow">TRADINGOS // MARKET INTELLIGENCE</p><h1>Market Analysis</h1><p>Volatility, sector breadth, data health, and derivatives instrument master — real backend state, honest gaps labeled where no live feed exists.</p></div>
           <div className="analysis-live-chip"><Sparkles className="size-3.5" /> {active?.label}</div>
         </header>
-        <div className="analysis-tabs">{TABS.map((t) => { const Icon = t.icon; return <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}><Icon className="size-3.5" /> {t.label}</button> })}</div>
+        <TabList label="Market analysis views" className="analysis-tabs">{TABS.map((t) => { const Icon = t.icon; return <button key={t.id} role="tab" aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}><Icon className="size-3.5" /> {t.label}</button> })}</TabList>
         {tab === 'pulse' && <PulseTab />}
         {tab === 'technical' && <TechnicalTab />}
         {tab === 'freshness' && <FreshnessTab />}

@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { E2E_USERS, login } from './utils'
+import { E2E_USERS, login, API_BASE_URL } from './utils'
 
-const API_BASE_URL = 'http://localhost:8000'
 
 // Build Spec §21-22 hardening pass: the Kill Switch (Build Spec §8) is
 // described in its own module docstring as "the single most important
@@ -40,12 +39,26 @@ test('kill switch trips on a real drawdown and a risk manager can reset it from 
   await page.goto('/')
 
   await expect(page.getByText('TRIPPED', { exact: true })).toBeVisible({ timeout: 15_000 })
-  const resetButton = page.getByRole('button', { name: /Reset paper kill switch/i })
-  await expect(resetButton).toBeVisible()
 
-  await resetButton.click()
+  // The banner is on every page, not only the Overview, and says why and by how much.
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Orders & Trades' }).click()
+  const banner = page.getByRole('alert').filter({ hasText: 'The paper kill switch is tripped' })
+  await expect(banner).toBeVisible()
+  await expect(banner).toContainText('Drawdown 20.0% against a')
+
+  await banner.getByRole('button', { name: /Reset paper kill switch/i }).click()
+  const dialog = page.getByRole('dialog', { name: 'Reset the paper kill switch' })
+  const confirm = dialog.getByRole('button', { name: 'Reset paper kill switch' })
+  // Nothing happens until there is a reason and the phrase has been typed.
+  await expect(confirm).toBeDisabled()
+  await dialog.getByLabel('Why is it safe to resume?').fill('E2E: drawdown recovered, checked the positions')
+  await expect(confirm).toBeDisabled()
+  await dialog.getByLabel('Type RESET PAPER to confirm').fill('reset paper')
+  await confirm.click()
+
+  await expect(banner).toHaveCount(0, { timeout: 15_000 })
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Overview' }).click()
   await expect(page.getByText('OFF · ARMED', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByRole('button', { name: /Reset paper kill switch/i })).not.toBeVisible()
 
   // The reset must be truthfully attributed -- never self-clears, always
   // records who and when (src/orchestration/kill_switch.py's own module
@@ -53,8 +66,9 @@ test('kill switch trips on a real drawdown and a risk manager can reset it from 
   const stateRes = await fetch(`${API_BASE_URL}/api/v1/kill-switch/paper`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  const state = (await stateRes.json()) as { tripped: boolean }
+  const state = (await stateRes.json()) as { tripped: boolean; reset_reason: string | null }
   expect(state.tripped).toBe(false)
+  expect(state.reset_reason).toBe('E2E: drawdown recovered, checked the positions') // the reason is kept, not dropped
 })
 
 test('an operator without reset rights sees the tripped state but no reset control', async ({
@@ -77,7 +91,8 @@ test('an operator without reset rights sees the tripped state but no reset contr
   await expect(page.getByText('TRIPPED', { exact: true })).toBeVisible({ timeout: 15_000 })
   // PortfolioManager is not in the backend's kill-switch reset RBAC roles
   // (SystemAdministrator, RiskManager only) -- the console must not offer
-  // a control this role can't actually use.
+  // a control this role can't actually use. It still sees the banner.
+  await expect(page.getByRole('alert').filter({ hasText: 'The paper kill switch is tripped' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Reset paper kill switch/i })).not.toBeVisible()
 
   // Clean up so this test doesn't leave the shared dev DB's paper switch

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { E2E_USERS, login } from './utils'
+import { E2E_USERS, login, API_BASE_URL, tokenFor } from './utils'
 
 // Settings > Notification Channels: a failed Disconnect or alert-level change must
 // say so. These calls used to have no error handling at all -- a refusal (the
@@ -11,16 +11,10 @@ import { E2E_USERS, login } from './utils'
 // configured through the API without any network access. The failures themselves
 // are forced by intercepting the request: this is about how the page reacts.
 
-const API_BASE_URL = 'http://localhost:8000'
 const WEBHOOK = 'https://hooks.slack.com/services/T000/B000/e2e-not-a-real-webhook'
 
 async function adminToken(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(E2E_USERS.admin),
-  })
-  return ((await res.json()) as { access_token: string }).access_token
+  return tokenFor(E2E_USERS.admin)
 }
 
 async function configureSlack(token: string) {

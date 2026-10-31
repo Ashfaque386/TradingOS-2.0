@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { E2E_USERS, login, parseSeedOutput, runSeedScript } from './utils'
+import { E2E_USERS, login, parseSeedOutput, runSeedScript, API_BASE_URL } from './utils'
 
 // Cancelling an organization run from Mission Control (backlog item 21).
 //
@@ -10,7 +10,6 @@ import { E2E_USERS, login, parseSeedOutput, runSeedScript } from './utils'
 // that goes through the real UI and API: the confirm step, the cancel request,
 // and what each task ends up as.
 
-const API_BASE_URL = 'http://localhost:8000'
 
 type RunDto = { status: string; completed_at: string | null; tasks: { plan_key: string; status: string }[] }
 

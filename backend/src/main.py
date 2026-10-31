@@ -247,6 +247,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Readable by the console (a browser hides other headers from a cross-origin page): how long to
+    # wait after a 429 (the rate limiter sets the same on its own responses).
+    expose_headers=["Retry-After"],
 )
 # Middleware wraps in reverse registration order -- CorrelationIdMiddleware
 # (added last) is outermost, so a correlation ID is bound before anything

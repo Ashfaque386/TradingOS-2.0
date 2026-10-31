@@ -105,6 +105,10 @@ class RateLimitMiddleware:
                 headers["Access-Control-Allow-Origin"] = origin
                 headers["Access-Control-Allow-Credentials"] = "true"
                 headers["Vary"] = "Origin"
+                # A browser hides every response header but the safelisted ones from a
+                # cross-origin page unless they are exposed: without this the console
+                # could not read how long to wait.
+                headers["Access-Control-Expose-Headers"] = "Retry-After"
             response = PlainTextResponse("Rate limit exceeded", status_code=429, headers=headers)
             await response(scope, receive, send)
             return

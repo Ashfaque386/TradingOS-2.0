@@ -11,27 +11,23 @@ import {
   type ActivityEvent,
   type ActivityFeedMessage,
   type AgentSummary,
-  type KillSwitchMode,
   type LiveTradingSubscriptionDto,
   type OrganizationRun,
   type SignoffSnapshot,
   type SystemVitals,
   type TodaysPaperPnl,
   type UnrealizedPaperPnl,
-  ApiError,
   getAgents,
   getSystemVitals,
   getTodaysPaperPnl,
   getUnrealizedPaperPnl,
   listLiveSubscriptions,
   listRuns,
-  resetKillSwitch,
 } from '@/lib/api'
 import { useConsoleState } from '@/components/shell/console-state'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { usePolling } from '@/lib/use-polling'
 import { useWebSocketChannel } from '@/lib/ws'
-import { can } from '@/lib/permissions'
 
 type PulseState = 'IDLE' | 'RESEARCHING' | 'EXECUTING' | 'AWAITING APPROVAL' | 'RISK ALERT'
 
@@ -156,7 +152,7 @@ function Vitals() {
 
 export default function Home() {
   const { role } = useAuth()
-  const { powerSave } = usePreferences()
+  const { reduceMotion } = usePreferences() // the manual power-save toggle or the OS's reduced-motion setting
   const isReadOnly = role === 'ReadOnlyAuditor'
 
   const [activities, setActivities] = useState<ActivityEvent[]>([])
@@ -169,13 +165,9 @@ export default function Home() {
     refresh: refreshConsoleState,
   } = useConsoleState()
   const [signoff, setSignoff] = useState<SignoffSnapshot | null>(null)
-  const [resettingMode, setResettingMode] = useState<KillSwitchMode | null>(null)
-  const [resetError, setResetError] = useState<string | null>(null)
   const [todaysPnl, setTodaysPnl] = useState<TodaysPaperPnl | null>(null)
   const [unrealizedPnl, setUnrealizedPnl] = useState<UnrealizedPaperPnl | null>(null)
   const [liveSubscriptions, setLiveSubscriptions] = useState<LiveTradingSubscriptionDto[]>([])
-
-  const canResetKillSwitch = can(role, 'POST /api/v1/kill-switch/{mode}/reset')
 
   const load = useCallback(async () => {
     const [agentsRes, runsRes, pnl, unrealizedPnlRes, liveSubsRes] = await Promise.allSettled([
@@ -194,24 +186,6 @@ export default function Home() {
 
   const { refresh: refreshOverview } = usePolling(load, { intervalMs: 20_000 })
   const refreshAll = useCallback(() => Promise.all([refreshOverview(), refreshConsoleState()]), [refreshOverview, refreshConsoleState])
-
-  async function handleResetKillSwitch(mode: KillSwitchMode) {
-    setResettingMode(mode)
-    setResetError(null)
-    try {
-      await resetKillSwitch(mode, `Reset via Overview console by ${role}`)
-      await refreshAll()
-    } catch (err) {
-      // e.g. 409 when someone else already reset it: say so, and refresh so the
-      // console shows the switch's real state instead of a stale "tripped".
-      setResetError(
-        err instanceof ApiError ? err.message : `Failed to reset the ${mode} kill switch. Try again.`,
-      )
-      await refreshAll()
-    } finally {
-      setResettingMode(null)
-    }
-  }
 
   useWebSocketChannel<ActivityFeedMessage>('/ws/activity-feed', {}, (message) => {
     if (message.type === 'backfill') {
@@ -264,12 +238,12 @@ export default function Home() {
     </div>
     <section className={`pulse-hero pulse-state-${state.toLowerCase().replaceAll(' ', '-')}`} style={{ '--pulse-color': config.color, '--pulse-glow': config.glow } as React.CSSProperties}>
       <div className="pulse-header"><div><p className="eyebrow">TRADINGOS // ORGANIZATION PULSE</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">The intelligence layer is <span style={{ color: config.color }}>{state.toLowerCase()}.</span></h1><p className="mt-2 text-sm text-muted-foreground">{config.copy} · NSE / BSE synchronized</p></div></div>
-      <div className="pulse-orb"><PulseScene state={state} reduceMotion={powerSave} /><div className="pulse-status" style={{ borderColor: config.color, color: config.color }}><span className="status-dot" />{state}<small>{state === 'AWAITING APPROVAL' ? `${pendingSignoffs} pending` : state === 'RISK ALERT' ? 'PERIMETER BREACH' : 'LIVE'}</small></div></div>
+      <div className="pulse-orb"><PulseScene state={state} reduceMotion={reduceMotion} /><div className="pulse-status" style={{ borderColor: config.color, color: config.color }}><span className="status-dot" />{state}<small>{state === 'AWAITING APPROVAL' ? `${pendingSignoffs} pending` : state === 'RISK ALERT' ? 'PERIMETER BREACH' : 'LIVE'}</small></div></div>
       <div className="kpi-strip">
         <div><Bot /><span>ACTIVE AGENTS<strong>{agents.length ? `${activeAgentsCount} / ${agents.length}` : '—'}</strong></span></div>
         <div><Radio /><span>LIVE RUNS<strong>{liveRunsCount.toString().padStart(2, '0')}</strong></span></div>
         <div className={pendingSignoffs > 0 ? 'kpi-alert' : ''}><AlertTriangle /><span>PENDING SIGN-OFFS<strong>{pendingSignoffs.toString().padStart(2, '0')}</strong></span></div>
-        <div><TrendingUp /><span>TODAY'S REALIZED P&L<strong className={todaysPnl === null ? 'text-muted-foreground' : todaysPnl.realized_pnl < 0 ? 'text-rose-300' : todaysPnl.realized_pnl > 0 ? 'text-emerald-300' : ''}>{todaysPnl === null ? '—' : `${todaysPnl.realized_pnl >= 0 ? '+' : '-'}₹${Math.abs(todaysPnl.realized_pnl).toFixed(0)}`}</strong></span></div>
+        <div><TrendingUp /><span>TODAY'S REALIZED P&L · BEFORE COSTS<strong className={todaysPnl === null ? 'text-muted-foreground' : todaysPnl.realized_pnl < 0 ? 'text-rose-300' : todaysPnl.realized_pnl > 0 ? 'text-emerald-300' : ''}>{todaysPnl === null ? '—' : `${todaysPnl.realized_pnl >= 0 ? '+' : '-'}₹${Math.abs(todaysPnl.realized_pnl).toFixed(0)}`}</strong></span></div>
         <div><LineChart /><span>UNREALIZED P&L{unrealizedPnl ? ` · ${unrealizedPnl.price_source === 'none' ? 'NO PRICE FEED' : unrealizedPnl.price_source.toUpperCase()}${unrealizedPnl.unmanaged_positions > 0 ? ` · ${unrealizedPnl.unmanaged_positions} UNMANAGED` : ''}` : ''}<strong className={unrealizedPnl?.unrealized_pnl == null ? 'text-muted-foreground' : unrealizedPnl.unrealized_pnl < 0 ? 'text-rose-300' : unrealizedPnl.unrealized_pnl > 0 ? 'text-emerald-300' : ''}>{unrealizedPnl?.unrealized_pnl == null ? '—' : `${unrealizedPnl.unrealized_pnl >= 0 ? '+' : '-'}₹${Math.abs(unrealizedPnl.unrealized_pnl).toFixed(0)}`}</strong></span></div>
         <div><ShieldAlert /><span>KILL SWITCH<strong className={killSwitchTripped ? 'text-rose-300' : killSwitchUnknown ? 'text-amber-300' : 'text-emerald-300'}>{killSwitchTripped ? 'TRIPPED' : killSwitchUnknown ? 'UNKNOWN' : 'OFF · ARMED'}</strong>
           {([['paper', paperKillSwitch], ['live', liveKillSwitch]] as const).map(([mode, ks]) =>
@@ -284,31 +258,6 @@ export default function Home() {
             <small className="mt-1 block text-[11px] font-normal text-amber-200/80">
               Could not read the {paperKillSwitch === null ? 'paper' : 'live'} kill switch
             </small>
-          )}
-          {killSwitchTripped && canResetKillSwitch && (
-            <span className="kill-switch-reset-controls">
-              {paperKillSwitch?.tripped && (
-                <button
-                  type="button"
-                  className="kill-switch-reset-btn"
-                  disabled={resettingMode === 'paper'}
-                  onClick={() => handleResetKillSwitch('paper')}
-                >
-                  {resettingMode === 'paper' ? 'Resetting paper…' : 'Reset paper kill switch'}
-                </button>
-              )}
-              {liveKillSwitch?.tripped && (
-                <button
-                  type="button"
-                  className="kill-switch-reset-btn"
-                  disabled={resettingMode === 'live'}
-                  onClick={() => handleResetKillSwitch('live')}
-                >
-                  {resettingMode === 'live' ? 'Resetting live…' : 'Reset live kill switch'}
-                </button>
-              )}
-              {resetError && <small className="kill-switch-reset-error">{resetError}</small>}
-            </span>
           )}
         </span></div>
         <div><Timer /><span>MARKET HOURS<strong>{marketHours === null ? '—' : marketHours.is_open ? 'OPEN' : 'CLOSED'}</strong></span></div>

@@ -1,6 +1,9 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
+import type { LucideIcon } from 'lucide-react'
+import { useAuth } from '@/components/auth/auth-provider'
+import { navFor } from '@/lib/search-index'
 import {
   Home,
   Zap,
@@ -18,23 +21,23 @@ import {
   Landmark,
 } from 'lucide-react'
 
-// Kept in sync by hand with components/shell/mobile-nav.tsx's own
-// NAV_ITEMS (same list, same order) -- see that file's comment.
-const NAV_ITEMS = [
-  { label: 'Overview', icon: Home, href: '/' },
-  { label: 'Mission Control', icon: Zap, href: '/mission-control' },
-  { label: 'Chat', icon: MessageSquare, href: '/chat' },
-  { label: 'Agent Fleet', icon: Network, href: '/agent-fleet' },
-  { label: 'Strategies', icon: Beaker, href: '/strategies' },
-  { label: 'Backtests', icon: BarChart3, href: '/backtests' },
-  { label: 'Orders & Trades', icon: ArrowLeftRight, href: '/orders' },
-  { label: 'Paper Desk', icon: Landmark, href: '/paper-trading' },
-  { label: 'Portfolio', icon: PieChart, href: '/portfolio' },
-  { label: 'Market Analysis', icon: Activity, href: '/analysis' },
-  { label: 'Investor Reports', icon: FileText, href: '/investor-reports' },
-  { label: 'Audit Log', icon: Shield, href: '/audit' },
-  { label: 'Settings', icon: Settings, href: '/settings' },
-]
+// The list of pages is lib/search-index.ts's NAV_TARGETS (shared with the mobile nav and the command
+// palette); this only says which icon goes with which page.
+const NAV_ICONS: Record<string, LucideIcon> = {
+  '/': Home,
+  '/mission-control': Zap,
+  '/chat': MessageSquare,
+  '/agent-fleet': Network,
+  '/strategies': Beaker,
+  '/backtests': BarChart3,
+  '/orders': ArrowLeftRight,
+  '/paper-trading': Landmark,
+  '/portfolio': PieChart,
+  '/analysis': Activity,
+  '/investor-reports': FileText,
+  '/audit': Shield,
+  '/settings': Settings,
+}
 
 interface SidebarProps {
   isCollapsed?: boolean
@@ -44,6 +47,8 @@ interface SidebarProps {
 export function Sidebar({ isCollapsed = false, onCollapsedChange }: SidebarProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const { role } = useAuth()
+  const navItems = navFor(role).map((target) => ({ ...target, icon: NAV_ICONS[target.href] ?? Home }))
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
@@ -57,7 +62,7 @@ export function Sidebar({ isCollapsed = false, onCollapsedChange }: SidebarProps
     >
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto p-4 space-y-2" aria-label="Primary">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon
           const active = isActive(item.href)
           return (

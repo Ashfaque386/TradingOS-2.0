@@ -12,7 +12,31 @@ export const E2E_USERS = {
   admin: { email: 'e2e.admin@example.com', password: 'E2eAdminPass!2026' },
   pm: { email: 'e2e.pm@example.com', password: 'E2ePmPass!2026' },
   risk: { email: 'e2e.risk@example.com', password: 'E2eRiskPass!2026' },
+  auditor: { email: 'e2e.auditor@example.com', password: 'E2eAuditorPass!2026' },
 } as const
+
+export const API_BASE_URL = 'http://localhost:8000'
+
+/** A bearer token for a fixture user, straight from the API (no browser). */
+export async function tokenFor(user: { email: string; password: string }): Promise<string> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(user),
+  })
+  return ((await res.json()) as { access_token: string }).access_token
+}
+
+/** Calls the API as a fixture user's token and returns the parsed body (the status is checked by the caller's expectations). */
+export async function api<T>(token: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; body: T }> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: init.method ?? 'GET',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  })
+  const text = await res.text()
+  return { status: res.status, body: (text ? JSON.parse(text) : null) as T }
+}
 
 /** Switching personas mid-test (e.g. pm requests, admin decides) needs a
  * clean slate first -- the login page immediately bounces an already-

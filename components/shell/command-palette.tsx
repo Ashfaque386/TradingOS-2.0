@@ -13,7 +13,9 @@ import {
   ShieldCheck,
   SquareArrowOutUpRight,
 } from 'lucide-react'
-import { NAV_TARGETS, type SearchEntity } from '@/lib/search-index'
+import { useAuth } from '@/components/auth/auth-provider'
+import { useFocusTrap } from '@/lib/use-focus-trap'
+import { type SearchEntity, navFor } from '@/lib/search-index'
 import { PALETTES, usePreferences } from '@/components/providers/preferences-provider'
 import { getAgents, isAuthenticated, listOrders, listStrategies } from '@/lib/api'
 
@@ -35,18 +37,22 @@ const kindGroup = { strategy: 'Strategies', order: 'Orders', agent: 'Agents' } a
 export function CommandPalette() {
   const router = useRouter()
   const { powerSave, togglePowerSave, setPalette, palette } = usePreferences()
+  const { role } = useAuth()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const [entities, setEntities] = useState<SearchEntity[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   const close = useCallback(() => {
     setOpen(false)
     setQuery('')
     setActiveIndex(0)
   }, [])
+
+  useFocusTrap(panelRef, close, open)
 
   const go = useCallback(
     (href: string) => {
@@ -81,7 +87,7 @@ export function CommandPalette() {
       },
     ]
 
-    const nav: Command[] = NAV_TARGETS.map((target) => ({
+    const nav: Command[] = navFor(role).map((target) => ({
       id: `nav-${target.href}`,
       label: target.label,
       hint: target.href,
@@ -115,7 +121,7 @@ export function CommandPalette() {
     }))
 
     return [...actions, ...nav, ...entityCommands, ...themes]
-  }, [powerSave, palette, go, togglePowerSave, setPalette, close, entities])
+  }, [powerSave, palette, go, togglePowerSave, setPalette, close, entities, role])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -230,6 +236,8 @@ export function CommandPalette() {
       onClick={close}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className="cmdk-panel"
         role="dialog"
         aria-modal="true"

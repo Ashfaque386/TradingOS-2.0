@@ -2,6 +2,9 @@
 
 import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
+import type { LucideIcon } from 'lucide-react'
+import { useAuth } from '@/components/auth/auth-provider'
+import { navFor } from '@/lib/search-index'
 import {
   Activity,
   ArrowLeftRight,
@@ -20,33 +23,31 @@ import {
   Zap,
 } from 'lucide-react'
 
-// Kept in sync by hand with components/shell/sidebar.tsx's own NAV_ITEMS
-// (same list, same order) -- Phase 19's own audit found the org-chart
-// department list had drifted from its backend source of truth exactly
-// this way; this is the frontend-nav equivalent of that same class of bug,
-// caught before it happened rather than after.
-const NAV_ITEMS = [
-  { label: 'Overview', icon: Home, href: '/' },
-  { label: 'Mission Control', icon: Zap, href: '/mission-control' },
-  { label: 'Chat', icon: MessageSquare, href: '/chat' },
-  { label: 'Agent Fleet', icon: Network, href: '/agent-fleet' },
-  { label: 'Strategies', icon: Beaker, href: '/strategies' },
-  { label: 'Backtests', icon: BarChart3, href: '/backtests' },
-  { label: 'Orders & Trades', icon: ArrowLeftRight, href: '/orders' },
-  { label: 'Paper Desk', icon: Landmark, href: '/paper-trading' },
-  { label: 'Portfolio', icon: PieChart, href: '/portfolio' },
-  { label: 'Market Analysis', icon: Activity, href: '/analysis' },
-  { label: 'Investor Reports', icon: FileText, href: '/investor-reports' },
-  { label: 'Audit Log', icon: Shield, href: '/audit' },
-  { label: 'Settings', icon: Settings, href: '/settings' },
-]
-
-// Primary destinations pinned to the bottom tab bar; the rest live behind "More".
-const PRIMARY = NAV_ITEMS.slice(0, 4)
+// The list of pages is lib/search-index.ts's NAV_TARGETS (shared with the sidebar and the command
+// palette); this only says which icon goes with which page.
+const NAV_ICONS: Record<string, LucideIcon> = {
+  '/': Home,
+  '/mission-control': Zap,
+  '/chat': MessageSquare,
+  '/agent-fleet': Network,
+  '/strategies': Beaker,
+  '/backtests': BarChart3,
+  '/orders': ArrowLeftRight,
+  '/paper-trading': Landmark,
+  '/portfolio': PieChart,
+  '/analysis': Activity,
+  '/investor-reports': FileText,
+  '/audit': Shield,
+  '/settings': Settings,
+}
 
 export function MobileNav() {
   const router = useRouter()
   const pathname = usePathname()
+  const { role } = useAuth()
+  const NAV_ITEMS = navFor(role).map((target) => ({ ...target, icon: NAV_ICONS[target.href] ?? Home }))
+  // Primary destinations pinned to the bottom tab bar; the rest live behind "More".
+  const PRIMARY = NAV_ITEMS.slice(0, 4)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href))

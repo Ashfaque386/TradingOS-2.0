@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { E2E_USERS, login } from './utils'
+import { E2E_USERS, login, API_BASE_URL, tokenFor } from './utils'
 
 // Agent long-term vector memory on Mission Control. CI's E2E backend has no
 // Qdrant server and no embedding provider, so the state it must show there is
@@ -9,21 +9,11 @@ import { E2E_USERS, login } from './utils'
 // exercises the live add / search / delete flow instead. Which one applies is
 // read from the API, so the spec is truthful in either environment.
 
-const API_BASE_URL = 'http://localhost:8000'
 
 type MemoryStatus = {
   available: boolean
   reason: string | null
   collections: { kind: string; exists: boolean; count: number }[]
-}
-
-async function tokenFor(user: { email: string; password: string }): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(user),
-  })
-  return ((await res.json()) as { access_token: string }).access_token
 }
 
 async function memoryStatus(): Promise<MemoryStatus> {

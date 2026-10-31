@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Bell,
   Braces,
   Check,
@@ -32,6 +34,9 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import { ErrorNotice } from '@/components/ui/error-notice'
+import { TabList } from '@/components/ui/tab-list'
+import { InboundSettings } from '@/components/settings/inbound-settings'
 import { SigningKeyCard } from '@/components/settings/signing-key-card'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
@@ -48,7 +53,6 @@ import {
   type RiskLimitChange,
   ALERT_LEVELS,
   ApiError,
-  KNOWN_BROKERS,
   LLM_PROVIDERS,
   LLM_PROVIDER_LABELS,
   NOTIFICATION_CHANNELS,
@@ -114,6 +118,29 @@ function formatIstTime(iso: string): string {
 /* ---------------------------- Status summary strip ------------------------ */
 
 type StatusChip = { key: string; label: string; detail: string; color: 'green' | 'amber' | 'red' | 'gray'; section: SectionId }
+
+/** Tracks whether a section's data has loaded and why not, so a failed read shows an error rather than
+ * empty cards that read as "nothing is configured". */
+function useSectionLoad() {
+  const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  async function track(work: () => Promise<void>) {
+    try {
+      await work()
+      setLoaded(true)
+      setLoadError(null)
+    } catch (err) {
+      setLoadError(err instanceof Error && err.message ? err.message : 'Could not load this section')
+    }
+  }
+  return { loaded, loadError, track }
+}
+
+function SectionStatus({ load, what, onRetry }: { load: { loaded: boolean; loadError: string | null }; what: string; onRetry: () => void }) {
+  if (load.loadError) return <ErrorNotice className="mb-3" message={`Could not load ${what}: ${load.loadError}`} onRetry={onRetry} />
+  if (!load.loaded) return <p className="text-xs text-muted-foreground">Loading {what}…</p>
+  return null
+}
 
 function StatusStrip({ onNavigate, refreshKey }: { onNavigate: (s: SectionId) => void; refreshKey: number }) {
   const [chips, setChips] = useState<StatusChip[]>([])
@@ -250,10 +277,10 @@ function GatewaySection() {
     <div className="set-block">
       <div className="set-block-head">
         <div><h2>Agent Gateway Config</h2><p>Resolved configuration across infra defaults, agent defaults, per-agent overrides, and channel bindings.</p></div>
-        <div className="set-tabgroup">
-          <button className={tab === 'form' ? 'active' : ''} onClick={() => setTab('form')}><SlidersHorizontal className="size-3.5" /> Summary</button>
-          <button className={tab === 'raw' ? 'active' : ''} onClick={() => setTab('raw')}><Braces className="size-3.5" /> Raw JSON</button>
-        </div>
+        <TabList label="Gateway config view" className="set-tabgroup">
+          <button role="tab" aria-selected={tab === 'form'} tabIndex={tab === 'form' ? 0 : -1} className={tab === 'form' ? 'active' : ''} onClick={() => setTab('form')}><SlidersHorizontal className="size-3.5" /> Summary</button>
+          <button role="tab" aria-selected={tab === 'raw'} tabIndex={tab === 'raw' ? 0 : -1} className={tab === 'raw' ? 'active' : ''} onClick={() => setTab('raw')}><Braces className="size-3.5" /> Raw JSON</button>
+        </TabList>
       </div>
       {error && <div className="mb-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
 
@@ -517,13 +544,18 @@ function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit
     }
   }
 
-  function handleDrop(targetIndex: number) {
-    if (dragIndex === null || dragIndex === targetIndex) return
+  function move(from: number, to: number) {
+    if (from === to || to < 0 || to >= order.length) return
     const next = [...order]
-    const [moved] = next.splice(dragIndex, 1)
-    next.splice(targetIndex, 0, moved)
-    setDragIndex(null)
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
     persist(next)
+  }
+
+  function handleDrop(targetIndex: number) {
+    const from = dragIndex
+    setDragIndex(null)
+    if (from !== null) move(from, targetIndex)
   }
 
   if (order.length === 0) return <p className="text-xs text-muted-foreground">No providers in the fallback chain yet — save a provider above or switch one on.</p>
@@ -553,6 +585,12 @@ function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit
             <span className="set-llm-priority-label">{LLM_PROVIDER_LABELS[provider as LlmProviderName] ?? provider}</span>
             {status && effectiveDefaultModel(status) && <code className="set-llm-priority-model">{effectiveDefaultModel(status)}</code>}
             {issue && <span className="set-llm-priority-issue"><AlertTriangle className="size-3" />{issue} — skipped</span>}
+            {canEdit && (
+              <span className="set-llm-priority-move">
+                <button type="button" className="set-icon-btn" disabled={busy || i === 0} onClick={() => move(i, i - 1)} aria-label={`Move ${LLM_PROVIDER_LABELS[provider as LlmProviderName] ?? provider} up`}><ArrowUp className="size-3" /></button>
+                <button type="button" className="set-icon-btn" disabled={busy || i === order.length - 1} onClick={() => move(i, i + 1)} aria-label={`Move ${LLM_PROVIDER_LABELS[provider as LlmProviderName] ?? provider} down`}><ArrowDown className="size-3" /></button>
+              </span>
+            )}
           </div>
         )
       })}
@@ -565,12 +603,15 @@ function LlmProvidersSection({ onStatusChanged }: { onStatusChanged: () => void 
   const canEdit = can(role, 'POST /api/v1/settings/llm-providers/{provider}')
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([])
   const [order, setOrder] = useState<string[]>([])
+  const load = useSectionLoad()
 
   async function reload() {
-    const [nextStatuses, { order: nextOrder }] = await Promise.all([listLlmProviderStatus(), readGatewayOrder()])
-    setStatuses(nextStatuses)
-    setOrder(nextOrder)
-    onStatusChanged()
+    await load.track(async () => {
+      const [nextStatuses, { order: nextOrder }] = await Promise.all([listLlmProviderStatus(), readGatewayOrder()])
+      setStatuses(nextStatuses)
+      setOrder(nextOrder)
+      onStatusChanged()
+    })
   }
   useEffect(() => { reload() }, [])
 
@@ -579,10 +620,11 @@ function LlmProvidersSection({ onStatusChanged }: { onStatusChanged: () => void 
   return (
     <div className="set-block">
       <div className="set-block-head"><div><h2>LLM Providers</h2><p>API keys are write-only. Fallback priority here is the exact same infra.llmProviders.order the Agent Gateway routes on — this is a UI over that config, not a separate store. Agents ask for model &quot;auto&quot;, which runs each provider&apos;s default model.</p></div></div>
-      <div className="set-llm-grid">{LLM_PROVIDERS.map((p) => <LlmProviderCard key={p} status={byProvider(p)} canEdit={canEdit} onChanged={reload} />)}</div>
+      <SectionStatus load={load} what="the LLM providers" onRetry={reload} />
+      {load.loaded && <><div className="set-llm-grid">{LLM_PROVIDERS.map((p) => <LlmProviderCard key={p} status={byProvider(p)} canEdit={canEdit} onChanged={reload} />)}</div>
 
       <p className="set-group-label">Fallback priority</p>
-      <FallbackPriorityList canEdit={canEdit} order={order} statuses={statuses} onChanged={reload} />
+      <FallbackPriorityList canEdit={canEdit} order={order} statuses={statuses} onChanged={reload} /></>}
     </div>
   )
 }
@@ -793,10 +835,13 @@ function BrokerConfigSection({ oauthBanner, onStatusChanged }: { oauthBanner: { 
   const { role } = useAuth()
   const canEdit = can(role, 'POST /api/v1/broker-credentials/{broker}')
   const [statuses, setStatuses] = useState<BrokerCredentialStatus[]>([])
+  const load = useSectionLoad()
 
   async function reload() {
-    setStatuses(await listBrokerCredentialStatus())
-    onStatusChanged()
+    await load.track(async () => {
+      setStatuses(await listBrokerCredentialStatus())
+      onStatusChanged()
+    })
   }
   useEffect(() => { reload() }, [])
 
@@ -808,7 +853,8 @@ function BrokerConfigSection({ oauthBanner, onStatusChanged }: { oauthBanner: { 
           {oauthBanner.ok ? `${oauthBanner.broker} connected successfully.` : `${oauthBanner.broker} connection failed: ${oauthBanner.error ?? 'unknown error'}`}
         </div>
       )}
-      <div className="set-cred-grid">{statuses.length > 0 ? statuses.map((c) => <BrokerConfigCard key={c.broker} status={c} canEdit={canEdit} onChanged={reload} />) : KNOWN_BROKERS.map((b) => <BrokerConfigCard key={b} status={{ broker: b, configured: false, token_status: 'never-connected', token_expires_at: null, redirect_uri: fallbackBrokerRedirectUri(b), default_redirect_uri: fallbackBrokerRedirectUri(b), redirect_uri_is_custom: false, token_duration: null }} canEdit={canEdit} onChanged={reload} />)}</div>
+      <SectionStatus load={load} what="the broker credentials" onRetry={reload} />
+      {load.loaded && <div className="set-cred-grid">{statuses.map((c) => <BrokerConfigCard key={c.broker} status={c} canEdit={canEdit} onChanged={reload} />)}</div>}
     </div>
   )
 }
@@ -838,7 +884,8 @@ function SkillsSection() {
   const [newSkillId, setNewSkillId] = useState('')
   const [busy, setBusy] = useState(false)
 
-  async function reload() { setAgents(await getAgents()) }
+  const load = useSectionLoad()
+  async function reload() { await load.track(async () => { setAgents(await getAgents()) }) }
   useEffect(() => { reload() }, [])
 
   const skills = useMemo(() => Array.from(new Set(agents.flatMap((a) => a.skills))).sort(), [agents])
@@ -861,6 +908,7 @@ function SkillsSection() {
         <div><h2>Skill Marketplace</h2><p>Skills granted to agents via the Agent Gateway config — the same source Agent Fleet's per-agent Skills tab edits.</p></div>
         <label className="set-search"><Search className="size-3.5" /><input placeholder="Search skills..." value={query} onChange={(e) => setQuery(e.target.value)} /></label>
       </div>
+      <SectionStatus load={load} what="the skills" onRetry={reload} />
       <div className="set-skill-grid">
         {filteredSkills.map((s) => {
           const granted = agents.filter((a) => a.skills.includes(s))
@@ -871,7 +919,7 @@ function SkillsSection() {
             </button>
           )
         })}
-        {filteredSkills.length === 0 && <p className="text-xs text-muted-foreground">No skills granted yet.</p>}
+        {load.loaded && filteredSkills.length === 0 && <p className="text-xs text-muted-foreground">No skills granted yet.</p>}
       </div>
 
       {canEdit && <div className="mt-3 flex gap-2"><input value={newSkillId} onChange={(e) => setNewSkillId(e.target.value)} placeholder="new-skill-id" className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /><button disabled={!newSkillId.trim()} onClick={() => setSelectedSkill(newSkillId.trim())} className="text-button">Open grant matrix</button></div>}
@@ -952,7 +1000,7 @@ function TelegramWizard({ status, canEdit, onChanged }: { status: NotificationCh
       <div className="set-wizard-step"><span className="set-wizard-num">1</span><div className="set-wizard-body"><p>Create a bot with @BotFather and copy the token it gives you.</p><a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="set-btn set-btn-ghost w-fit"><Send className="size-3.5" /> Open @BotFather</a></div></div>
       <div className="set-wizard-step"><span className="set-wizard-num">2</span><div className="set-wizard-body"><p>Paste the bot token here.</p>{canEdit && <div className="set-wizard-inline"><input type="password" placeholder="123456:ABC-DEF..." value={botToken} onChange={(e) => setBotToken(e.target.value)} /></div>}</div></div>
       <div className="set-wizard-step"><span className="set-wizard-num">3</span><div className="set-wizard-body"><p>Send your bot any message (or add it to a group/channel), then detect its chat ID automatically.</p>{canEdit && <div className="set-wizard-inline"><button className="set-btn set-btn-ghost" disabled={!botToken || detecting} onClick={handleDetect}><Wand2 className="size-3.5" /> {detecting ? 'Detecting…' : 'Detect chat ID'}</button><input placeholder="chat ID" value={chatId} onChange={(e) => setChatId(e.target.value)} /></div>}{detectMsg && <p className="text-xs text-muted-foreground">{detectMsg}</p>}</div></div>
-      <div className="set-wizard-step"><span className="set-wizard-num">4</span><div className="set-wizard-body"><p>Save, then send a real test message to confirm it lands.</p>
+      <div className="set-wizard-step"><span className="set-wizard-num">4</span><div className="set-wizard-body"><p>Save, then send a real test message to confirm it lands.{!status.configured && ' Saving turns on every alert level; change them under Alert levels below.'}</p>
         {error && <p className="text-xs text-rose-300">{error}</p>}
         {canEdit && <div className="set-wizard-inline">
           <button className="set-btn set-btn-primary" disabled={busy || !botToken || !chatId} onClick={handleSave}><Check className="size-3.5" /> Save channel</button>
@@ -1006,7 +1054,7 @@ function WebhookWizard({ channel, status, canEdit, onChanged }: { channel: 'disc
     <div className="set-wizard">
       <div className="set-wizard-step"><span className="set-wizard-num">1</span><div className="set-wizard-body"><p>Create an Incoming Webhook in your {channel === 'discord' ? 'Discord channel' : 'Slack app'} settings and copy its URL.</p><a href={helpUrl} target="_blank" rel="noreferrer" className="set-btn set-btn-ghost w-fit"><Webhook className="size-3.5" /> {channel === 'discord' ? 'Discord webhook guide' : 'Slack webhook guide'}</a></div></div>
       <div className="set-wizard-step"><span className="set-wizard-num">2</span><div className="set-wizard-body"><p>Paste the webhook URL here.</p>{canEdit && <div className="set-wizard-inline"><input type="password" placeholder="https://..." value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} /></div>}</div></div>
-      <div className="set-wizard-step"><span className="set-wizard-num">3</span><div className="set-wizard-body"><p>Save, then send a real test message to confirm it lands.</p>
+      <div className="set-wizard-step"><span className="set-wizard-num">3</span><div className="set-wizard-body"><p>Save, then send a real test message to confirm it lands.{!status.configured && ' Saving turns on every alert level; change them under Alert levels below.'}</p>
         {error && <p className="text-xs text-rose-300">{error}</p>}
         {canEdit && <div className="set-wizard-inline">
           <button className="set-btn set-btn-primary" disabled={busy || !webhookUrl} onClick={handleSave}><Check className="size-3.5" /> Save channel</button>
@@ -1080,6 +1128,8 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
         {channel === 'slack' && <WebhookWizard channel="slack" status={status} canEdit={canEdit} onChanged={onChanged} />}
       </div>
 
+      {status.configured && <InboundSettings channel={channel} status={status} canEdit={canEdit} onChanged={onChanged} />}
+
       <fieldset className="set-alert-prefs" disabled={!status.configured || !canEdit}>
         <legend>Alert levels</legend>
         {ALERT_LEVELS.map((l) => <label key={l} className="set-alert-pref"><button type="button" className={`set-check ${prefs[l] ? 'on' : ''}`} onClick={() => toggleAlertLevel(l)} aria-label={`${prefs[l] ? 'Disable' : 'Enable'} ${ALERT_LABELS[l]} on ${channel}`}>{prefs[l] && <Check className="size-3.5" />}</button><span>{ALERT_LABELS[l]}</span></label>)}
@@ -1092,10 +1142,13 @@ function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void
   const { role } = useAuth()
   const canEdit = can(role, 'POST /api/v1/notification-channels/{channel}')
   const [statuses, setStatuses] = useState<NotificationChannelStatus[]>([])
+  const load = useSectionLoad()
 
   async function reload() {
-    setStatuses(await listNotificationChannels())
-    onStatusChanged()
+    await load.track(async () => {
+      setStatuses(await listNotificationChannels())
+      onStatusChanged()
+    })
   }
   useEffect(() => { reload() }, [])
 
@@ -1104,7 +1157,8 @@ function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void
   return (
     <div className="set-block">
       <div className="set-block-head"><div><h2>Notification Channels</h2><p>A guided setup per channel, ending in a real test message you can watch land in your chat.</p></div></div>
-      <div className="set-channel-grid">{NOTIFICATION_CHANNELS.map((c) => <ChannelWizardCard key={c} channel={c as 'telegram' | 'discord' | 'slack'} status={byChannel(c)} canEdit={canEdit} onChanged={reload} />)}</div>
+      <SectionStatus load={load} what="the notification channels" onRetry={reload} />
+      {load.loaded && <div className="set-channel-grid">{NOTIFICATION_CHANNELS.map((c) => <ChannelWizardCard key={c} channel={c as 'telegram' | 'discord' | 'slack'} status={byChannel(c)} canEdit={canEdit} onChanged={reload} />)}</div>}
     </div>
   )
 }

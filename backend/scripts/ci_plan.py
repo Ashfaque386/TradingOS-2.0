@@ -197,7 +197,7 @@ def summary(plan_: Plan) -> str:
             plan_.backend,
             plan_.reasons["backend"],
         ),
-        ("Frontend (tsc)", plan_.frontend, plan_.reasons["frontend"]),
+        ("Frontend (tsc, lint, logic specs)", plan_.frontend, plan_.reasons["frontend"]),
         ("Frontend E2E (Playwright)", plan_.e2e, plan_.reasons["e2e"]),
         ("Docker images", plan_.images, plan_.reasons["images"]),
         (

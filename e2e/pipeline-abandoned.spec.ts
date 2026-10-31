@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
-import { E2E_USERS, login, runSeedScript } from './utils'
+import { E2E_USERS, login, runSeedScript, API_BASE_URL, tokenFor } from './utils'
 
 // A pipeline run whose process died must not read "running" for ever. The run
 // executes inside the HTTP request that started it, so a crash or a redeploy
@@ -16,18 +16,8 @@ import { E2E_USERS, login, runSeedScript } from './utils'
 //    recent, must render as interrupted with its stuck step marked, not as a
 //    live run with a Cancel button.
 
-const API_BASE_URL = 'http://localhost:8000'
 // Must match the id the e2e job seeds before starting the backend.
 const SEEDED_BEFORE_START = '00000000-0000-4000-8000-0000000000e2'
-
-async function tokenFor(user: { email: string; password: string }): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(user),
-  })
-  return ((await res.json()) as { access_token: string }).access_token
-}
 
 test('a run left behind before the backend started was ended by its startup sweep', async () => {
   const token = await tokenFor(E2E_USERS.admin)

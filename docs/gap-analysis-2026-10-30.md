@@ -24,11 +24,27 @@ this is where it stands.
 | G15 | The two stub packages (`src/execution`, `src/risk`) are deleted; the heartbeat isolation proof is now an import-closure test in a fresh interpreter, with a positive control, instead of a `hasattr` check on names that no longer need to exist. |
 | G16 | Fixed: the local-date tests (`date.today()` against UTC bounds), the fixed 2030 option expiry, and the real-clock lag test (`tests/clock.py` is the shared frozen clock). Still open, as a watch item: four tests that read IST "today" twice and could flake only if a run straddles 00:00 IST. |
 | G25 | Post-trade review, investor reports, the portfolio's "today" P&L, the trading-holiday gauge and the price-history check now cut the day at IST, not UTC. |
-| G3 (code) | Fixed-date holidays are generated to 2040 (they stopped at 2030), Ambedkar Jayanti (14 Apr) is a fixed holiday (2025 was missing it), calendar entries can carry names, and `GET /market-data/holidays?year=` lists a year and warns when the file has nothing for it. **Still open: the 2026-27 movable dates in `config/nse_holidays.json`**, which wait for the operator to confirm them. |
+| G3 (code) | Fixed-date holidays are generated to 2040 (they stopped at 2030), Ambedkar Jayanti (14 Apr) is a fixed holiday (2025 was missing it), calendar entries can carry names, and `GET /market-data/holidays?year=` lists a year and warns when the file has nothing for it. The 2026 movable dates are in `config/nse_holidays.json` (eleven weekday closures; taken from broker pages because NSE's own circular could not be opened, so re-check them). **Still open: 2027**, which NSE publishes in December. |
 | G19 | New: the data lake, its backups and the audit archive are on named volumes (they were inside the container and deleted by every `down && up --build`). Upgrading needs the copy-out steps in the README. |
 | G18 | New: saving a notification channel kept nothing it was not sent, so the alert-level toggle emptied the channel's token and chat id. A field left out of a save is now kept; `PATCH /notification-channels/{ch}` changes only non-secret settings; unknown alert levels are rejected; the Settings toggle uses the PATCH. |
 | (reset reason) | A kill-switch reset's reason was sent and discarded. It is stored (`reset_reason`), returned by `GET /kill-switch/{mode}` and written to the audit trail with what was reset. |
 | (suggestions) | `POST /strategies/{id}/suggestions` is Administrator and Portfolio Manager only, like its review and regenerate steps (it was open to every role, the read-only auditor included). |
+
+**Closed in phase 2 (the console tells the truth, and cannot drift from the backend):**
+
+| Item | What changed |
+|---|---|
+| W1, W3, W4, W6, W7, W9 | Chat Export downloads with the token; Compare shows "n/a" for a null correlation; Market Analysis and the other pages show the server's reason; the Mission Control feed shows the newest events; the Orders filter uses the server's vocabulary; static labels are gone or computed (realized P&L is labelled before costs). |
+| W5 | Orders is a "Pre-trade check (dry run)" that starts empty and sends nothing; "Simulate a tick" is confirmed with the symbol when autonomy is on. |
+| W8 | A banner on every page: tripped switch, reason, drawdown against its limit, since when, and a reset that stores a reason and asks for a typed confirmation; an unreadable switch is "unknown", never "armed". |
+| W2 (UI) | Settings: pause or resume a channel's alerts, allowed sender IDs, the signing secret. (The wipe itself was G18.) |
+| W11-W13 | A section that cannot load says so; Provider Status shows a refused token; Backtests filters by all of a strategy's versions and shows `refusal_reason`; the client types carry the fields the server sends. |
+| W14, W15 | Identity fields can be cleared; a prompt is read in full before activation; every page reports a failed read (Orders, Audit, Portfolio, Strategies, Agent Fleet, Backtests, Mission Control, Analysis, Investor Reports, Chat) and polls through one hook. |
+| W16, W20 (part) | Sign-in messages (slice 2); a 429 now exposes `Retry-After` to the browser. **Not done:** pagination and the summary variant of the heavy list endpoints (Phase 9). |
+| W17, W21, W22 | Dead buttons removed or wired; the pages offered follow the role; tab lists, focus traps, keyboard-reachable cards and reorder buttons; Vercel Analytics and the `v0.app` tag removed; preferences read defensively; the orb honours the OS reduced-motion setting. **Not done:** the sidebar items are buttons, not links. |
+| W23 | The console shell is mounted once (a route group) and the market and kill-switch reads are shared. |
+| Tooling | `ignoreBuildErrors` is off (`next build` type-checks); ESLint ratchet, `pnpm typecheck` and the logic specs in the frontend job; seven new page specs and an auditor fixture. |
+| Wiring guard | `tests/test_frontend_wiring.py` (every client call has a route and every route a call or a reason) and generated permissions (`lib/permissions.generated.json`, `can()`). |
 
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.

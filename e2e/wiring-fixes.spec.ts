@@ -1,5 +1,5 @@
 import { expect, test, type Route } from '@playwright/test'
-import { E2E_USERS, login } from './utils'
+import { E2E_USERS, login, API_BASE_URL, tokenFor } from './utils'
 
 // Defects found by the backend/frontend wiring audit (docs/gap-analysis-2026-10-30.md, section 0), each
 // of which showed the operator something untrue or nothing at all:
@@ -8,15 +8,9 @@ import { E2E_USERS, login } from './utils'
 //  - Market Analysis opened on "Loading..." forever when the server answered with its reason (503).
 //  - The Overview said the kill switch was "OFF · ARMED" when it had not been able to read it.
 
-const API_BASE_URL = 'http://localhost:8000'
 
 async function adminToken(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(E2E_USERS.admin),
-  })
-  return ((await res.json()) as { access_token: string }).access_token
+  return tokenFor(E2E_USERS.admin)
 }
 
 test('Chat export downloads the conversation instead of opening a 401 page', async ({ page }) => {

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { E2E_USERS, login } from './utils'
+import { E2E_USERS, login, API_BASE_URL, tokenFor } from './utils'
 
 // Phase 19 Finding #1: the live per-step agent feed on Mission Control. Each
 // step of a LangGraph pipeline run is recorded by the backend and pushed over
@@ -8,17 +8,6 @@ import { E2E_USERS, login } from './utils'
 // refresh (the live path), and that the run form is limited to the roles
 // the backend allows.
 
-const API_BASE_URL = 'http://localhost:8000'
-
-async function tokenFor(user: { email: string; password: string }): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(user),
-  })
-  const { access_token } = (await res.json()) as { access_token: string }
-  return access_token
-}
 
 const panel = (page: import('@playwright/test').Page) => page.getByLabel('Agent pipeline steps')
 

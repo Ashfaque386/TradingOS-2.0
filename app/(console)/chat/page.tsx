@@ -58,7 +58,10 @@ export default function ChatPage() {
     }
     listChatMessages(activeId)
       .then(setMessages)
-      .catch(() => setMessages([]))
+      .catch((err) => {
+        setMessages([])
+        setError(messageOf(err, 'Could not load this conversation'))
+      })
   }, [activeId])
 
   useEffect(() => {
@@ -229,7 +232,7 @@ export default function ChatPage() {
                   </button>
                   <button
                     onClick={() => handleTogglePin(s)}
-                    className="shrink-0 opacity-0 group-hover:opacity-100"
+                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
                     aria-label={s.pinned ? 'Unpin session' : 'Pin session'}
                   >
                     {s.pinned ? (
@@ -240,7 +243,7 @@ export default function ChatPage() {
                   </button>
                   <button
                     onClick={() => handleDelete(s)}
-                    className="shrink-0 opacity-0 group-hover:opacity-100"
+                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
                     aria-label="Delete session"
                   >
                     <Trash2 className="size-3 text-rose-300" />

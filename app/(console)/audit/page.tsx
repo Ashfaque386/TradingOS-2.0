@@ -1,11 +1,13 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Download, FileJson, Lock, RefreshCw, Search, ShieldCheck, ShieldOff } from 'lucide-react'
 import { useAuth, roleLabel } from '@/components/auth/auth-provider'
 import type { Role } from '@/lib/api'
 import { type AuditChainVerifyResult, type AuditLogEntry, ApiError, downloadAuditExport, listAuditEntries, verifyAuditChain } from '@/lib/api'
+import { ErrorNotice } from '@/components/ui/error-notice'
 import { can } from '@/lib/permissions'
+import { usePolling } from '@/lib/use-polling'
 
 const PAGE_SIZE = 10
 
@@ -45,7 +47,6 @@ export default function AuditLogPage() {
   const { role } = useAuth()
   const canView = can(role, 'GET /api/v1/audit/entries')
 
-  const [entries, setEntries] = useState<AuditLogEntry[]>([])
   const [search, setSearch] = useState('')
   const [actorFilter, setActorFilter] = useState('all')
   const [entityFilter, setEntityFilter] = useState('all')
@@ -56,19 +57,14 @@ export default function AuditLogPage() {
   const [exporting, setExporting] = useState<'csv' | 'ndjson' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  async function reload() {
-    setEntries(await listAuditEntries({ limit: 200 }))
-  }
-
-  useEffect(() => {
-    if (!canView) return
-    reload()
-    const interval = setInterval(reload, 15000)
-    return () => clearInterval(interval)
-  }, [canView])
+  const { data: loaded, error: loadError, refresh: reload } = usePolling(() => listAuditEntries({ limit: 200 }), {
+    intervalMs: 15_000,
+    enabled: canView,
+  })
+  const entries: AuditLogEntry[] = useMemo(() => loaded ?? [], [loaded])
 
   const actors = useMemo(() => Array.from(new Set(entries.map((e) => e.actor))).sort(), [entries])
-  const entityTypes = useMemo(() => Array.from(new Set(entries.map((e) => e.entity_type))).sort(), [entries])
+  const entityTypes = useMemo(() => Array.from(new Set(entries.flatMap((e) => (e.entity_type ? [e.entity_type] : [])))).sort(), [entries])
 
   const filtered = useMemo(() => entries.filter((e) => {
     if (actorFilter !== 'all' && e.actor !== actorFilter) return false
@@ -117,7 +113,8 @@ export default function AuditLogPage() {
           </div>
         </header>
 
-        {error && <div className="mb-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
+        {error && <ErrorNotice className="mb-3" message={error} />}
+        {loadError && <ErrorNotice className="mb-3" message={`Could not load the audit log: ${loadError}`} onRetry={() => void reload()} />}
 
         <div className="chain-integrity-strip">
           {verifyResult === null ? <ShieldCheck className="size-4" /> : verifyResult.diverged || !verifyResult.db_chain_valid ? <ShieldOff className="size-4 text-rose-300" /> : <ShieldCheck className="size-4" />}
@@ -143,12 +140,12 @@ export default function AuditLogPage() {
                   return (
                     <Fragment key={e.id}>
                       <tr className={isOpen ? 'audit-row-open' : ''} onClick={() => setExpanded(isOpen ? null : e.id)}>
-                        <td className="audit-expand-cell">{isOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</td>
+                        <td className="audit-expand-cell"><button type="button" className="audit-expand-btn" aria-expanded={isOpen} aria-label={`${isOpen ? 'Hide' : 'Show'} details of entry ${e.sequence}`} onClick={(event) => { event.stopPropagation(); setExpanded(isOpen ? null : e.id) }}>{isOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button></td>
                         <td className="mono">{new Date(e.created_at).toLocaleString()}</td>
                         <td>{e.actor}</td>
                         <td><span className="audit-action-chip">{e.action}</span></td>
-                        <td>{e.entity_type}</td>
-                        <td className="mono">{e.entity_id}</td>
+                        <td>{e.entity_type ?? '—'}</td>
+                        <td className="mono">{e.entity_id ?? '—'}</td>
                         <td className="mono">#{e.sequence}</td>
                       </tr>
                       {isOpen && <tr className="audit-diff-row"><td colSpan={7}><DetailsBlock details={e.details} correlationId={e.correlation_id} /></td></tr>}

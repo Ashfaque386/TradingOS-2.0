@@ -467,7 +467,7 @@ jobs:
           retention-days: 7
 
   frontend:
-    name: Frontend (tsc)
+    name: Frontend (tsc, lint, logic specs)
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
@@ -490,7 +490,16 @@ jobs:
       # check, run the same way it was verified in Phase 17's local pass:
       # against a real node_modules, not `next build`'s own pass.
       - name: tsc --noEmit
-        run: pnpm exec tsc --noEmit -p .
+        run: pnpm run typecheck
+
+      # The warning count is a ratchet (package.json's --max-warnings): it only goes down.
+      - name: ESLint
+        run: pnpm run lint
+
+      # The pure-logic specs (e2e/*-logic.spec.ts) need no server and no browser; they run here as well
+      # as in the e2e job so a rule broken in lib/ fails in about a minute.
+      - name: Logic specs
+        run: pnpm run test:logic
 
   # Docker images (docs/phase20-old-vs-new-comparison.md item 30). Every run
   # builds both images, so a broken Dockerfile fails here rather than the next

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Check, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { ChartContainer } from '@/components/ui/chart'
@@ -15,7 +15,9 @@ import {
   listStrategies,
   runMonteCarlo,
 } from '@/lib/api'
+import { ErrorNotice } from '@/components/ui/error-notice'
 import { can } from '@/lib/permissions'
+import { usePolling } from '@/lib/use-polling'
 
 function Panel({ title, eyebrow, children, className = '' }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string }) {
   return <section className={`backtest-panel ${className}`}><div className="flex items-start justify-between gap-3 border-b border-white/8 px-4 py-3"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2 className="mt-1 text-sm font-semibold text-white">{title}</h2></div><SlidersHorizontal className="size-4 text-slate-500" /></div>{children}</section>
@@ -45,8 +47,6 @@ export default function BacktestsPage() {
   // RiskManager/ReadOnlyAuditor saw an enabled "Run Monte Carlo" button
   // that would 403.
   const canOperate = can(role, 'POST /api/v1/backtests/{run_id}/monte-carlo')
-  const [strategies, setStrategies] = useState<Strategy[]>([])
-  const [runs, setRuns] = useState<BacktestRun[]>([])
   const [strategyFilter, setStrategyFilter] = useState<string>('all')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [compareIds, setCompareIds] = useState<string[]>([])
@@ -54,21 +54,23 @@ export default function BacktestsPage() {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function reload() {
-    const data = await listBacktests()
-    setRuns(data)
-    setSelectedRunId((prev) => prev ?? data[0]?.id ?? null)
-  }
+  const { data: loaded, error: loadError, refresh: reload } = usePolling(
+    async () => {
+      const [runs, strategies] = await Promise.all([listBacktests(), listStrategies()])
+      return { runs, strategies }
+    },
+    { intervalMs: 15_000 },
+  )
+  const runs: BacktestRun[] = useMemo(() => loaded?.runs ?? [], [loaded])
+  const strategies: Strategy[] = useMemo(() => loaded?.strategies ?? [], [loaded])
 
-  useEffect(() => {
-    listStrategies().then(setStrategies)
-    reload()
-    const interval = setInterval(reload, 15000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const filteredRuns = strategyFilter === 'all' ? runs : runs.filter((r) => r.strategy_version_id === strategyFilter)
-  const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null
+  // A strategy has many versions and a run belongs to one of them: filter by all of the strategy's versions.
+  const filteredRuns = useMemo(() => {
+    if (strategyFilter === 'all') return runs
+    const versionIds = new Set(strategies.find((s) => s.id === strategyFilter)?.versions.map((v) => v.id))
+    return runs.filter((r) => versionIds.has(r.strategy_version_id))
+  }, [runs, strategies, strategyFilter])
+  const selectedRun = runs.find((r) => r.id === selectedRunId) ?? runs[0] ?? null
   const curve = selectedRun ? equityCurve(selectedRun) : []
 
   async function handleRunMonteCarlo() {
@@ -97,6 +99,7 @@ export default function BacktestsPage() {
 
   const metrics = selectedRun?.metrics
   const metricCards: [string, string][] = metrics ? [
+    ['Total return', fmtPct(metrics.total_return)],
     ['Sharpe', fmtNum(metrics.sharpe)],
     ['CAGR', fmtPct(metrics.cagr)],
     ['Max Drawdown', fmtPct(metrics.max_drawdown)],
@@ -106,10 +109,12 @@ export default function BacktestsPage() {
   ] : []
 
   return <><main className="mx-auto w-full max-w-[1700px] pb-10">
-    <header className="backtest-header"><div><p className="eyebrow">TRADINGOS // QUANT RESEARCH</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Backtests</h1><p className="mt-2 text-sm text-slate-400">Real backtest runs, real engine-computed metrics — creating a fresh run requires OHLCV bars, which this console doesn't yet collect (POST /backtests API only).</p></div><div className="flex flex-wrap items-center gap-2"><select value={strategyFilter} onChange={e => setStrategyFilter(e.target.value)} className="backtest-select"><option value="all">All strategies</option>{strategies.map(s => <option key={s.id} value={s.versions[s.versions.length - 1]?.id}>{s.name}</option>)}</select><select value={selectedRunId ?? ''} onChange={e => setSelectedRunId(e.target.value)} className="backtest-select">{filteredRuns.map(r => <option key={r.id} value={r.id}>{r.symbol} · {r.id.slice(0, 8)} · {r.status} · data: {r.data_source ?? 'unknown'}</option>)}</select><button onClick={handleRunMonteCarlo} disabled={running || !selectedRun || !canOperate} title={canOperate ? undefined : 'Your role does not have Monte Carlo run access'} className="backtest-primary">{running ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{running ? 'Running...' : 'Run Monte Carlo'}</button></div></header>
-    {error && <div className="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
-    {!selectedRun && <div className="rounded-xl border border-white/10 p-8 text-center text-sm text-muted-foreground">No backtest runs yet. Create one via POST /api/v1/backtests with historical bars.</div>}
+    <header className="backtest-header"><div><p className="eyebrow">TRADINGOS // QUANT RESEARCH</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Backtests</h1><p className="mt-2 text-sm text-slate-400">Real backtest runs, real engine-computed metrics — creating a fresh run requires OHLCV bars, which this console doesn't yet collect (POST /backtests API only).</p></div><div className="flex flex-wrap items-center gap-2"><select value={strategyFilter} onChange={e => setStrategyFilter(e.target.value)} className="backtest-select"><option value="all">All strategies</option>{strategies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select><select value={selectedRunId ?? ''} onChange={e => setSelectedRunId(e.target.value)} className="backtest-select">{filteredRuns.map(r => <option key={r.id} value={r.id}>{r.symbol} · {r.id.slice(0, 8)} · {r.status} · data: {r.data_source ?? 'unknown'}</option>)}</select><button onClick={handleRunMonteCarlo} disabled={running || !selectedRun || !canOperate} title={canOperate ? undefined : 'Your role does not have Monte Carlo run access'} className="backtest-primary">{running ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{running ? 'Running...' : 'Run Monte Carlo'}</button></div></header>
+    {error && <ErrorNotice className="mb-4" message={error} />}
+    {loadError && <ErrorNotice className="mb-4" message={`Could not load the backtests: ${loadError}`} onRetry={() => void reload()} />}
+    {loaded && !selectedRun && <div className="rounded-xl border border-white/10 p-8 text-center text-sm text-muted-foreground">No backtest runs yet. Create one via POST /api/v1/backtests with historical bars.</div>}
     {selectedRun && <>
+      {selectedRun.refusal_reason && <ErrorNotice className="mb-4" message={`This run was refused, so it has no result: ${selectedRun.refusal_reason}`} />}
       <div className="metrics-grid">{metricCards.map(([name, value]) => <article className="backtest-metric" key={name}><span>{name}</span><strong>{value}</strong></article>)}</div>
       <div className="backtest-main-grid">
         <Panel title="Equity curve" eyebrow="DAILY RETURNS, COMPOUNDED" className="equity-panel">

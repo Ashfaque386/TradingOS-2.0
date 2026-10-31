@@ -654,7 +654,6 @@ export type OrganizationRun = {
 }
 
 export const listRuns = () => apiGet<OrganizationRun[]>('/api/v1/orchestration/runs')
-export const getRun = (runId: string) => apiGet<OrganizationRun>(`/api/v1/orchestration/runs/${runId}`)
 export const createRun = (objective: string) =>
   apiPost<OrganizationRun>('/api/v1/orchestration/runs', { objective })
 export const pauseRun = (runId: string) =>
@@ -684,10 +683,6 @@ export type ApprovalRequestDto = {
   created_at: string
 }
 
-export const listApprovals = (statusFilter?: string) =>
-  apiGet<ApprovalRequestDto[]>(
-    `/api/v1/approvals${statusFilter ? `?status_filter=${statusFilter}` : ''}`,
-  )
 export const decideApproval = (approvalId: string, approve: boolean, reason?: string) =>
   apiPost<ApprovalRequestDto>(`/api/v1/approvals/${approvalId}/decide`, { approve, reason })
 
@@ -1112,6 +1107,7 @@ export const checkGoLiveReadiness = (body: GoLiveReadinessInput) =>
 
 // ---- Backtests ----
 export type BacktestMetrics = {
+  total_return: number | null
   cagr: number | null
   sharpe: number | null
   max_drawdown: number | null
@@ -1163,7 +1159,6 @@ export const listBacktests = (strategyVersionId?: string) =>
   apiGet<BacktestRun[]>(
     `/api/v1/backtests${strategyVersionId ? `?strategy_version_id=${strategyVersionId}` : ''}`,
   )
-export const getBacktest = (runId: string) => apiGet<BacktestRun>(`/api/v1/backtests/${runId}`)
 export const runMonteCarlo = (runId: string, nPaths = 1000, seed?: number) =>
   apiPost<BacktestRun>(`/api/v1/backtests/${runId}/monte-carlo`, { n_paths: nPaths, seed })
 export const compareBacktests = (runIds: string[]) =>
@@ -1177,8 +1172,8 @@ export type AuditLogEntry = {
   hash: string
   actor: string
   action: string
-  entity_type: string
-  entity_id: string
+  entity_type: string | null
+  entity_id: string | null
   details: Record<string, unknown> | null
   correlation_id: string | null
   created_at: string
@@ -1265,6 +1260,8 @@ export type PositionByStrategy = {
   quantity: number
   avg_cost: number
   realized_pnl: number
+  // false: an open position on an inactive subscription, which nothing is watching
+  managed: boolean
 }
 
 export const listPositionsByStrategy = () => apiGet<PositionByStrategy[]>('/api/v1/orders/positions')
@@ -1299,8 +1296,6 @@ export const generatePortfolioRecommendation = () =>
   apiPost<PortfolioRecommendation>('/api/v1/portfolio/recommendations/generate')
 export const listPortfolioRecommendations = () =>
   apiGet<PortfolioRecommendation[]>('/api/v1/portfolio/recommendations')
-export const getPortfolioRecommendation = (id: string) =>
-  apiGet<PortfolioRecommendation>(`/api/v1/portfolio/recommendations/${id}`)
 export const acceptPortfolioRecommendation = (id: string, notes?: string) =>
   apiPost<PortfolioRecommendation>(`/api/v1/portfolio/recommendations/${id}/accept`, { notes })
 export const rejectPortfolioRecommendation = (id: string, notes?: string) =>
@@ -1310,6 +1305,8 @@ export type PortfolioSummary = {
   as_of: string
   active_strategy_count: number
   paper_realized_pnl_today: number
+  // the costs inside that figure's fills: the realized P&L above is before them
+  paper_costs_today: number
   paper_open_position_count: number
   paper_unmanaged_position_count: number
   live_position_count: number
@@ -1697,6 +1694,8 @@ export type Instrument = {
   expiry_date: string | null
   strike_price: number | null
   option_type: string | null
+  is_active: boolean
+  last_synced_at: string
 }
 export const listInstruments = () => apiGet<Instrument[]>('/api/v1/market-data/instruments')
 

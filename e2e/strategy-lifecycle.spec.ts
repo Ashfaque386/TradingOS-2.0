@@ -40,7 +40,7 @@ test('strategy moves through its full lifecycle to Live Eligible', async ({ page
   const strategyIdText = await page.locator('.strategy-review-hero').getByText(/STRATEGY ID/).textContent()
   const strategyIdPrefix = strategyIdText!.split('·')[1]!.trim().toLowerCase()
 
-  await page.getByRole('button', { name: 'Lifecycle', exact: true }).click()
+  await page.getByRole('tab', { name: 'Lifecycle', exact: true }).click()
   await expect(page.getByText('Current stage: Backtesting')).toBeVisible()
 
   await page.getByRole('button', { name: /Request promotion to paper trading/i }).click()
@@ -48,7 +48,7 @@ test('strategy moves through its full lifecycle to Live Eligible', async ({ page
   // Decide the promotion approval as an operator with decide rights.
   await login(page, E2E_USERS.admin)
   await page.goto('/mission-control')
-  await page.getByRole('button', { name: /Sign-off queue/i }).click()
+  await page.getByRole('tab', { name: /Sign-off queue/i }).click()
   const promotionCard = page.locator('.queue-card', { hasText: strategyIdPrefix }).first()
   await expect(promotionCard).toBeVisible({ timeout: 15_000 })
   await promotionCard.getByRole('button', { name: /Approve/i }).click()
@@ -57,14 +57,14 @@ test('strategy moves through its full lifecycle to Live Eligible', async ({ page
   // Back on the Strategies page, the now-approved promotion can be executed.
   await page.goto('/strategies')
   await page.getByRole('heading', { level: 3, name: strategyName }).click()
-  await page.getByRole('button', { name: 'Lifecycle', exact: true }).click()
+  await page.getByRole('tab', { name: 'Lifecycle', exact: true }).click()
   await page.getByRole('button', { name: /Promote \(after approval\)/i }).click()
   await expect(page.getByText('Current stage: Paper Trading')).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: /Request live-eligibility sign-off/i }).click()
 
   await page.goto('/mission-control')
-  await page.getByRole('button', { name: /Sign-off queue/i }).click()
+  await page.getByRole('tab', { name: /Sign-off queue/i }).click()
   const liveEligibilityCard = page.locator('.queue-card', { hasText: strategyIdPrefix }).first()
   await expect(liveEligibilityCard).toBeVisible({ timeout: 15_000 })
   await liveEligibilityCard.getByRole('button', { name: /Approve/i }).click()
@@ -72,7 +72,7 @@ test('strategy moves through its full lifecycle to Live Eligible', async ({ page
 
   await page.goto('/strategies')
   await page.getByRole('heading', { level: 3, name: strategyName }).click()
-  await page.getByRole('button', { name: 'Lifecycle', exact: true }).click()
+  await page.getByRole('tab', { name: 'Lifecycle', exact: true }).click()
 
   // Go-Live Readiness Gate (Build Spec §8): all four conditions must pass,
   // matching backend/tests/test_orchestration_live_trading.py's own

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { PieChart, RefreshCw, Sparkles, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
@@ -15,7 +15,9 @@ import {
   listPortfolioRecommendations,
   rejectPortfolioRecommendation,
 } from '@/lib/api'
+import { ErrorNotice } from '@/components/ui/error-notice'
 import { can } from '@/lib/permissions'
+import { usePolling } from '@/lib/use-polling'
 
 function Panel({ title, eyebrow, children, actions }: { title: string; eyebrow?: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
@@ -128,28 +130,23 @@ export default function PortfolioPage() {
   const { role } = useAuth()
   const canManage = can(role, 'POST /api/v1/portfolio/recommendations/generate')
 
-  const [summary, setSummary] = useState<PortfolioSummary | null>(null)
-  const [riskMetrics, setRiskMetrics] = useState<PortfolioRiskMetrics | null>(null)
-  const [recommendations, setRecommendations] = useState<PortfolioRecommendation[]>([])
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
-  const reload = async () => {
-    const [s, rm, r] = await Promise.all([
-      getPortfolioSummary(),
-      getPortfolioRiskMetrics(),
-      listPortfolioRecommendations(),
-    ])
-    setSummary(s)
-    setRiskMetrics(rm)
-    setRecommendations(r)
-  }
-
-  useEffect(() => {
-    reload()
-    const interval = setInterval(reload, 30000)
-    return () => clearInterval(interval)
-  }, [])
+  const { data: portfolio, error: loadError, refresh: reload } = usePolling(
+    async () => {
+      const [summary, riskMetrics, recommendations] = await Promise.all([
+        getPortfolioSummary(),
+        getPortfolioRiskMetrics(),
+        listPortfolioRecommendations(),
+      ])
+      return { summary, riskMetrics, recommendations }
+    },
+    { intervalMs: 30_000 },
+  )
+  const summary: PortfolioSummary | null = portfolio?.summary ?? null
+  const riskMetrics: PortfolioRiskMetrics | null = portfolio?.riskMetrics ?? null
+  const recommendations: PortfolioRecommendation[] = portfolio?.recommendations ?? []
 
   const handleGenerate = async () => {
     setGenerating(true)
@@ -181,11 +178,12 @@ export default function PortfolioPage() {
           )}
         </header>
         {generateError && <p className="mb-3 text-xs text-rose-300">{generateError}</p>}
+        {loadError && <ErrorNotice className="mb-3" message={`Could not load the portfolio: ${loadError}`} onRetry={() => void reload()} />}
 
         {summary && (
           <div className="orders-summary">
             <div className="summary-stat"><span>ACTIVE STRATEGIES</span><strong>{summary.active_strategy_count}</strong><small>paper/live-eligible/live</small></div>
-            <div className="summary-stat"><span>PAPER REALIZED P&amp;L TODAY</span><strong className={summary.paper_realized_pnl_today >= 0 ? 'gain' : 'loss'}>{summary.paper_realized_pnl_today.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong><small>{summary.paper_open_position_count} open paper position(s){summary.paper_unmanaged_position_count > 0 ? ` · ${summary.paper_unmanaged_position_count} unmanaged (subscription inactive)` : ''}</small></div>
+            <div className="summary-stat"><span>PAPER REALIZED P&amp;L TODAY (BEFORE COSTS)</span><strong className={summary.paper_realized_pnl_today >= 0 ? 'gain' : 'loss'}>{summary.paper_realized_pnl_today.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong><small>costs {summary.paper_costs_today.toLocaleString('en-IN', { maximumFractionDigits: 2 })} on top · {summary.paper_open_position_count} open paper position(s){summary.paper_unmanaged_position_count > 0 ? ` · ${summary.paper_unmanaged_position_count} unmanaged (subscription inactive)` : ''}</small></div>
             <div className="summary-stat"><span>LIVE POSITIONS</span><strong>{summary.live_position_count}</strong><small>open live position(s)</small></div>
             <div className="summary-stat">
               <span>BROKER MARGIN</span>

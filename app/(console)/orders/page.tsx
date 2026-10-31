@@ -18,7 +18,9 @@ import {
   listPositionsByStrategy,
   submitOrderIntent,
 } from '@/lib/api'
+import { TabList } from '@/components/ui/tab-list'
 import { messageOf } from '@/lib/errors'
+import { usePolling } from '@/lib/use-polling'
 import { can } from '@/lib/permissions'
 
 function Panel({ title, eyebrow, children }: { title: string; eyebrow?: string; children: React.ReactNode }) {
@@ -68,11 +70,7 @@ export default function OrdersPage() {
     setLoadError(failed && failed.status === 'rejected' ? messageOf(failed.reason, 'Could not load the ledger') : null)
   }
 
-  useEffect(() => {
-    reload()
-    const interval = setInterval(reload, 10000)
-    return () => clearInterval(interval)
-  }, [])
+  usePolling(reload, { intervalMs: 10_000 })
 
   const filtered = useMemo(
     () => orders.filter(o => (mode === 'BOTH' || o.mode === mode.toLowerCase()) && (status === 'ALL' || o.status.toUpperCase() === status) && o.symbol.toLowerCase().includes(query.toLowerCase())),
@@ -135,7 +133,7 @@ export default function OrdersPage() {
       <div className="summary-stat"><span>OPEN POSITIONS</span><strong>{positions.length}</strong><small>{positions.filter(p => p.mode === 'live').length} live · {positions.filter(p => p.mode === 'paper').length} paper</small></div>
     </section>
     <div className="orders-layout"><div className="orders-main">
-      <div className="orders-tabs"><button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Orders &amp; Trades <b>{orders.length}</b></button><button className={tab === 'intents' ? 'active' : ''} onClick={() => setTab('intents')}>Live Order Intents <b className="amber-count">{intents.length}</b></button></div>
+      <TabList label="Orders views" className="orders-tabs"><button role="tab" aria-selected={tab === 'orders'} tabIndex={tab === 'orders' ? 0 : -1} className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Orders &amp; Trades <b>{orders.length}</b></button><button role="tab" aria-selected={tab === 'intents'} tabIndex={tab === 'intents' ? 0 : -1} className={tab === 'intents' ? 'active' : ''} onClick={() => setTab('intents')}>Live Order Intents <b className="amber-count">{intents.length}</b></button></TabList>
       {tab === 'orders' ? <Panel title="Execution ledger" eyebrow="PAPER + LIVE · NEWEST FIRST"><div className="orders-filters"><div className="filter-chips">{['BOTH', 'PAPER', 'LIVE'].map(x => <button className={mode === x ? 'active' : ''} onClick={() => setMode(x)} key={x}>{x}</button>)}</div><select value={status} onChange={e => setStatus(e.target.value)}>{statusOptions.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}</select><label className="symbol-search"><Search className="size-3" /><input placeholder="Search symbol..." value={query} onChange={e => setQuery(e.target.value)} /></label></div><div className="orders-table-wrap"><table className="orders-table"><thead><tr><th>TIME</th><th>SYMBOL</th><th>SIDE</th><th>QTY</th><th>PRICE</th><th>STATUS</th><th>STRATEGY</th></tr></thead><tbody>{filtered.slice((page - 1) * 5, page * 5).map(o => <tr key={o.id}><td className="mono">{new Date(o.time).toLocaleString()}<small>{o.mode.toUpperCase()}</small></td><td>{o.symbol}</td><td><span className={o.side.toLowerCase() === 'buy' ? 'buy-badge' : 'sell-badge'}>{o.side.toLowerCase() === 'buy' ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />}{o.side.toUpperCase()}</span></td><td>{o.quantity}</td><td className="mono">{o.price !== null ? `₹${o.price.toFixed(2)}` : '—'}</td><td><span className={`status-badge status-${o.status.toLowerCase()}`}>{o.status}</span></td><td className="source-cell">{o.strategy_id ? o.strategy_id.slice(0, 8) : '—'}</td></tr>)}{filtered.length === 0 && <tr><td colSpan={7} className="p-4 text-center text-xs text-muted-foreground">No executions match these filters.</td></tr>}</tbody></table></div><div className="orders-footer"><span>Showing {filtered.length === 0 ? 0 : (page - 1) * 5 + 1}–{Math.min(page * 5, filtered.length)} of {filtered.length} executions</span><div><button disabled={page === 1} onClick={() => setPage(page - 1)}><ChevronLeft className="size-3" /></button><button disabled={page * 5 >= filtered.length} onClick={() => setPage(page + 1)}><ChevronRight className="size-3" /></button></div></div></Panel> : <Panel title="Live Order Intents" eyebrow="FULL HISTORY · AUTONOMOUS SAFETY-LAYER TRAIL"><div className="intent-history">{intents.map(intent => <div className="intent-row" key={intent.id}><div className={`intent-ring ring-${intent.status.toLowerCase()}`}><Timer className="size-4" /></div><div className="intent-info"><strong>{intent.symbol}</strong><span>{intent.side.toUpperCase()} · {intent.quantity} qty</span><small>{intent.id.slice(0, 8)} · {new Date(intent.generated_at).toLocaleString()}</small></div><span className={`outcome outcome-${intent.status.toLowerCase()}`}>{intent.status === 'approved' || intent.status === 'submitted' ? <Check className="size-3" /> : intent.status === 'rejected' || intent.status === 'expired' || intent.status === 'failed' ? <X className="size-3" /> : <Clock3 className="size-3" />}{intent.status.replace('_', ' ').toUpperCase()}</span></div>)}{intents.length === 0 && <p className="p-4 text-xs text-muted-foreground">No live order intents recorded.</p>}</div></Panel>}
     </div>
     <aside className="orders-side">

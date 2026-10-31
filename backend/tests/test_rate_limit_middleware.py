@@ -60,6 +60,14 @@ async def test_429_carries_cors_headers_for_an_allowed_origin(client, _low_limit
     )
     assert resp.status_code == 429
     assert resp.headers["access-control-allow-origin"] == "http://localhost:3000"
+    # the console reads Retry-After to say how long to wait; a browser only lets it if it is exposed
+    assert resp.headers["access-control-expose-headers"] == "Retry-After"
+
+
+async def test_cors_exposes_retry_after_on_ordinary_responses_too(client):
+    resp = await client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert resp.status_code == 200
+    assert "retry-after" in resp.headers["access-control-expose-headers"].lower()
 
 
 async def test_429_has_no_cors_header_for_a_disallowed_origin(client, _low_limit):
