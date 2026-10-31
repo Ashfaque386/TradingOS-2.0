@@ -245,7 +245,12 @@ async def get_position_endpoint(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> LivePositionResponse:
-    result = await db.execute(select(LivePosition).where(LivePosition.strategy_id == strategy_id))
+    result = await db.execute(
+        select(LivePosition)
+        .where(LivePosition.strategy_id == strategy_id)
+        .order_by(LivePosition.updated_at.desc())
+        .limit(1)
+    )
     position = result.scalar_one_or_none()
     if position is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No position yet")

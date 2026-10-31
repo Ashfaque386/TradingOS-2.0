@@ -209,3 +209,94 @@ async def test_the_errors_say_which_change_and_why(db_session_factory):
             await confirm_risk_limit_change(db, change.id, confirmed_by="user-c")
     assert unstaged.value.change_id == change.id and unstaged.value.status == "confirmed"
     assert str(unstaged.value) == f"risk limit change {change.id} is 'confirmed', not 'staged'"
+
+
+# Phase 3: turning a change down.
+
+
+async def test_a_staged_change_can_be_rejected_and_keeps_who_when_and_why(db_session_factory):
+    from src.models.risk_limit import RiskLimitChangeStatus
+    from src.orchestration.risk_limits import reject_risk_limit_change
+
+    async with db_session_factory() as db:
+        change = await stage_risk_limit_change(
+            db, limit_name="max_drawdown_pct", proposed_value=40.0, staged_by="user-a"
+        )
+        before = datetime.now(UTC)
+        rejected = await reject_risk_limit_change(
+            db, change.id, rejected_by="user-b", reason="far too loose"
+        )
+
+    assert rejected.status == RiskLimitChangeStatus.REJECTED
+    assert rejected.rejected_by == "user-b"
+    assert rejected.rejection_reason == "far too loose"
+    assert rejected.rejected_at >= before
+    assert rejected.applied_by is None and rejected.confirmed_by is None
+
+
+async def test_the_person_who_staged_a_change_may_reject_it(db_session_factory):
+    from src.orchestration.risk_limits import reject_risk_limit_change
+
+    async with db_session_factory() as db:
+        change = await stage_risk_limit_change(
+            db, limit_name="ws_latency_ms", proposed_value=50.0, staged_by="user-a"
+        )
+        rejected = await reject_risk_limit_change(db, change.id, rejected_by="user-a")
+
+    assert rejected.status == "rejected"
+    assert rejected.rejection_reason is None
+
+
+async def test_a_confirmed_change_can_still_be_rejected_and_is_never_applied(db_session_factory):
+    from src.orchestration.risk_limits import reject_risk_limit_change
+
+    async with db_session_factory() as db:
+        change = await stage_risk_limit_change(
+            db, limit_name="ws_latency_ms", proposed_value=50.0, staged_by="user-a"
+        )
+        await confirm_risk_limit_change(db, change.id, confirmed_by="user-b")
+        rejected = await reject_risk_limit_change(db, change.id, rejected_by="user-b", reason="no")
+        assert rejected.status == "rejected"
+        with pytest.raises(RiskLimitChangeNotConfirmedError):
+            await apply_risk_limit_change(db, change.id, applied_by="user-b")
+        limits = (await db.execute(select(RiskLimit))).scalars().all()
+
+    assert limits == []
+
+
+@pytest.mark.parametrize("final", ["applied", "rejected"])
+async def test_a_change_that_is_applied_or_already_rejected_cannot_be_rejected(
+    db_session_factory, final
+):
+    from src.orchestration.risk_limits import (
+        RiskLimitChangeNotRejectableError,
+        reject_risk_limit_change,
+    )
+
+    async with db_session_factory() as db:
+        change = await stage_risk_limit_change(
+            db, limit_name="ws_latency_ms", proposed_value=50.0, staged_by="user-a"
+        )
+        if final == "applied":
+            await confirm_risk_limit_change(db, change.id, confirmed_by="user-b")
+            await apply_risk_limit_change(db, change.id, applied_by="user-b")
+        else:
+            await reject_risk_limit_change(db, change.id, rejected_by="user-b")
+        with pytest.raises(RiskLimitChangeNotRejectableError) as raised:
+            await reject_risk_limit_change(db, change.id, rejected_by="user-c")
+
+    assert raised.value.change_id == change.id
+    assert raised.value.status == final
+    assert f"is {final!r}" in str(raised.value)
+    assert "only a staged or confirmed one can be rejected" in str(raised.value)
+
+
+async def test_rejecting_a_change_that_does_not_exist_names_it(db_session_factory):
+    from src.orchestration.risk_limits import reject_risk_limit_change
+
+    missing = uuid.uuid4()
+    async with db_session_factory() as db:
+        with pytest.raises(NoSuchRiskLimitChangeError) as raised:
+            await reject_risk_limit_change(db, missing, rejected_by="user-a")
+
+    assert raised.value.change_id == missing

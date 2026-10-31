@@ -4,16 +4,28 @@ periodically), and the one and only way to clear a tripped switch: an
 explicit, RBAC-gated human reset.
 """
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.schemas import CheckDrawdownRequest, KillSwitchStateResponse, ResetKillSwitchRequest
+from src.api.schemas import (
+    CheckDrawdownRequest,
+    EquitySnapshotResponse,
+    EvaluateKillSwitchResponse,
+    KillSwitchStateResponse,
+    ResetKillSwitchRequest,
+)
 from src.audit.service import write_audit_entry
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.core.redis_client import get_redis
 from src.engine.risk.kill_switch import KillSwitchMode
 from src.models.kill_switch_state import KillSwitchState
 from src.models.user import User
+from src.orchestration.drawdown_monitor import evaluate_mode_drawdown
+from src.orchestration.equity import measure_equity
 from src.orchestration.kill_switch import (
     KillSwitchNotTrippedError,
     check_drawdown,
@@ -28,6 +40,7 @@ _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.RISK_MANAGER]
 register_policy("GET", "/api/v1/kill-switch/{mode}", roles=list(Role))
 register_policy("POST", "/api/v1/kill-switch/{mode}/check", roles=_OPERATOR_ROLES)
 register_policy("POST", "/api/v1/kill-switch/{mode}/reset", roles=_OPERATOR_ROLES)
+register_policy("POST", "/api/v1/kill-switch/{mode}/evaluate", roles=_OPERATOR_ROLES)
 
 
 def _to_response(state: KillSwitchState) -> KillSwitchStateResponse:
@@ -68,6 +81,38 @@ async def check_drawdown_endpoint(
         threshold_pct=body.threshold_pct,
     )
     return _to_response(state)
+
+
+@router.post("/{mode}/evaluate")
+async def evaluate_kill_switch_endpoint(
+    mode: KillSwitchMode,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    _current_user: User = Depends(require_role),
+) -> EvaluateKillSwitchResponse:
+    """Measure the mode's equity now and run the same check the scheduler runs: store the
+    reading and trip the switch if the drawdown has reached the limit. The measured reading is
+    what is judged, unlike `/check`, which judges numbers an operator types in."""
+    sample = await measure_equity(db, redis, mode)
+    outcome = await evaluate_mode_drawdown(db, sample)
+    state = await get_kill_switch_state(db, mode)
+    return EvaluateKillSwitchResponse(
+        outcome=outcome.status,
+        snapshot=EquitySnapshotResponse(
+            taken_at=datetime.now(UTC),
+            equity=sample.equity,
+            capital_base=sample.capital_base,
+            realized_net=sample.realized_net,
+            unrealized=sample.unrealized,
+            open_positions=sample.open_positions,
+            unpriced_positions=sample.unpriced_positions,
+            price_source=sample.price_source,
+            peak_equity=outcome.peak_equity,
+            drawdown_pct=outcome.drawdown_pct,
+            note=sample.note,
+        ),
+        kill_switch=_to_response(state),
+    )
 
 
 @router.post("/{mode}/reset")

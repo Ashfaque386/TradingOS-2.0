@@ -22,11 +22,13 @@ from src.models.risk_limit import RiskLimit, RiskLimitChangeRequest, RiskLimitCh
 __all__ = [
     "NoSuchRiskLimitChangeError",
     "RiskLimitChangeNotConfirmedError",
+    "RiskLimitChangeNotRejectableError",
     "RiskLimitChangeNotStagedError",
     "SelfConfirmationNotAllowedError",
     "apply_risk_limit_change",
     "confirm_risk_limit_change",
     "get_effective_risk_limit",
+    "reject_risk_limit_change",
     "stage_risk_limit_change",
 ]
 
@@ -49,6 +51,16 @@ class RiskLimitChangeNotConfirmedError(Exception):
         self.change_id = change_id
         self.status = status
         super().__init__(f"risk limit change {change_id} is {status!r}, not 'confirmed'")
+
+
+class RiskLimitChangeNotRejectableError(Exception):
+    def __init__(self, change_id: uuid.UUID, status: str):
+        self.change_id = change_id
+        self.status = status
+        super().__init__(
+            f"risk limit change {change_id} is {status!r}; only a staged or confirmed one can be "
+            "rejected"
+        )
 
 
 class SelfConfirmationNotAllowedError(Exception):
@@ -121,6 +133,28 @@ async def apply_risk_limit_change(
     change.status = RiskLimitChangeStatus.APPLIED
     change.applied_by = applied_by
     change.applied_at = datetime.now(UTC)
+
+    await db.commit()
+    await db.refresh(change)
+    return change
+
+
+async def reject_risk_limit_change(
+    db: AsyncSession, change_id: uuid.UUID, *, rejected_by: str, reason: str | None = None
+) -> RiskLimitChangeRequest:
+    """Turn down a change that has not been applied. Anyone allowed to govern risk limits may do
+    it, the person who staged it included (that is cancelling it); nothing changes and who, when
+    and why are kept. An applied or already-rejected change cannot be rejected."""
+    change = await db.get(RiskLimitChangeRequest, change_id)
+    if change is None:
+        raise NoSuchRiskLimitChangeError(change_id)
+    if change.status not in (RiskLimitChangeStatus.STAGED, RiskLimitChangeStatus.CONFIRMED):
+        raise RiskLimitChangeNotRejectableError(change_id, change.status)
+
+    change.status = RiskLimitChangeStatus.REJECTED
+    change.rejected_by = rejected_by
+    change.rejected_at = datetime.now(UTC)
+    change.rejection_reason = reason
 
     await db.commit()
     await db.refresh(change)

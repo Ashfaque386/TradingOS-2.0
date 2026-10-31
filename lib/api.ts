@@ -330,6 +330,44 @@ export const getKillSwitch = (mode: KillSwitchMode) =>
 export const resetKillSwitch = (mode: KillSwitchMode, reason?: string) =>
   apiPost<KillSwitchState>(`/api/v1/kill-switch/${mode}/reset`, { reason })
 
+// ---- Equity and the automatic kill switch ----
+export type EquitySnapshot = {
+  taken_at: string
+  // null: it could not be measured (an unpriced position, no starting capital); `note` says why
+  equity: number | null
+  capital_base: number | null
+  realized_net: number | null
+  unrealized: number | null
+  open_positions: number
+  unpriced_positions: number
+  price_source: 'real' | 'synthetic' | 'none'
+  peak_equity: number | null
+  drawdown_pct: number | null
+  note: string | null
+}
+export type EquityHistory = {
+  mode: KillSwitchMode
+  // oldest first
+  snapshots: EquitySnapshot[]
+  threshold_pct: number
+}
+export const getEquityHistory = (mode: KillSwitchMode, limit = 500) =>
+  apiGet<EquityHistory>(`/api/v1/equity/${mode}?limit=${limit}`)
+
+export type EvaluateKillSwitchResult = {
+  outcome: 'ok' | 'tripped' | 'already_tripped' | 'cannot_evaluate'
+  snapshot: EquitySnapshot
+  kill_switch: KillSwitchState
+}
+// Measure the equity now and run the check the scheduler runs.
+export const evaluateKillSwitch = (mode: KillSwitchMode) =>
+  apiPost<EvaluateKillSwitchResult>(`/api/v1/kill-switch/${mode}/evaluate`)
+// A drill: judge numbers an operator supplies. The threshold is for this check only and is not stored.
+export const checkKillSwitchDrill = (
+  mode: KillSwitchMode,
+  body: { current_equity: number; peak_equity: number; threshold_pct?: number },
+) => apiPost<KillSwitchState>(`/api/v1/kill-switch/${mode}/check`, body)
+
 export type TodaysPaperPnl = {
   as_of_date: string
   // Gross of costs (the price difference only); `net_realized_pnl` is after the fills' costs.
@@ -1577,7 +1615,32 @@ export type RiskLimitChange = {
   confirmed_at: string | null
   applied_by: string | null
   applied_at: string | null
+  rejected_by: string | null
+  rejected_at: string | null
+  rejection_reason: string | null
+  // The same people by e-mail, where the id is a known user.
+  staged_by_label: string | null
+  confirmed_by_label: string | null
+  applied_by_label: string | null
+  rejected_by_label: string | null
 }
+// The limits that can be staged, with what is in force.
+export type RiskLimitCatalogEntry = {
+  name: string
+  label: string
+  description: string
+  unit: string
+  default: number
+  minimum: number
+  maximum: number
+  // false: nothing reads this limit yet, so changing it changes nothing
+  enforced: boolean
+  effective: number
+  applied: boolean
+}
+export const listRiskLimitCatalog = () => apiGet<RiskLimitCatalogEntry[]>('/api/v1/risk-limits/catalog')
+export const rejectRiskLimitChange = (changeId: string, reason?: string) =>
+  apiPost<RiskLimitChange>(`/api/v1/risk-limits/${changeId}/reject`, { reason })
 // The key that signs every session. Never returned -- only where it came from
 // and whether it can be trusted (a deployment started with defaults used to be
 // seeded with a public placeholder).

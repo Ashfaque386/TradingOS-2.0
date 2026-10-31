@@ -5,6 +5,7 @@ import { Plus, RefreshCw } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Attention } from '@/components/paper-trading/attention'
 import { CloseDialog, DeactivateDialog, EnrolDialog, SettingsDialog, activate } from '@/components/paper-trading/dialogs'
+import { EquityPanel } from '@/components/equity/equity-panel'
 import { Ledger } from '@/components/paper-trading/ledger'
 import { Lane } from '@/components/paper-trading/lane'
 import {
@@ -136,6 +137,7 @@ export default function PaperTradingPage() {
         </header>
 
         <Ledger today={today} unrealized={unrealized} openCount={openCount} />
+        <EquityPanel mode="paper" />
 
         {error && <div className="ui-error" role="alert">{error}</div>}
         {notice && (

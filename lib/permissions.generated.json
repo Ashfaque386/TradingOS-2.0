@@ -144,6 +144,12 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/equity/{mode}": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/gateway/config": [
     "PortfolioManager",
     "ReadOnlyAuditor",
@@ -420,6 +426,12 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/risk-limits/catalog": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/risk-limits/changes": [
     "PortfolioManager",
     "ReadOnlyAuditor",
@@ -580,6 +592,10 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "POST /api/v1/kill-switch/{mode}/evaluate": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "POST /api/v1/kill-switch/{mode}/reset": [
     "RiskManager",
     "SystemAdministrator"
@@ -729,6 +745,10 @@
     "SystemAdministrator"
   ],
   "POST /api/v1/risk-limits/{change_id}/confirm": [
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/risk-limits/{change_id}/reject": [
     "RiskManager",
     "SystemAdministrator"
   ],

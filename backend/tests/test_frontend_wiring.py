@@ -102,7 +102,6 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/backtests"): "Phase 9: create a backtest from the lake",
     ("POST", "/api/v1/backtests/optimize"): "Phase 9: optimise from the Backtests page",
     ("POST", "/api/v1/backtests/{}/walk-forward"): "Phase 9: walk-forward from the Backtests page",
-    ("POST", "/api/v1/kill-switch/{}/check"): "Phase 3: explicit drill in Settings",
     (
         "GET",
         "/api/v1/paper-trading/subscriptions/{}/signals",

@@ -123,6 +123,11 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         N,
         "evaluates a drawdown observation and reports the state",
     ),
+    ("POST", "/kill-switch/{mode}/evaluate"): (
+        N,
+        "measures equity, records the reading and trips the switch at the limit (the trip "
+        "writes its own audit row)",
+    ),
     ("POST", "/kill-switch/{mode}/reset"): (
         X,
         f"{SWEEP}::test_resetting_a_kill_switch_that_is_not_tripped_is_refused_and_not_audited",
@@ -239,6 +244,10 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/risk-limits/{change_id}/confirm"): (
         X,
         f"{REFUSALS}::test_confirming_or_applying_a_risk_limit_change_twice_is_refused_and_audited_once",
+    ),
+    ("POST", "/risk-limits/{change_id}/reject"): (
+        X,
+        f"{REFUSALS}::test_rejecting_a_risk_limit_change_twice_is_refused_and_audited_once",
     ),
     ("POST", "/risk-limits/{change_id}/apply"): (
         X,

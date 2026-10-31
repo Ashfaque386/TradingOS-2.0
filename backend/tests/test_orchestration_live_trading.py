@@ -28,6 +28,7 @@ from src.models.live_order_intent import LiveOrderIntent
 from src.models.live_position import LivePosition
 from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.order import Order
+from src.models.trade import Trade
 from src.orchestration.approvals import create_approval_request, decide_approval_request
 from src.orchestration.kill_switch import check_drawdown
 from src.orchestration.live_trading import (
@@ -288,13 +289,13 @@ async def test_generate_intent_with_autonomy_enabled_auto_submits_and_reaches_br
         assert len(audit_entries) == 1
         assert audit_entries[0].actor == "system:autonomous-safety-layer"
 
-        position = (
+        # Sending the order moved no position: that waits for the broker to confirm the fill.
+        positions = (
             (await db.execute(select(LivePosition).where(LivePosition.strategy_id == strategy_id)))
             .scalars()
-            .one()
+            .all()
         )
-        assert position.quantity == intent.quantity
-        assert position.avg_cost == 106.5
+        assert all(p.quantity == 0 for p in positions)
 
 
 async def test_master_switch_checked_before_kill_switch(db_session_factory):
@@ -435,6 +436,11 @@ async def test_standing_cap_blocks_a_runaway_signal_loop(db_session_factory):
                 position.quantity = 0
                 position.avg_cost = 0.0
                 await db.commit()
+            # The broker has resolved the earlier orders: an unconfirmed order would (rightly)
+            # stop the strategy deciding again, and this test is about the cap, not that.
+            for trade in (await db.execute(select(Trade))).scalars().all():
+                trade.status = "cancelled"
+            await db.commit()
 
         async with db_session_factory() as db:
             intent = await generate_live_order_intent(
@@ -759,3 +765,53 @@ async def test_a_missing_quote_fails_the_intent_instead_of_trading_at_a_price_of
     assert len(rows) == 1
     assert "quote lookup failed" in rows[0].details["reason"]
     assert "no usable quote for DEMOSTOCK" in rows[0].details["reason"]
+
+
+async def test_no_second_order_is_decided_while_the_first_is_unconfirmed(db_session_factory):
+    """The position only moves when the broker confirms a fill, so until then it still reads flat:
+    a second tick would see "no position, BUY signal" and send the same entry again."""
+    strategy_id = await _make_live_eligible_strategy(db_session_factory)
+    subscription = await _enroll_and_enable_autonomy(db_session_factory, strategy_id)
+    async with db_session_factory() as db:
+        sub_row = await db.get(LiveTradingSubscription, subscription.id)
+        sub_row.last_signal_type = "BUY"
+        await db.commit()
+    adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="ONCE"))
+
+    async with db_session_factory() as db:
+        first = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=adapter,
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+    async with db_session_factory() as db:
+        second = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=adapter,
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+
+    assert first is not None and first.status == "submitted"
+    assert second is None
+    async with db_session_factory() as db:
+        assert len((await db.execute(select(Order))).scalars().all()) == 1
+        assert len((await db.execute(select(LiveOrderIntent))).scalars().all()) == 1
+
+    # Once the broker has said how the first ended, the strategy decides again.
+    async with db_session_factory() as db:
+        for trade in (await db.execute(select(Trade))).scalars().all():
+            trade.status = "cancelled"
+        await db.commit()
+    async with db_session_factory() as db:
+        third = await generate_live_order_intent(
+            db,
+            subscription_id=subscription.id,
+            tick_price=106.0,
+            adapter=adapter,
+            regulatory_provider=_REGULATORY_PROVIDER,
+        )
+    assert third is not None and third.status == "submitted"

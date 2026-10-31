@@ -37,6 +37,7 @@ import {
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { InboundSettings } from '@/components/settings/inbound-settings'
+import { RiskLimitsSection } from '@/components/settings/risk-limits-section'
 import { SigningKeyCard } from '@/components/settings/signing-key-card'
 import { useAuth } from '@/components/auth/auth-provider'
 import {
@@ -49,15 +50,11 @@ import {
   type LlmProviderName,
   type LlmProviderStatus,
   type NotificationChannelStatus,
-  type RiskLimit,
-  type RiskLimitChange,
   ALERT_LEVELS,
   ApiError,
   LLM_PROVIDERS,
   LLM_PROVIDER_LABELS,
   NOTIFICATION_CHANNELS,
-  applyRiskLimitChange,
-  confirmRiskLimitChange,
   deleteBrokerCredentials,
   fallbackBrokerRedirectUri,
   deleteLlmProviderCredentials,
@@ -72,11 +69,8 @@ import {
   listLlmProviderModels,
   listLlmProviderStatus,
   listNotificationChannels,
-  listRiskLimitChanges,
-  listRiskLimits,
   putGatewayConfig,
   rollbackGatewayConfig,
-  stageRiskLimitChange,
   testLlmProvider,
   testNotificationChannel,
   validateGatewayConfig,
@@ -1163,98 +1157,6 @@ function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void
   )
 }
 
-/* ------------------------------- Risk Limits -------------------------------- */
-
-function RiskSection() {
-  const { role, user } = useAuth()
-  const canOperate = can(role, 'POST /api/v1/risk-limits/stage')
-  const [limits, setLimits] = useState<RiskLimit[]>([])
-  const [changes, setChanges] = useState<RiskLimitChange[]>([])
-  const [limitName, setLimitName] = useState('')
-  const [proposedValue, setProposedValue] = useState('')
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function reload() {
-    const [l, c] = await Promise.all([listRiskLimits(), listRiskLimitChanges()])
-    setLimits(l)
-    setChanges(c.filter((x) => x.status === 'staged' || x.status === 'confirmed'))
-  }
-  useEffect(() => { reload() }, [])
-
-  async function handleStage() {
-    if (!limitName.trim() || !proposedValue) return
-    setBusy(true)
-    setError(null)
-    try {
-      await stageRiskLimitChange(limitName.trim(), Number(proposedValue), reason || undefined)
-      setLimitName(''); setProposedValue(''); setReason('')
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to stage change')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleConfirm(changeId: string) {
-    setBusy(true)
-    setError(null)
-    try {
-      await confirmRiskLimitChange(changeId)
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Confirmation failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleApply(changeId: string) {
-    setBusy(true)
-    setError(null)
-    try {
-      await applyRiskLimitChange(changeId)
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Apply failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="set-block">
-      <div className="set-block-head"><div><h2>Risk Limits</h2><p>Thresholds change only through dual control &mdash; stage &rarr; a different user confirms &rarr; apply.</p></div></div>
-      <div className="set-dualcontrol-banner"><Lock className="size-4" /><div><strong>Dual-control enforced</strong><p>Confirming your own staged change is rejected server-side — a genuinely different user must confirm.</p></div></div>
-      {error && <div className="mb-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
-
-      <p className="set-group-label">Current effective limits</p>
-      <div className="set-risk-list">{limits.map((l) => <div key={l.name} className="set-risk-row"><div className="set-risk-meta"><span className="set-risk-label">{l.name}</span><strong className="mono">{l.value}</strong></div></div>)}{limits.length === 0 && <p className="text-xs text-muted-foreground">No risk limits set yet.</p>}</div>
-
-      {canOperate && <div className="mt-4 flex flex-wrap items-end gap-2 rounded-xl border border-white/10 p-3">
-        <label className="set-field"><span>Limit name</span><input value={limitName} onChange={(e) => setLimitName(e.target.value)} placeholder="max_drawdown_pct" /></label>
-        <label className="set-field"><span>Proposed value</span><input value={proposedValue} onChange={(e) => setProposedValue(e.target.value)} inputMode="decimal" /></label>
-        <label className="set-field"><span>Reason</span><input value={reason} onChange={(e) => setReason(e.target.value)} /></label>
-        <button className="set-btn set-btn-primary" disabled={busy || !limitName.trim() || !proposedValue} onClick={handleStage}>Stage change</button>
-      </div>}
-
-      <p className="set-group-label mt-4">Pending changes</p>
-      <div className="set-risk-list">
-        {changes.map((c) => (
-          <div key={c.id} className={`set-risk-row set-risk-${c.status === 'staged' ? 'staged' : 'awaiting'}`}>
-            <div className="set-risk-meta"><span className="set-risk-label">{c.limit_name}</span><strong className="mono">→ {c.proposed_value}</strong><small className="block text-muted-foreground">staged by {c.staged_by === user?.id ? 'you' : c.staged_by.slice(0, 8)}{c.reason ? ` · ${c.reason}` : ''}</small></div>
-            {c.status === 'staged' && canOperate && <button className="set-btn set-btn-primary" disabled={busy || c.staged_by === user?.id} onClick={() => handleConfirm(c.id)}>{c.staged_by === user?.id ? 'Needs a different confirmer' : 'Confirm as second user'}</button>}
-            {c.status === 'confirmed' && canOperate && <button className="set-btn set-btn-primary" disabled={busy} onClick={() => handleApply(c.id)}><CheckCircle2 className="size-3.5" /> Apply</button>}
-          </div>
-        ))}
-        {changes.length === 0 && <p className="text-xs text-muted-foreground">No changes staged or awaiting confirmation.</p>}
-      </div>
-    </div>
-  )
-}
-
 /* --------------------------------- Page ----------------------------------- */
 
 export default function SettingsPage() {
@@ -1310,7 +1212,7 @@ export default function SettingsPage() {
             {section === 'broker' && <BrokerConfigSection oauthBanner={oauthBanner} onStatusChanged={bumpStatus} />}
             {section === 'notifications' && <NotificationsSection onStatusChanged={bumpStatus} />}
             {section === 'skills' && <SkillsSection />}
-            {section === 'risk' && <RiskSection />}
+            {section === 'risk' && <RiskLimitsSection />}
             {section === 'security' && <SigningKeyCard />}
           </section>
         </div>

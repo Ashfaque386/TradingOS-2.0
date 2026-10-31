@@ -58,6 +58,11 @@ class Trade(Base):
     )
 
     fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # An estimate of what this fill cost (brokerage, STT, exchange charges, SEBI fee, stamp duty,
+    # GST), worked out with the paper engine's friction model when the fill is confirmed.
+    costs_total: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     executed_at: Mapped[datetime] = mapped_column(

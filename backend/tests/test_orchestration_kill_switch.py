@@ -206,3 +206,43 @@ async def test_reset_kill_switch_without_a_reason_stores_none(db_session_factory
         state = await reset_kill_switch(db, "live", reset_by="operator-2")
 
     assert state.reset_reason is None
+
+
+# Phase 3: the limit a drill is judged by, and what a drill is allowed to store.
+
+
+async def test_a_supplied_threshold_is_used_for_that_check_and_never_stored(db_session_factory):
+    async with db_session_factory() as db:
+        state = await check_drawdown(
+            db, "paper", current_equity=95_000, peak_equity=100_000, threshold_pct=4.0
+        )
+
+    assert state.tripped is True  # 5% breaches the 4% the drill asked about
+    assert "4.0000%" in state.trip_reason
+    assert state.threshold_pct == 15.0  # the persisted limit is still the policy's
+    async with db_session_factory() as db:
+        stored = await get_kill_switch_state(db, "paper")
+    assert stored.threshold_pct == 15.0
+
+
+async def test_without_a_supplied_threshold_the_applied_dual_control_limit_decides(
+    db_session_factory,
+):
+    from src.orchestration.risk_limits import (
+        apply_risk_limit_change,
+        confirm_risk_limit_change,
+        stage_risk_limit_change,
+    )
+
+    async with db_session_factory() as db:
+        change = await stage_risk_limit_change(
+            db, limit_name="max_drawdown_pct", proposed_value=5.0, staged_by="a"
+        )
+        await confirm_risk_limit_change(db, change.id, confirmed_by="b")
+        await apply_risk_limit_change(db, change.id, applied_by="b")
+
+    async with db_session_factory() as db:
+        state = await check_drawdown(db, "paper", current_equity=94_000, peak_equity=100_000)
+
+    assert state.tripped is True  # 6% is under the 15% default but over the applied 5%
+    assert state.threshold_pct == 5.0

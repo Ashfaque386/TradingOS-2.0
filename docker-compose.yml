@@ -24,6 +24,9 @@ services:
       # reach the container, so a setting that is not forwarded cannot be changed in Docker; the
       # defaults below are the code's own.
       PAPER_TRADING_PRODUCT: ${PAPER_TRADING_PRODUCT:-cnc}
+      # What the live account started with (rupees); empty = unset, and live equity is then reported
+      # as unmeasurable. See src/core/config.py.
+      LIVE_STARTING_CAPITAL: ${LIVE_STARTING_CAPITAL:-}
       PAPER_DEPTH_MAX_AGE_SECONDS: ${PAPER_DEPTH_MAX_AGE_SECONDS:-30}
       PAPER_TICK_MAX_AGE_SECONDS: ${PAPER_TICK_MAX_AGE_SECONDS:-20}
       PAPER_TICK_STREAM_MAXLEN: ${PAPER_TICK_STREAM_MAXLEN:-10000}

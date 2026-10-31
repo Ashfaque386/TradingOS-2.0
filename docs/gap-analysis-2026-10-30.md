@@ -46,6 +46,16 @@ this is where it stands.
 | Tooling | `ignoreBuildErrors` is off (`next build` type-checks); ESLint ratchet, `pnpm typecheck` and the logic specs in the frontend job; seven new page specs and an auditor fixture. |
 | Wiring guard | `tests/test_frontend_wiring.py` (every client call has a route and every route a call or a reason) and generated permissions (`lib/permissions.generated.json`, `can()`). |
 
+**Closed in phase 3 (equity history and the automatic kill switch):**
+
+| Gap | What changed |
+|---|---|
+| G1 | The kill switch trips by itself: `equity_snapshots`, a monitor that reads each mode's equity every minute while the market is open and at 15:45 IST, trips the switch at the applied limit (audit row `kill_switch.tripped` by `system:drawdown-monitor`, alert, row lock), never clears it, and re-bases its peak at a human reset. `POST /kill-switch/{mode}/evaluate` measures and judges now. |
+| G11 | Equity history exists (`GET /equity/{mode}`) and is charted on the Paper Desk and Overview, with unmeasurable readings drawn as gaps and explained. |
+| G23 | The monitor and the drill's default read the applied `max_drawdown_pct` (`get_effective_risk_limit` now has callers); a supplied threshold is used for that check and never stored. A catalog bounds what can be staged, and staged changes can be rejected or cancelled. |
+| G22 (ledger part) | The live position moves only on a broker-confirmed fill, at the broker's price, with estimated costs; a rejected or cancelled order moves nothing; one row per strategy and symbol. **Still open (Phase 6):** the live adapter is resolved once at boot, live intents have no staleness guard, and the live circuit-band check compares a price with itself. |
+| W10 | The risk-limit screen offers real limits and their range, shows every change with who and when, and can reject. |
+
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
 - The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.

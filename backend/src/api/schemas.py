@@ -544,11 +544,65 @@ class RiskLimitChangeResponse(BaseModel):
     confirmed_at: datetime_type | None
     applied_by: str | None
     applied_at: datetime_type | None
+    rejected_by: str | None = None
+    rejected_at: datetime_type | None = None
+    rejection_reason: str | None = None
+    # `staged_by` and the rest are user ids; these are the same people by e-mail, where known.
+    staged_by_label: str | None = None
+    confirmed_by_label: str | None = None
+    applied_by_label: str | None = None
+    rejected_by_label: str | None = None
 
 
 class RiskLimitResponse(BaseModel):
     name: str
     value: float
+
+
+class RejectRiskLimitChangeRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RiskLimitCatalogEntry(BaseModel):
+    name: str
+    label: str
+    description: str
+    unit: str
+    default: float
+    minimum: float
+    maximum: float
+    enforced: bool
+    # What is in force now: the applied value, or the default when none was ever applied.
+    effective: float
+    applied: bool
+
+
+class EquitySnapshotResponse(BaseModel):
+    taken_at: datetime_type
+    equity: float | None
+    capital_base: float | None
+    realized_net: float | None
+    unrealized: float | None
+    open_positions: int
+    unpriced_positions: int
+    price_source: str
+    peak_equity: float | None
+    drawdown_pct: float | None
+    note: str | None
+
+
+class EquityHistoryResponse(BaseModel):
+    mode: str
+    # Oldest first. A reading that could not be measured has `equity: null` and a note.
+    snapshots: list[EquitySnapshotResponse]
+    threshold_pct: float
+
+
+class EvaluateKillSwitchResponse(BaseModel):
+    # ok | tripped | already_tripped | cannot_evaluate
+    outcome: str
+    snapshot: EquitySnapshotResponse
+    kill_switch: KillSwitchStateResponse
 
 
 class GoLiveReadinessRequest(BaseModel):

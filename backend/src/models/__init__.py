@@ -21,6 +21,7 @@ from src.models.chat_session import ChatSession
 from src.models.corporate_action import CorporateAction
 from src.models.daily_signal import DailySignal
 from src.models.dataset_freshness_record import DatasetFreshnessRecord
+from src.models.equity_snapshot import EquitySnapshot
 from src.models.heartbeat_log import HeartbeatLog, HeartbeatStatus
 from src.models.instrument import Instrument
 from src.models.investor_report import InvestorReport
@@ -95,6 +96,7 @@ __all__ = [
     "HeartbeatStatus",
     "Instrument",
     "InstrumentClass",
+    "EquitySnapshot",
     "KillSwitchState",
     "LiveBatchAuthorization",
     "LiveOrderIntent",

@@ -43,6 +43,7 @@ from src.orchestration.pipeline_events import (
 )
 from src.orchestration.post_trade_review_scheduler import start_post_trade_review_scheduler
 from src.orchestration.recovery import reap_incomplete_runs
+from src.orchestration.risk_monitor_scheduler import start_risk_monitor_scheduler
 from src.orchestration.screener_scheduler import start_screener_scheduler
 from src.orchestration.task_engine import drive_run_to_quiescence, start_stall_sweep_loop
 
@@ -174,6 +175,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     )
     trading_holiday_task = trading_holiday_gauge_updater()
 
+    # Automatic kill switch (Phase 3): reads each mode's equity every minute while the market is
+    # open and once at the close, and trips the switch when the drawdown reaches the applied limit.
+    risk_monitor_scheduler = start_risk_monitor_scheduler(AsyncSessionLocal, redis=redis)
+
     # Daily summary alert (Build Spec §18) -- the one alert level with no
     # single triggering event; kill-switch/sign-off/go-live fire
     # synchronously from the real code paths that produce them instead.
@@ -201,6 +206,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ("paper_trading", paper_trading_scheduler),
         ("live_trading", live_trading_scheduler),
         ("audit", audit_scheduler),
+        ("risk_monitor", risk_monitor_scheduler),
         ("notification", notification_scheduler),
         ("screener", screener_scheduler),
         ("post_trade_review", post_trade_review_scheduler),
@@ -224,6 +230,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     paper_trading_scheduler.shutdown(wait=False)
     live_trading_scheduler.shutdown(wait=False)
     audit_scheduler.shutdown(wait=False)
+    risk_monitor_scheduler.shutdown(wait=False)
     notification_scheduler.shutdown(wait=False)
     screener_scheduler.shutdown(wait=False)
     post_trade_review_scheduler.shutdown(wait=False)

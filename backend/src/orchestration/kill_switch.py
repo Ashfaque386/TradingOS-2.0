@@ -24,6 +24,8 @@ from src.engine.risk.kill_switch import (
 from src.models.kill_switch_state import KillSwitchState
 from src.notifications.dispatch import notify
 from src.notifications.types import AlertLevel
+from src.orchestration.risk_limit_catalog import MAX_DRAWDOWN_LIMIT
+from src.orchestration.risk_limits import get_effective_risk_limit
 
 __all__ = [
     "KillSwitchNotTrippedError",
@@ -68,19 +70,25 @@ async def check_drawdown(
     peak_equity: float,
     threshold_pct: float | None = None,
 ) -> KillSwitchState:
-    """Evaluate the current drawdown against the switch's threshold and
-    persist the result. A switch that's already tripped is left alone --
-    this function only ever moves `tripped` False -> True, never the
-    reverse (see module docstring)."""
+    """Evaluate a drawdown an operator supplied against the threshold and persist the result. A
+    switch that's already tripped is left alone -- this function only ever moves `tripped`
+    False -> True, never the reverse (see module docstring).
+
+    The persisted `threshold_pct` is always the applied dual-control limit. A `threshold_pct`
+    passed here is for this one evaluation (a drill) and is never stored: before, a request body
+    could overwrite the limit two people had agreed to."""
     state = await _get_or_create(db, mode)
-    effective_threshold = threshold_pct if threshold_pct is not None else state.threshold_pct
+    policy_threshold = await get_effective_risk_limit(
+        db, MAX_DRAWDOWN_LIMIT, DEFAULT_MAX_DRAWDOWN_PCT
+    )
+    effective_threshold = threshold_pct if threshold_pct is not None else policy_threshold
 
     evaluation = evaluate_drawdown(
         current_equity=current_equity, peak_equity=peak_equity, threshold_pct=effective_threshold
     )
 
     state.last_drawdown_pct = evaluation.drawdown_pct
-    state.threshold_pct = effective_threshold
+    state.threshold_pct = policy_threshold
     state.updated_at = datetime.now(UTC)
 
     newly_tripped = not state.tripped and evaluation.should_trip

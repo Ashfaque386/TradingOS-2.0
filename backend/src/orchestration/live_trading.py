@@ -81,11 +81,13 @@ reordered**:
 daily layer, `check_universal_stop_loss` for the intraday layer, and
 `apply_fill`/`Position` for position accounting -- all imported directly
 from `src.engine.backtest`/`src.engine.paper_trading`, never
-reimplemented. Position accounting (`LivePosition`) only advances once a
-fill is actually *submitted* to the broker, using the price re-quoted at
-submission time -- see `Trade`'s and `LivePosition`'s own docstrings for
-why that price is honestly "what we told the broker," not a confirmed
-execution price.
+reimplemented. Position accounting (`LivePosition`) advances only when the
+broker *confirms* a fill (`reconcile_pending_trades`), at the average price the
+broker reports, and records an estimate of what the fill cost. Sending an order
+moves nothing: a rejected or cancelled order never leaves a position the
+account does not hold. While an order is unconfirmed, no new order is decided
+for that strategy and symbol, because the position those decisions read has
+not moved yet.
 """
 
 import uuid
@@ -100,6 +102,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.audit.service import write_audit_entry
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderSide, OrderType
 from src.engine.backtest.engine import run_vectorized_backtest
+from src.engine.backtest.friction import compute_leg_costs
 from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signals
 from src.engine.paper_trading.daily_signal import detect_todays_signal
 from src.engine.paper_trading.position_ledger import Position, apply_fill
@@ -116,6 +119,7 @@ from src.models.strategy import Strategy, StrategyStatus
 from src.models.trade import Trade
 from src.orchestration.kill_switch import assert_not_tripped
 from src.orchestration.live_intent_expiry import expire_stale_intents
+from src.orchestration.paper_trading import friction_model
 from src.orchestration.risk_gate import OrderIntentRejectedError, create_order_intent
 
 logger = structlog.get_logger(__name__)
@@ -363,16 +367,58 @@ async def run_live_daily_signal_generation(
 
 
 async def _get_or_create_live_position(
-    db: AsyncSession, *, strategy_id: uuid.UUID, symbol: str
+    db: AsyncSession, *, strategy_id: uuid.UUID, symbol: str, commit: bool = True
 ) -> LivePosition:
-    result = await db.execute(select(LivePosition).where(LivePosition.strategy_id == strategy_id))
+    """The strategy's position in `symbol`, created flat on first use. `commit=False` leaves the
+    new row in the caller's transaction (the reconciliation batch commits once)."""
+    result = await db.execute(
+        select(LivePosition).where(
+            LivePosition.strategy_id == strategy_id, LivePosition.symbol == symbol
+        )
+    )
     position = result.scalar_one_or_none()
     if position is None:
         position = LivePosition(strategy_id=strategy_id, symbol=symbol, quantity=0, avg_cost=0.0)
         db.add(position)
-        await db.commit()
-        await db.refresh(position)
+        if commit:
+            await db.commit()
+            await db.refresh(position)
+        else:
+            await db.flush()
     return position
+
+
+async def _has_unconfirmed_order(db: AsyncSession, *, strategy_id: uuid.UUID, symbol: str) -> bool:
+    """Whether an order for this strategy and symbol has been sent and the broker has not yet said
+    how it ended. The position only moves on a confirmed fill, so deciding again before then would
+    read a position that is about to change."""
+    count = (
+        await db.execute(
+            select(func.count(Trade.id))
+            .join(Order, Trade.order_id == Order.id)
+            .where(
+                Order.strategy_id == strategy_id,
+                Order.symbol == symbol,
+                Trade.status == "pending_confirmation",
+            )
+        )
+    ).scalar_one()
+    return count > 0
+
+
+def _estimated_costs(side: str, quantity: int, price: float) -> float:
+    """What this fill probably cost, with the paper engine's friction model (delivery or intraday
+    as `PAPER_TRADING_PRODUCT` says). An estimate: the broker's contract note is not read."""
+    from src.core.config import get_settings
+
+    turnover = quantity * price
+    legs = compute_leg_costs(
+        turnover=turnover,
+        is_buy=side == "buy",
+        is_delivery=get_settings().paper_trading_product == "cnc",
+        model=friction_model(),
+    )
+    return legs.total
 
 
 async def _count_recent_real_attempts(
@@ -506,6 +552,16 @@ async def generate_live_order_intent(
         await db.commit()
         await db.refresh(capped_intent)
         return capped_intent
+
+    # An order already sent for this strategy and symbol has not been confirmed: the position above
+    # is about to change, so no second decision is made on it.
+    if await _has_unconfirmed_order(db, strategy_id=strategy.id, symbol=subscription.symbol):
+        logger.info(
+            "live_trading.decision_waits_for_unconfirmed_order",
+            strategy_id=str(strategy.id),
+            symbol=subscription.symbol,
+        )
+        return None
 
     intent = LiveOrderIntent(
         strategy_id=strategy.id,
@@ -643,18 +699,7 @@ async def _submit_intent_to_broker(
         )
     )
 
-    position = await _get_or_create_live_position(
-        db, strategy_id=intent.strategy_id, symbol=intent.symbol
-    )
-    application = apply_fill(
-        Position(quantity=position.quantity, avg_cost=position.avg_cost),
-        side=intent.side,
-        fill_quantity=intent.quantity,
-        fill_price=reference_price,
-    )
-    position.quantity = application.new_position.quantity
-    position.avg_cost = application.new_position.avg_cost
-    position.realized_pnl += application.realized_pnl
+    # The position is not touched here: it moves when the broker confirms the fill.
 
     intent.status = "submitted"
     intent.resulting_order_id = order.id
@@ -715,6 +760,34 @@ def _normalize_broker_order_status(raw_status: str) -> str | None:
     return None
 
 
+async def _apply_confirmed_fill(
+    db: AsyncSession, trade: Trade, strategy_id: uuid.UUID | None
+) -> None:
+    """Move the strategy's position by a fill the broker has confirmed. The price is the broker's
+    average price; when the broker reports a completed order without one, the price the order was
+    placed against is used and the trade's `fill_price` stays empty to say so. The cost is an
+    estimate (see `_estimated_costs`). Runs once per trade: only a `pending_confirmation` trade is
+    ever reconciled."""
+    if strategy_id is None:
+        return
+    price = trade.fill_price if trade.fill_price is not None else trade.price
+    position = await _get_or_create_live_position(
+        db, strategy_id=strategy_id, symbol=trade.symbol, commit=False
+    )
+    application = apply_fill(
+        Position(quantity=position.quantity, avg_cost=position.avg_cost),
+        side=trade.side,
+        fill_quantity=trade.quantity,
+        fill_price=price,
+    )
+    position.quantity = application.new_position.quantity
+    position.avg_cost = application.new_position.avg_cost
+    position.realized_pnl += application.realized_pnl
+    costs = _estimated_costs(trade.side, trade.quantity, price)
+    trade.costs_total = costs
+    position.costs_total += costs
+
+
 async def reconcile_pending_trades(db: AsyncSession, adapter: BrokerAdapter) -> int:
     """The broker-fill reconciliation job (Phase 16 audit follow-up B):
     closes the gap where `Trade.status` could never progress past
@@ -740,7 +813,7 @@ async def reconcile_pending_trades(db: AsyncSession, adapter: BrokerAdapter) -> 
     commit for the whole batch)."""
     pending = (
         await db.execute(
-            select(Trade, Order.broker_order_id)
+            select(Trade, Order.broker_order_id, Order.strategy_id)
             .join(Order, Trade.order_id == Order.id)
             .where(Trade.status == "pending_confirmation", Order.broker_name == adapter.broker_name)
         )
@@ -760,7 +833,7 @@ async def reconcile_pending_trades(db: AsyncSession, adapter: BrokerAdapter) -> 
 
     now = datetime.now(UTC)
     reconciled = 0
-    for trade, broker_order_id in pending:
+    for trade, broker_order_id, strategy_id in pending:
         if not broker_order_id:
             continue
         broker_order = by_broker_order_id.get(broker_order_id)
@@ -772,8 +845,10 @@ async def reconcile_pending_trades(db: AsyncSession, adapter: BrokerAdapter) -> 
 
         trade.status = outcome
         trade.confirmed_at = now
-        if outcome == "filled" and broker_order.average_price is not None:
-            trade.fill_price = broker_order.average_price
+        if outcome == "filled":
+            if broker_order.average_price is not None:
+                trade.fill_price = broker_order.average_price
+            await _apply_confirmed_fill(db, trade, strategy_id)
 
         await write_audit_entry(
             db,

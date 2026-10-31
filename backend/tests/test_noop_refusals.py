@@ -31,6 +31,7 @@ PROMOTE = "POST /api/v1/strategies/{strategy_id}/promote"
 APPROVE_LIVE = "POST /api/v1/strategies/{strategy_id}/approve-live-eligibility"
 RL_CONFIRM = "POST /api/v1/risk-limits/{change_id}/confirm"
 RL_APPLY = "POST /api/v1/risk-limits/{change_id}/apply"
+RL_REJECT = "POST /api/v1/risk-limits/{change_id}/reject"
 CHAT_DELETE = "DELETE /api/v1/chat/sessions/{session_id}"
 
 
@@ -106,6 +107,28 @@ async def test_approving_live_eligibility_for_a_strategy_not_in_paper_trading_is
 
     assert resp.status_code == 409
     assert await _rows(db_session_factory, APPROVE_LIVE) == []
+
+
+async def test_rejecting_a_risk_limit_change_twice_is_refused_and_audited_once(
+    client, make_user, db_session_factory
+):
+    risk = await _login(client, make_user, Role.RISK_MANAGER, "risk-nr4b@example.com")
+    change = (
+        await client.post(
+            "/api/v1/risk-limits/stage",
+            json={"limit_name": "max_drawdown_pct", "proposed_value": 9.0},
+            headers=risk,
+        )
+    ).json()
+    url = f"/api/v1/risk-limits/{change['id']}/reject"
+
+    rejected = await client.post(url, json={"reason": "no"}, headers=risk)
+    rejected_again = await client.post(url, json={"reason": "no"}, headers=risk)
+
+    assert rejected.status_code == 200
+    assert rejected_again.status_code == 409
+    assert len(await _rows(db_session_factory, RL_REJECT)) == 1
+    assert len(await _rows(db_session_factory, "risk_limit.change_rejected")) == 1
 
 
 async def test_confirming_or_applying_a_risk_limit_change_twice_is_refused_and_audited_once(

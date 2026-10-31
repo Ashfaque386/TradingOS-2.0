@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -183,6 +183,17 @@ class Settings(BaseSettings):
     # strategies), "mis" is intraday; they differ in brokerage, STT and stamp duty
     # (src.engine.backtest.friction).
     paper_trading_product: Literal["cnc", "mis"] = "cnc"
+    # What the live account started with, in rupees. Live equity is this plus what the ledger of
+    # confirmed fills has realized (net of estimated costs) plus open positions at the broker's
+    # quote. Unset, live equity is "cannot be measured" and the live kill switch is not judged.
+    live_starting_capital: float | None = None
+
+    @field_validator("live_starting_capital", mode="before")
+    @classmethod
+    def _blank_live_starting_capital_is_unset(cls, value: object) -> object:
+        # docker-compose forwards an unset variable as an empty string.
+        return None if isinstance(value, str) and not value.strip() else value
+
     # A paper fill walks the broker's live depth; a snapshot older than this is refused (the
     # order waits for a fresh one) rather than filled against a book that may have moved. The
     # tick job refreshes it every few seconds.

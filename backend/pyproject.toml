@@ -182,6 +182,8 @@ critical_files = [
   "src/engine/risk/position_sizing.py",
   "src/engine/options_grounding.py",
   "src/orchestration/kill_switch.py",
+  "src/orchestration/drawdown_monitor.py",
+  "src/orchestration/equity.py",
   "src/orchestration/risk_gate.py",
   "src/orchestration/risk_limits.py",
   # ... the gates a strategy or an order must pass through ...
@@ -246,6 +248,11 @@ max_survivors = 6
 path = "src/orchestration/kill_switch.py"
 tests = ["tests/test_orchestration_kill_switch.py"]
 max_survivors = 6
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/drawdown_monitor.py"
+tests = ["tests/test_orchestration_drawdown_monitor.py"]
+max_survivors = 0
 
 [[tool.tradingos.mutation.module]]
 path = "src/orchestration/risk_gate.py"

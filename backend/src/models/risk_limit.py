@@ -77,5 +77,11 @@ class RiskLimitChangeRequest(Base):
     applied_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # A staged or confirmed change can be turned down by a risk-governance user (the person who
+    # staged it included: that is cancelling it); nothing changes and the reason is kept.
+    rejected_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     def __repr__(self) -> str:
         return f"RiskLimitChangeRequest(limit_name={self.limit_name!r}, status={self.status!r})"

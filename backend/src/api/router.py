@@ -11,6 +11,7 @@ from src.api.routes import (
     broker_oauth,
     canvas,
     chat,
+    equity,
     gateway,
     investor_reports,
     kill_switch,
@@ -43,6 +44,7 @@ api_router.include_router(strategies.router)
 api_router.include_router(approvals.router)
 api_router.include_router(backtests.router)
 api_router.include_router(kill_switch.router)
+api_router.include_router(equity.router)
 api_router.include_router(risk_limits.router)
 api_router.include_router(risk.router)
 api_router.include_router(paper_trading.router)

@@ -46,7 +46,6 @@ from src.api.schemas import (
 )
 from src.brokers.base import FuturesContract
 from src.brokers.futures_contracts import NoFuturesContractError
-from src.brokers.tick_source import is_broker_configured
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
@@ -68,6 +67,7 @@ from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.models.user import User
+from src.orchestration.equity import paper_price_source
 from src.orchestration.market_data import run_symbol_history_backfill
 from src.orchestration.paper_desk_previews import (
     preview_close,
@@ -234,10 +234,7 @@ async def todays_paper_pnl_endpoint(
     )
 
 
-def _price_source() -> Literal["real", "synthetic", "none"]:
-    if is_broker_configured():
-        return "real"
-    return "synthetic" if get_settings().paper_trading_synthetic else "none"
+_price_source = paper_price_source
 
 
 @router.get("/pnl/unrealized")
