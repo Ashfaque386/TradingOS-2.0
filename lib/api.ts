@@ -8,11 +8,19 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** Seconds the server asked us to wait (`Retry-After`), when it said. */
+  retryAfterSeconds?: number
+  constructor(status: number, message: string, retryAfterSeconds?: number) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.retryAfterSeconds = retryAfterSeconds
   }
+}
+
+function retryAfterOf(res: Response): number | undefined {
+  const seconds = Number(res.headers.get('Retry-After'))
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined
 }
 
 type TokenPair = { accessToken: string; refreshToken: string }
@@ -145,7 +153,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
     } catch {
       // no JSON body
     }
-    throw new ApiError(res.status, typeof detail === 'string' ? detail : JSON.stringify(detail))
+    throw new ApiError(res.status, typeof detail === 'string' ? detail : JSON.stringify(detail), retryAfterOf(res))
   }
 
   if (res.status === 204) return undefined as T

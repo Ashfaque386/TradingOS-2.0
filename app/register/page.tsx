@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AlertCircle, ArrowRight, LockKeyhole, Loader2, Mail, ShieldPlus, Sparkles, WifiOff } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { ApiError } from '@/lib/api'
+import { refusalMessage } from '@/lib/auth-errors'
 
 type Status = 'idle' | 'loading' | 'invalid' | 'conflict' | 'network'
 
@@ -15,6 +16,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [status, setStatus] = useState<Status>('idle')
+  const [refusal, setRefusal] = useState<string | null>(null)
   const [powerSave, setPowerSave] = useState(false)
 
   useEffect(() => {
@@ -36,9 +38,12 @@ export default function RegisterPage() {
       await signUp(email, password)
       router.push('/')
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) {
+      if (err instanceof ApiError && err.status === 400 && /already|exist|registered/i.test(err.message)) {
         setStatus('conflict')
       } else if (err instanceof ApiError) {
+        // The server's own reason (a refused or invalid registration, too many attempts), not a
+        // guess that every 4xx means a duplicate e-mail.
+        setRefusal(refusalMessage(err))
         setStatus('invalid')
       } else {
         setStatus('network')
@@ -77,7 +82,7 @@ export default function RegisterPage() {
                         ? 'Password must be at least 8 characters.'
                         : password !== confirmPassword
                           ? 'Passwords do not match.'
-                          : 'Could not create the account. Check the details and try again.'}
+                          : refusal ?? 'Could not create the account. Check the details and try again.'}
                   </span>
                 </div>
               )}

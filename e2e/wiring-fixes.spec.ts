@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Route } from '@playwright/test'
 import { E2E_USERS, login } from './utils'
 
 // Defects found by the backend/frontend wiring audit (docs/gap-analysis-2026-10-30.md, section 0), each
@@ -75,4 +75,77 @@ test('the Overview does not call a kill switch it could not read "armed"', async
 
   await expect(page.getByText('UNKNOWN', { exact: true })).toBeVisible()
   await expect(page.getByText('OFF · ARMED')).toHaveCount(0)
+})
+
+// ---- Slice 2: what the console says when a sign-in is refused, and the pre-trade check ----
+
+
+function answer(route: Route, status: number, body: unknown, headers: Record<string, string> = {}) {
+  const origin = route.request().headers()['origin'] ?? '*'
+  const cors = {
+    'access-control-allow-origin': origin,
+    'access-control-allow-headers': '*',
+    'access-control-allow-methods': '*',
+    'access-control-expose-headers': 'retry-after',
+  }
+  // The browser sends a preflight first for a JSON POST: let it through, answer the real call.
+  if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+  return route.fulfill({
+    status,
+    contentType: 'application/json',
+    headers: { ...cors, ...headers },
+    body: JSON.stringify(body),
+  })
+}
+
+async function trySigningIn(page: import('@playwright/test').Page) {
+  await page.goto('/login')
+  await page.getByLabel('Email address').fill('someone@example.com')
+  await page.getByLabel('Password').fill('not-the-real-password')
+  await page.getByRole('button', { name: /Initialize session/i }).click()
+}
+
+test('a sign-in refused for too many attempts says so and for how long, not "connectivity"', async ({ page }) => {
+  await page.route('**/api/v1/auth/login', (route) =>
+    answer(route, 429, { detail: 'Too many requests' }, { 'retry-after': '30' }),
+  )
+
+  await trySigningIn(page)
+
+  await expect(page.getByRole('alert').filter({ hasText: 'Too many attempts' })).toContainText('30 seconds')
+  await expect(page.getByText('Connectivity error')).toHaveCount(0)
+})
+
+test('a sign-in the server fails on says the server had a problem, not that the network is down', async ({ page }) => {
+  await page.route('**/api/v1/auth/login', (route) => answer(route, 500, { detail: 'boom' }))
+
+  await trySigningIn(page)
+
+  await expect(page.getByRole('alert').filter({ hasText: 'server had a problem' })).toBeVisible()
+  await expect(page.getByText('Connectivity error')).toHaveCount(0)
+})
+
+test('the order form is a dry-run pre-trade check: it needs real numbers and sends nothing', async ({ page }) => {
+  await login(page, E2E_USERS.admin)
+  await page.goto('/orders')
+
+  const run = page.getByRole('button', { name: 'Run pre-trade check' })
+  await expect(page.getByRole('heading', { name: 'Pre-trade check' })).toBeVisible()
+  await expect(run).toBeDisabled() // nothing is pre-filled with a made-up price or portfolio value
+
+  await page.getByLabel('SYMBOL').fill('E2ECHECK')
+  await page.getByLabel('QUANTITY').fill('10')
+  await page.getByLabel('PROPOSED PRICE').fill('100')
+  await page.getByLabel('REFERENCE PRICE').fill('100')
+  await page.getByLabel('PORTFOLIO VALUE').fill('1000000')
+  await run.click()
+  await expect(page.getByText('Would be allowed')).toBeVisible()
+  await expect(page.getByText('Nothing was sent')).toBeVisible()
+
+  // The same order against a tiny portfolio breaks the position limit: refused, with the reason.
+  await page.getByLabel('PORTFOLIO VALUE').fill('1000')
+  await run.click()
+  await expect(page.getByText('Would be refused')).toBeVisible()
+
+  await expect(page.getByText('Review LIVE order')).toHaveCount(0)
 })

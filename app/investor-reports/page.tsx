@@ -116,7 +116,7 @@ export default function InvestorReportsPage() {
               <p className="eyebrow">REPORT HISTORY · {reports.length}</p>
             </div>
             <div className="flex max-h-[70vh] flex-col overflow-y-auto p-2">
-              {reports.length === 0 && <p className="p-3 text-xs text-muted-foreground">No investor reports yet. The weekly scheduler generates one automatically (Monday 07:00 IST), or use the form above to generate one now.</p>}
+              {reports.length === 0 && <p className="p-3 text-xs text-muted-foreground">No investor reports yet. The scheduler generates one on its own schedule (see the automation schedule in Mission Control), or use the form above to generate one now.</p>}
               {reports.map((r) => (
                 <button
                   key={r.id}

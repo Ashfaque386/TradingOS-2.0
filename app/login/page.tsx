@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, ArrowRight, LockKeyhole, Loader2, Mail, Shield, Sparkles, WifiOff } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
+import { refusalMessage } from '@/lib/auth-errors'
 import { ApiError } from '@/lib/api'
 
 export default function LoginPage() {
@@ -11,7 +12,8 @@ export default function LoginPage() {
   const { isAuthenticated, isLoading, signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [status, setStatus] = useState<'idle' | 'loading' | 'invalid' | 'network'>('idle')
+  const [status, setStatus] = useState<'idle' | 'loading' | 'invalid' | 'network' | 'refused'>('idle')
+  const [refusal, setRefusal] = useState<string | null>(null)
   const [powerSave, setPowerSave] = useState(false)
 
   useEffect(() => {
@@ -36,7 +38,11 @@ export default function LoginPage() {
       if (err instanceof ApiError && err.status === 401) {
         setStatus('invalid')
       } else {
-        setStatus('network')
+        // Say what the server said (too many attempts, locked, a fault); only a call that never
+        // reached the server is a connectivity problem.
+        const refused = refusalMessage(err)
+        setRefusal(refused)
+        setStatus(refused ? 'refused' : 'network')
       }
     }
   }
@@ -55,6 +61,7 @@ export default function LoginPage() {
               <label className="auth-field"><span>Email address</span><div className="auth-input-wrap"><Mail className="size-4" /><input aria-label="Email address" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tradingos.ai" autoComplete="email" /></div></label>
               <label className="auth-field"><span>Password</span><div className="auth-input-wrap"><LockKeyhole className="size-4" /><input aria-label="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your access key" autoComplete="current-password" /></div></label>
               {status === 'invalid' && <div className="auth-alert auth-alert-error" role="alert"><AlertCircle className="size-4 shrink-0" /><span>{email || password ? 'Invalid credentials. Check your email and password.' : 'Enter a valid email and password to continue.'}</span></div>}
+              {status === 'refused' && <div className="auth-alert auth-alert-error" role="alert"><AlertCircle className="size-4 shrink-0" /><span>{refusal}</span></div>}
               {status === 'network' && <div className="auth-alert auth-alert-network" role="alert"><WifiOff className="size-4 shrink-0" /><span>Connectivity error. The neural gateway is unreachable. Try again.</span></div>}
               <button type="submit" disabled={status === 'loading'} className="auth-submit">{status === 'loading' ? <><Loader2 className="size-4 animate-spin" />Authenticating signal...</> : <>Initialize session<ArrowRight className="size-4" /></>}</button>
             </form>
