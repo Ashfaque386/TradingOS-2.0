@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from pathlib import Path
 
 from src.data.nse_calendar import (
     SOURCE_CALENDAR_FILE,
@@ -110,3 +111,15 @@ def test_a_date_in_both_the_fixed_list_and_the_file_is_listed_once(tmp_path):
 
     assert len(listed) == 1
     assert listed[0].source == SOURCE_FIXED
+
+
+def test_the_shipped_calendar_file_knows_the_2026_movable_holidays():
+    # config/nse_holidays.json itself, not a temporary copy: a year the file has nothing for treats
+    # Holi, Eid and Diwali as trading days (see calendar_file_covers_year).
+    shipped = Path(__file__).resolve().parents[2] / "config" / "nse_holidays.json"
+
+    assert calendar_file_covers_year(2026, path=shipped)
+    days = load_extra_holidays(shipped)
+    assert date(2026, 3, 3) in days  # Holi
+    assert date(2026, 11, 10) in days  # Diwali-Balipratipada
+    assert all(day.weekday() < 5 for day in days if day.year == 2026)  # weekdays only

@@ -1,5 +1,5 @@
 {
-  "_comment": "Movable/lunisolar NSE trading holidays only (Holi, Ram Navami, Eid, Ganesh Chaturthi, Dussehra, Diwali, Guru Nanak Jayanti, Good Friday, etc.) -- fixed-date national holidays (Republic Day, Maharashtra Day, Independence Day, Gandhi Jayanti, Christmas) are generated in code (src/data/nse_calendar.py) and do not need to be listed here. This file is a best-effort reference seeded from NSE's publicly announced 2025 trading-holiday circular; it is NOT re-verified against a live NSE source by this codebase and must be reviewed/updated by an operator at least once a year against NSE's actual published circular before being treated as authoritative beyond development and testing -- see src/data/nse_calendar.py's module docstring for why exact dates are not fabricated in code for years without a verified circular.",
+  "_comment": "Movable/lunisolar NSE trading holidays only (Holi, Ram Navami, Eid, Ganesh Chaturthi, Dussehra, Diwali, Guru Nanak Jayanti, Good Friday, etc.) -- fixed-date national holidays (Republic Day, Maharashtra Day, Independence Day, Gandhi Jayanti, Christmas) are generated in code (src/data/nse_calendar.py) and do not need to be listed here. This file is a best-effort reference seeded from NSE's publicly announced 2025 trading-holiday circular; the 2026 entries were taken on 2026-10-31 from broker pages (Bajaj Broking and Smallcase agree on the ten recurring dates; 15 January is on Bajaj's list and follows NSE's January 2026 circular for the Maharashtra municipal elections) because NSE's own circular PDF could not be opened, so they are not checked against NSE; it is NOT re-verified against a live NSE source by this codebase and must be reviewed/updated by an operator at least once a year against NSE's actual published circular before being treated as authoritative beyond development and testing -- see src/data/nse_calendar.py's module docstring for why exact dates are not fabricated in code for years without a verified circular.",
   "holidays": [
     "2025-02-26",
     "2025-03-14",
@@ -9,6 +9,50 @@
     "2025-08-27",
     "2025-10-21",
     "2025-10-22",
-    "2025-11-05"
+    "2025-11-05",
+    {
+      "date": "2026-01-15",
+      "name": "Municipal Corporation Election - Maharashtra"
+    },
+    {
+      "date": "2026-03-03",
+      "name": "Holi"
+    },
+    {
+      "date": "2026-03-26",
+      "name": "Shri Ram Navami"
+    },
+    {
+      "date": "2026-03-31",
+      "name": "Shri Mahavir Jayanti"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Good Friday"
+    },
+    {
+      "date": "2026-05-28",
+      "name": "Bakri Id"
+    },
+    {
+      "date": "2026-06-26",
+      "name": "Muharram"
+    },
+    {
+      "date": "2026-09-14",
+      "name": "Ganesh Chaturthi"
+    },
+    {
+      "date": "2026-10-20",
+      "name": "Dussehra"
+    },
+    {
+      "date": "2026-11-10",
+      "name": "Diwali-Balipratipada"
+    },
+    {
+      "date": "2026-11-24",
+      "name": "Prakash Gurpurb Sri Guru Nanak Dev"
+    }
   ]
 }
