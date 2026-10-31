@@ -77,6 +77,45 @@ test('the Overview does not call a kill switch it could not read "armed"', async
   await expect(page.getByText('OFF · ARMED')).toHaveCount(0)
 })
 
+test('the top bar says degraded and unknown, not healthy and open, when the shell cannot read them', async ({ page }) => {
+  await login(page, E2E_USERS.admin)
+  const down = (route: Route) =>
+    route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'down' }) })
+  await page.route('**/api/v1/kill-switch/**', down)
+  await page.route('**/api/v1/market-data/market-hours', down)
+
+  await page.goto('/orders')
+
+  const topBar = page.locator('header')
+  await expect(topBar.getByText('degraded', { exact: true })).toBeVisible()
+  await expect(topBar.getByText('UNKNOWN', { exact: true })).toBeVisible()
+  await expect(topBar.getByText('healthy', { exact: true })).toHaveCount(0)
+})
+
+test('the pages share one read of the kill switches and market hours instead of each polling its own', async ({ page }) => {
+  await login(page, E2E_USERS.admin)
+  const seen: Record<string, number> = { paper: 0, live: 0, hours: 0 }
+  page.on('request', (request) => {
+    const url = request.url()
+    if (url.includes('/api/v1/kill-switch/paper') && request.method() === 'GET') seen.paper += 1
+    if (url.includes('/api/v1/kill-switch/live') && request.method() === 'GET') seen.live += 1
+    if (url.includes('/api/v1/market-data/market-hours')) seen.hours += 1
+  })
+
+  await page.goto('/')
+  await expect(page.getByText('MARKET HOURS')).toBeVisible()
+  await page.waitForTimeout(1500)
+  const afterShell = { ...seen }
+  expect(afterShell.paper).toBeGreaterThan(0) // the shell did read them (twice in dev, where React mounts effects twice)
+
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Paper Desk' }).click()
+  await expect(page.getByRole('heading', { name: 'Paper desk' })).toBeVisible()
+  await page.waitForTimeout(1500)
+
+  // Moving to the Paper Desk asked for nothing more: it uses the shell's read, and the shell did not restart.
+  expect(seen).toEqual(afterShell)
+})
+
 // ---- Slice 2: what the console says when a sign-in is refused, and the pre-trade check ----
 
 

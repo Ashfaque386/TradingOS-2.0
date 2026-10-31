@@ -59,14 +59,14 @@ export function Modal({
 
   return (
     <div
-      className="pt-scrim"
+      className="ui-scrim"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose()
       }}
     >
       <div
         ref={panel}
-        className={`pt-modal${wide ? ' pt-modal-wide' : ''}`}
+        className={`ui-modal${wide ? ' ui-modal-wide' : ''}`}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"

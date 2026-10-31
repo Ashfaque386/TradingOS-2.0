@@ -147,7 +147,7 @@ export function Lane({
               </button>
             ))}
           </div>
-          {loadError && <div className="pt-error" role="alert">{loadError}</div>}
+          {loadError && <div className="ui-error" role="alert">{loadError}</div>}
           {tab === 'legs' && <LegsTab sub={sub} positions={positions} now={now} />}
           {tab === 'payoff' && <PayoffTab positions={positions} sub={sub} />}
           {tab === 'costs' && <CostsTab sub={sub} fills={fills} now={now} />}

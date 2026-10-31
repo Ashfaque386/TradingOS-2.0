@@ -113,7 +113,7 @@ export function SymbolPicker({
     <div className="pt-combo">
       <input
         id={id}
-        className="pt-input"
+        className="ui-input"
         role="combobox"
         aria-expanded={showList}
         aria-controls={listId}

@@ -8,7 +8,8 @@ import { MobileNav } from './mobile-nav'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
-import { getKillSwitch, getMarketHours } from '@/lib/api'
+import type { Role } from '@/lib/api'
+import { ConsoleStateProvider, useConsoleState } from './console-state'
 
 interface ShellLayoutProps {
   children: React.ReactNode
@@ -19,8 +20,6 @@ export function ShellLayout({ children }: ShellLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false)
   const { user, role, isAuthenticated, isLoading, isUnreachable, retrySession, signOut } = useAuth()
   const router = useRouter()
-  const [marketOpen, setMarketOpen] = useState(true)
-  const [systemHealth, setSystemHealth] = useState<'healthy' | 'critical'>('healthy')
 
   useEffect(() => {
     // An unreachable server is not a signed-out session: stored tokens are
@@ -28,27 +27,6 @@ export function ShellLayout({ children }: ShellLayoutProps) {
     // sending the operator to log in again.
     if (!isLoading && !isAuthenticated && !isUnreachable) router.replace('/login')
   }, [isLoading, isAuthenticated, isUnreachable, router])
-
-  useEffect(() => {
-    if (!isAuthenticated) return
-    let cancelled = false
-    async function poll() {
-      const [hours, paperKs, liveKs] = await Promise.allSettled([
-        getMarketHours(),
-        getKillSwitch('paper'),
-        getKillSwitch('live'),
-      ])
-      if (cancelled) return
-      if (hours.status === 'fulfilled') setMarketOpen(hours.value.is_open)
-      const tripped =
-        (paperKs.status === 'fulfilled' && paperKs.value.tripped) ||
-        (liveKs.status === 'fulfilled' && liveKs.value.tripped)
-      setSystemHealth(tripped ? 'critical' : 'healthy')
-    }
-    poll()
-    const interval = setInterval(poll, 30000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [isAuthenticated])
 
   if (isUnreachable) {
     return (
@@ -67,6 +45,62 @@ export function ShellLayout({ children }: ShellLayoutProps) {
   if (isLoading || !isAuthenticated) return null
 
   return (
+    <ConsoleStateProvider>
+      <ShellFrame
+        palette={palette}
+        setPalette={setPalette}
+        powerSave={powerSave}
+        setPowerSave={setPowerSave}
+        sidebarCollapsed={sidebarCollapsed}
+        setSidebarCollapsed={setSidebarCollapsed}
+        userName={user?.email ?? 'User'}
+        role={role}
+        onLogout={() => {
+          void signOut()
+          router.replace('/login')
+        }}
+      >
+        {children}
+      </ShellFrame>
+    </ConsoleStateProvider>
+  )
+}
+
+function ShellFrame({
+  palette,
+  setPalette,
+  powerSave,
+  setPowerSave,
+  sidebarCollapsed,
+  setSidebarCollapsed,
+  userName,
+  role,
+  onLogout,
+  children,
+}: {
+  palette: string
+  setPalette: (palette: string) => void
+  powerSave: boolean
+  setPowerSave: (enabled: boolean) => void
+  sidebarCollapsed: boolean
+  setSidebarCollapsed: (collapsed: boolean) => void
+  userName: string
+  role: Role
+  onLogout: () => void
+  children: React.ReactNode
+}) {
+  const { marketHours, killSwitch, loading } = useConsoleState()
+  // A switch we could not read is not a switch that is armed: show it as degraded, not healthy.
+  const systemHealth =
+    killSwitch.paper?.tripped || killSwitch.live?.tripped
+      ? 'critical'
+      : killSwitch.paper === null || killSwitch.live === null
+        ? loading
+          ? 'checking'
+          : 'degraded'
+        : 'healthy'
+
+  return (
     <div className="shell-root min-h-screen bg-background">
       {/* Top Bar */}
       <TopBar
@@ -74,14 +108,11 @@ export function ShellLayout({ children }: ShellLayoutProps) {
         onPaletteChange={setPalette}
         powerSave={powerSave}
         onPowerSaveChange={setPowerSave}
-        marketHours={marketOpen ? 'open' : 'closed'}
+        marketHours={marketHours === null ? (loading ? 'checking' : 'unknown') : marketHours.is_open ? 'open' : 'closed'}
         systemHealth={systemHealth}
-        userName={user?.email ?? 'User'}
+        userName={userName}
         role={role}
-        onLogout={() => {
-          void signOut()
-          router.replace('/login')
-        }}
+        onLogout={onLogout}
       />
 
       {/* Sidebar (desktop) */}

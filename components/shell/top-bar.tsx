@@ -26,8 +26,9 @@ interface TopBarProps {
   onPaletteChange?: (palette: string) => void
   powerSave?: boolean
   onPowerSaveChange?: (enabled: boolean) => void
-  marketHours?: 'open' | 'closed'
-  systemHealth?: 'healthy' | 'degraded' | 'critical'
+  /** `checking` is the first read still in flight; `unknown` is a read that failed. */
+  marketHours?: 'open' | 'closed' | 'unknown' | 'checking'
+  systemHealth?: 'healthy' | 'degraded' | 'critical' | 'checking'
   userName?: string
   onUserMenu?: () => void
   role?: Role
@@ -53,6 +54,7 @@ export function TopBar({
     healthy: '#10b981',
     degraded: '#f59e0b',
     critical: '#ef4444',
+    checking: '#64748b',
   }[systemHealth]
 
   const currentPalette = PALETTES.find((p) => p.id === palette)
@@ -107,7 +109,7 @@ export function TopBar({
         >
           <Clock className="w-4 h-4" />
           <span className="hidden sm:inline uppercase">
-            {marketHours === 'open' ? 'OPEN' : 'CLOSED'}
+            {marketHours === 'open' ? 'OPEN' : marketHours === 'closed' ? 'CLOSED' : marketHours === 'checking' ? '…' : 'UNKNOWN'}
           </span>
         </div>
 

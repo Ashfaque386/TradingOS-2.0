@@ -83,7 +83,7 @@ export function EnrolPreviewPanel({
   loading: boolean
   error: string | null
 }) {
-  if (error) return <div className="pt-error" role="alert">Couldn't check this: {error}</div>
+  if (error) return <div className="ui-error" role="alert">Couldn't check this: {error}</div>
   if (preview === null) {
     return loading ? <div className="pt-preview pt-preview-idle" aria-busy="true">Checking…</div> : null
   }

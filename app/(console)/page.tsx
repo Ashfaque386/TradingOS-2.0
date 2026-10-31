@@ -2,7 +2,7 @@
 
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, OrbitControls, Sparkles } from '@react-three/drei'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { Mesh } from 'three'
 import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi, Zap } from 'lucide-react'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
@@ -12,9 +12,7 @@ import {
   type ActivityFeedMessage,
   type AgentSummary,
   type KillSwitchMode,
-  type KillSwitchState,
   type LiveTradingSubscriptionDto,
-  type MarketHours,
   type OrganizationRun,
   type SignoffSnapshot,
   type SystemVitals,
@@ -22,8 +20,6 @@ import {
   type UnrealizedPaperPnl,
   ApiError,
   getAgents,
-  getKillSwitch,
-  getMarketHours,
   getSystemVitals,
   getTodaysPaperPnl,
   getUnrealizedPaperPnl,
@@ -31,6 +27,9 @@ import {
   listRuns,
   resetKillSwitch,
 } from '@/lib/api'
+import { useConsoleState } from '@/components/shell/console-state'
+import { ErrorNotice } from '@/components/ui/error-notice'
+import { usePolling } from '@/lib/use-polling'
 import { useWebSocketChannel } from '@/lib/ws'
 import { can } from '@/lib/permissions'
 
@@ -143,14 +142,7 @@ function ProviderHealthRow({ entries }: { entries: SystemVitals['llm']['provider
 }
 
 function Vitals() {
-  const [vitals, setVitals] = useState<SystemVitals | null>(null)
-
-  useEffect(() => {
-    const load = () => getSystemVitals().then(setVitals).catch(() => {})
-    load()
-    const interval = setInterval(load, 15_000)
-    return () => clearInterval(interval)
-  }, [])
+  const { data: vitals, error, refresh } = usePolling(getSystemVitals, { intervalMs: 15_000 })
 
   const totalTokensToday = vitals
     ? Object.values(vitals.llm.token_usage_today).reduce((sum, n) => sum + n, 0)
@@ -159,7 +151,7 @@ function Vitals() {
   const p50 = vitals?.latency.order_dispatch_p50_ms ?? null
   const overBudget = p95 !== null && vitals !== null && p95 > vitals.latency.budget_ms
 
-  return <section className="pulse-panel p-5"><div className="flex items-center justify-between"><div><p className="eyebrow">SYSTEM VITALS</p><p className="mt-1 text-xs text-muted-foreground">Infrastructure telemetry — current, not historical</p></div><Wifi className="size-4 text-emerald-300" /></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="vital-tile"><div className="flex justify-between text-xs"><span>LLM active provider</span><span className="text-foreground">{vitals?.llm.active_provider ?? '—'}</span></div><ProviderHealthRow entries={vitals?.llm.provider_health ?? []} /></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Token usage</span><span className="text-foreground">{totalTokensToday === null ? '—' : totalTokensToday.toLocaleString()}</span></div><p className="mt-3 text-[10px] text-muted-foreground">Today (IST calendar day) — resets at midnight IST, not "since server start"</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Dispatch latency</span><span className={overBudget ? 'text-rose-300' : 'text-foreground'}>{p95 === null ? 'no recent dispatches' : `p95 ${p95.toFixed(0)}ms`}</span></div><p className="mt-2 font-mono text-[10px] text-muted-foreground">{p50 !== null ? `p50 ${p50.toFixed(0)}ms · ` : ''}trailing {vitals?.latency.window ?? '5m'} · budget {vitals?.latency.budget_ms ?? '—'}ms</p></div><div className="vital-tile"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2"><Cpu className="size-3 text-violet-300" /> Host metrics</span><span className="text-foreground">{vitals ? `${vitals.host.cpu_percent.toFixed(0)}% CPU` : '—'}</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><MemoryStick className="size-3 text-cyan-300" />{vitals ? `${vitals.host.memory_percent.toFixed(0)}% mem · ${vitals.host.memory_used_mb.toFixed(0)}MB used — current` : 'Loading…'}</div></div></div></section>
+  return <section className="pulse-panel p-5"><div className="flex items-center justify-between"><div><p className="eyebrow">SYSTEM VITALS</p><p className="mt-1 text-xs text-muted-foreground">Infrastructure telemetry — current, not historical</p></div><Wifi className="size-4 text-emerald-300" /></div>{error && <ErrorNotice className="mt-3" message={`System vitals are not updating: ${error}`} onRetry={() => void refresh()} />}<div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="vital-tile"><div className="flex justify-between text-xs"><span>LLM active provider</span><span className="text-foreground">{vitals?.llm.active_provider ?? '—'}</span></div><ProviderHealthRow entries={vitals?.llm.provider_health ?? []} /></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Token usage</span><span className="text-foreground">{totalTokensToday === null ? '—' : totalTokensToday.toLocaleString()}</span></div><p className="mt-3 text-[10px] text-muted-foreground">Today (IST calendar day) — resets at midnight IST, not "since server start"</p></div><div className="vital-tile"><div className="flex justify-between text-xs"><span>Dispatch latency</span><span className={overBudget ? 'text-rose-300' : 'text-foreground'}>{p95 === null ? 'no recent dispatches' : `p95 ${p95.toFixed(0)}ms`}</span></div><p className="mt-2 font-mono text-[10px] text-muted-foreground">{p50 !== null ? `p50 ${p50.toFixed(0)}ms · ` : ''}trailing {vitals?.latency.window ?? '5m'} · budget {vitals?.latency.budget_ms ?? '—'}ms</p></div><div className="vital-tile"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-2"><Cpu className="size-3 text-violet-300" /> Host metrics</span><span className="text-foreground">{vitals ? `${vitals.host.cpu_percent.toFixed(0)}% CPU` : '—'}</span></div><div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground"><MemoryStick className="size-3 text-cyan-300" />{vitals ? `${vitals.host.memory_percent.toFixed(0)}% mem · ${vitals.host.memory_used_mb.toFixed(0)}MB used — current` : 'Loading…'}</div></div></div></section>
 }
 
 export default function Home() {
@@ -171,9 +163,11 @@ export default function Home() {
   const [filter, setFilter] = useState('All')
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [runs, setRuns] = useState<OrganizationRun[]>([])
-  const [paperKillSwitch, setPaperKillSwitch] = useState<KillSwitchState | null>(null)
-  const [liveKillSwitch, setLiveKillSwitch] = useState<KillSwitchState | null>(null)
-  const [marketHours, setMarketHours] = useState<MarketHours | null>(null)
+  const {
+    killSwitch: { paper: paperKillSwitch, live: liveKillSwitch },
+    marketHours,
+    refresh: refreshConsoleState,
+  } = useConsoleState()
   const [signoff, setSignoff] = useState<SignoffSnapshot | null>(null)
   const [resettingMode, setResettingMode] = useState<KillSwitchMode | null>(null)
   const [resetError, setResetError] = useState<string | null>(null)
@@ -184,52 +178,36 @@ export default function Home() {
   const canResetKillSwitch = can(role, 'POST /api/v1/kill-switch/{mode}/reset')
 
   const load = useCallback(async () => {
-    const [agentsRes, runsRes, paperKs, liveKs, hours, pnl, unrealizedPnlRes, liveSubsRes] = await Promise.allSettled([
+    const [agentsRes, runsRes, pnl, unrealizedPnlRes, liveSubsRes] = await Promise.allSettled([
       getAgents(),
       listRuns(),
-      getKillSwitch('paper'),
-      getKillSwitch('live'),
-      getMarketHours(),
       getTodaysPaperPnl(),
       getUnrealizedPaperPnl(),
       listLiveSubscriptions(),
     ])
     if (agentsRes.status === 'fulfilled') setAgents(agentsRes.value)
     if (runsRes.status === 'fulfilled') setRuns(runsRes.value)
-    if (paperKs.status === 'fulfilled') setPaperKillSwitch(paperKs.value)
-    if (liveKs.status === 'fulfilled') setLiveKillSwitch(liveKs.value)
-    if (hours.status === 'fulfilled') setMarketHours(hours.value)
     if (pnl.status === 'fulfilled') setTodaysPnl(pnl.value)
     if (unrealizedPnlRes.status === 'fulfilled') setUnrealizedPnl(unrealizedPnlRes.value)
     if (liveSubsRes.status === 'fulfilled') setLiveSubscriptions(liveSubsRes.value)
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    async function tick() {
-      if (!cancelled) await load()
-    }
-    tick()
-    const interval = setInterval(tick, 20000)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [load])
+  const { refresh: refreshOverview } = usePolling(load, { intervalMs: 20_000 })
+  const refreshAll = useCallback(() => Promise.all([refreshOverview(), refreshConsoleState()]), [refreshOverview, refreshConsoleState])
 
   async function handleResetKillSwitch(mode: KillSwitchMode) {
     setResettingMode(mode)
     setResetError(null)
     try {
       await resetKillSwitch(mode, `Reset via Overview console by ${role}`)
-      await load()
+      await refreshAll()
     } catch (err) {
       // e.g. 409 when someone else already reset it: say so, and refresh so the
       // console shows the switch's real state instead of a stale "tripped".
       setResetError(
         err instanceof ApiError ? err.message : `Failed to reset the ${mode} kill switch. Try again.`,
       )
-      await load()
+      await refreshAll()
     } finally {
       setResettingMode(null)
     }
@@ -246,7 +224,7 @@ export default function Home() {
       // Pulse orb and KILL SWITCH strip could show a stale "armed" state
       // for up to 20s after a real trip. Refetch immediately instead of
       // waiting for the next tick.
-      if (message.event.entity_type === 'kill-switch') load()
+      if (message.event.entity_type === 'kill-switch') void refreshAll()
     }
   })
 

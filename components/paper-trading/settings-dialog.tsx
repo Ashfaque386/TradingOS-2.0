@@ -11,8 +11,9 @@ import {
   settingsForm,
   subscriptionName,
 } from '@/lib/paper-trading'
-import { Field, Segmented, messageOf } from './dialog-parts'
-import { Modal } from './modal'
+import { Field, Segmented } from '@/components/ui/field'
+import { messageOf } from './helpers'
+import { Modal } from '@/components/ui/modal'
 
 const NUMBER_FIELD: Record<Exclude<SettingField, 'builtin_strategy'>, { label: string; hint?: string; step: string; min: number }> = {
   stop_loss_pct: { label: 'Stop-loss (%)', hint: 'Percent move against the position that closes it. For an option, percent of what it can lose at most.', step: 'any', min: 0.1 },
@@ -80,7 +81,7 @@ export function SettingsDialog({
       onClose={onClose}
       busy={busy}
     >
-      <form className="pt-form" onSubmit={submit}>
+      <form className="ui-form" onSubmit={submit}>
         {fields.map((field) => {
           if (field === 'builtin_strategy') {
             return (
@@ -101,7 +102,7 @@ export function SettingsDialog({
           if (field === 'initial_capital' && capitalLocked) {
             return (
               <Field key={field} label={spec.label} hint="Fixed once it has traded: its returns and drawdown are measured against it.">
-                {(id) => <input id={id} className="pt-input" value={form.initial_capital} readOnly aria-readonly="true" />}
+                {(id) => <input id={id} className="ui-input" value={form.initial_capital} readOnly aria-readonly="true" />}
               </Field>
             )
           }
@@ -110,7 +111,7 @@ export function SettingsDialog({
               {(id) => (
                 <input
                   id={id}
-                  className="pt-input"
+                  className="ui-input"
                   type="number"
                   min={spec.min}
                   step={spec.step}
@@ -141,12 +142,12 @@ export function SettingsDialog({
         )}
 
         <Field label="Reason" hint="Recorded in the audit log with the old and new values.">
-          {(id) => <input id={id} className="pt-input" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />}
+          {(id) => <input id={id} className="ui-input" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />}
         </Field>
 
-        {error && <div className="pt-error" role="alert">{error}</div>}
-        <div className="pt-modal-foot">
-          {missing && <small className="pt-foot-hint">{missing}</small>}
+        {error && <div className="ui-error" role="alert">{error}</div>}
+        <div className="ui-modal-foot">
+          {missing && <small className="ui-foot-hint">{missing}</small>}
           <button type="button" className="button-secondary" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="submit" className="button-primary" disabled={busy || missing !== null}>{busy ? 'Saving…' : 'Save settings'}</button>
         </div>

@@ -3,8 +3,9 @@
 import { useState } from 'react'
 import { type PaperSubscription, activatePaperSubscription, deactivatePaperSubscription } from '@/lib/api'
 import { subscriptionName } from '@/lib/paper-trading'
-import { Field, messageOf } from './dialog-parts'
-import { Modal } from './modal'
+import { Field } from '@/components/ui/field'
+import { messageOf } from './helpers'
+import { Modal } from '@/components/ui/modal'
 
 // The desk's dialogs: adding, closing and the settings live in their own files (each has an
 // estimate or a preview of its own); the page imports them all from here.
@@ -42,24 +43,24 @@ export function DeactivateDialog({ sub, onClose, onDone }: { sub: PaperSubscript
       onClose={onClose}
       busy={busy}
     >
-      <form className="pt-form" onSubmit={submit}>
+      <form className="ui-form" onSubmit={submit}>
         {holding && (
-          <div className="pt-field" role="radiogroup" aria-label="Open position">
-            <label className="pt-radio" data-on={choice === 'close'}>
+          <div className="ui-field" role="radiogroup" aria-label="Open position">
+            <label className="ui-radio" data-on={choice === 'close'}>
               <input type="radio" name="on_open" checked={choice === 'close'} onChange={() => setChoice('close')} />
               <div><strong>Close it now</strong><span>Sold legs are bought back first, then the rest, at real depth prices.</span></div>
             </label>
-            <label className="pt-radio" data-on={choice === 'leave_unmanaged'}>
+            <label className="ui-radio" data-on={choice === 'leave_unmanaged'}>
               <input type="radio" name="on_open" checked={choice === 'leave_unmanaged'} onChange={() => setChoice('leave_unmanaged')} />
               <div><strong>Leave it open, unmanaged</strong><span>Nothing watches its stop-loss until you close it or switch the subscription back on.</span></div>
             </label>
           </div>
         )}
         <Field label="Reason" hint="Recorded in the audit log.">
-          {(id) => <input id={id} className="pt-input" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />}
+          {(id) => <input id={id} className="ui-input" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />}
         </Field>
-        {error && <div className="pt-error" role="alert">{error}</div>}
-        <div className="pt-modal-foot">
+        {error && <div className="ui-error" role="alert">{error}</div>}
+        <div className="ui-modal-foot">
           <button type="button" className="button-secondary" onClick={onClose} disabled={busy}>Keep running</button>
           <button type="submit" className="button-danger" disabled={busy}>{busy ? 'Switching off…' : 'Switch off'}</button>
         </div>

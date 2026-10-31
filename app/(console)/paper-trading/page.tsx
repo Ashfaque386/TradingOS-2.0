@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, RefreshCw } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Attention } from '@/components/paper-trading/attention'
@@ -11,13 +11,14 @@ import {
   type PaperSubscription,
   type TodaysPaperPnl,
   type UnrealizedPaperPnl,
-  getMarketHours,
   getTodaysPaperPnl,
   getUnrealizedPaperPnl,
   listPaperSubscriptions,
 } from '@/lib/api'
 import { type AttentionItem, attentionItems } from '@/lib/paper-trading'
 import { can } from '@/lib/permissions'
+import { useConsoleState } from '@/components/shell/console-state'
+import { usePolling } from '@/lib/use-polling'
 
 type Filter = 'all' | 'active' | 'attention' | 'off'
 const FILTERS: { id: Filter; label: string }[] = [
@@ -42,56 +43,42 @@ export default function PaperTradingPage() {
   const canManage = can(role, 'POST /api/v1/paper-trading/subscriptions')
   const isAdmin = role === 'SystemAdministrator'
 
-  const [subs, setSubs] = useState<PaperSubscription[] | null>(null)
-  const [today, setToday] = useState<TodaysPaperPnl | null>(null)
-  const [unrealized, setUnrealized] = useState<UnrealizedPaperPnl | null>(null)
-  const [marketOpen, setMarketOpen] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
-  const [now, setNow] = useState(() => new Date())
-  const [refreshKey, setRefreshKey] = useState(0)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [dialog, setDialog] = useState<Dialog>(null)
-  const inFlight = useRef(false)
 
-  const load = useCallback(async () => {
-    if (inFlight.current) return
-    inFlight.current = true
-    try {
-      const [list, pnl, open, hours] = await Promise.all([
+  const { marketHours } = useConsoleState()
+  const marketOpen = marketHours?.is_open ?? false
+
+  // Poll quickly while the market is open (prices move), slowly when it is shut.
+  const {
+    data: desk,
+    error: loadError,
+    lastUpdated: updatedAt,
+    refresh: load,
+  } = usePolling(
+    async () => {
+      const [subs, today, unrealized] = await Promise.all([
         listPaperSubscriptions(),
         getTodaysPaperPnl(),
         getUnrealizedPaperPnl(),
-        getMarketHours(),
       ])
-      setSubs(list)
-      setToday(pnl)
-      setUnrealized(open)
-      setMarketOpen(hours.is_open)
-      setError(null)
-      setUpdatedAt(new Date())
-      setNow(new Date())
-      setRefreshKey((key) => key + 1)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load the paper-trading desk')
-    } finally {
-      inFlight.current = false
-    }
-  }, [])
+      return { subs, today, unrealized }
+    },
+    { intervalMs: marketOpen ? POLL_OPEN_MS : POLL_SHUT_MS },
+  )
+  const subs: PaperSubscription[] | null = desk?.subs ?? null
+  const today: TodaysPaperPnl | null = desk?.today ?? null
+  const unrealized: UnrealizedPaperPnl | null = desk?.unrealized ?? null
+  const error = actionError ?? loadError
+  const now = useMemo(() => updatedAt ?? new Date(), [updatedAt])
+  const refreshKey = updatedAt?.getTime() ?? 0
 
   useEffect(() => {
-    void load()
-  }, [load])
-
-  // Poll quickly while the market is open (prices move), slowly when it is shut.
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (!document.hidden) void load()
-    }, marketOpen ? POLL_OPEN_MS : POLL_SHUT_MS)
-    return () => clearInterval(timer)
-  }, [load, marketOpen])
+    setActionError(null) // a fresh read supersedes the last action's complaint
+  }, [updatedAt])
 
   const items = useMemo(() => attentionItems(subs ?? [], marketOpen), [subs, marketOpen])
   const attentionIds = useMemo(() => new Set(items.map((item) => item.subscriptionId)), [items])
@@ -127,7 +114,7 @@ export default function PaperTradingPage() {
 
   const switchOn = async (sub: PaperSubscription) => {
     const problem = await activate(sub)
-    if (problem) setError(problem)
+    if (problem) setActionError(problem)
     else setNotice(`${sub.symbol} is on again.`)
     void load()
   }
@@ -150,7 +137,7 @@ export default function PaperTradingPage() {
 
         <Ledger today={today} unrealized={unrealized} openCount={openCount} />
 
-        {error && <div className="pt-error" role="alert">{error}</div>}
+        {error && <div className="ui-error" role="alert">{error}</div>}
         {notice && (
           <div className="pt-alert pt-alert-info" role="status" style={{ gridTemplateColumns: 'auto 1fr auto' }}>
             <span aria-hidden="true" />
@@ -170,7 +157,7 @@ export default function PaperTradingPage() {
             ))}
           </div>
           <div className="pt-toolbar-meta">
-            <span className="pt-live" data-open={marketOpen}>{marketOpen ? 'Market open' : 'Market shut'}</span>
+            <span className="pt-live" data-open={marketOpen}>{marketHours === null ? 'Market hours unknown' : marketOpen ? 'Market open' : 'Market shut'}</span>
             <span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Loading…'}</span>
             <button type="button" className="button-secondary" onClick={() => void load()} aria-label="Refresh now">
               <RefreshCw className="size-3" aria-hidden="true" />

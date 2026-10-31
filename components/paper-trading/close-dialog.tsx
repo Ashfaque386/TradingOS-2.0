@@ -17,8 +17,9 @@ import {
   subscriptionName,
   tone,
 } from '@/lib/paper-trading'
-import { Field, messageOf } from './dialog-parts'
-import { Modal } from './modal'
+import { Field } from '@/components/ui/field'
+import { messageOf } from './helpers'
+import { Modal } from '@/components/ui/modal'
 
 /** What closing would do right now, leg by leg, from the same price rule and order book the close
  * itself uses. An estimate: the price moves, and the risk gate judges the order when it is placed. */
@@ -190,7 +191,7 @@ export function CloseDialog({
       busy={busy}
       wide
     >
-      <form className="pt-form" onSubmit={submit}>
+      <form className="ui-form" onSubmit={submit}>
         {!administrative && (
           <section aria-label="What closing would do" aria-busy={loading}>
             <div className="pt-estimate-head">
@@ -199,7 +200,7 @@ export function CloseDialog({
                 <RefreshCw className={`size-3 ${loading ? 'pt-spin' : ''}`} aria-hidden="true" />Refresh
               </button>
             </div>
-            {previewError && <div className="pt-error" role="alert">Couldn't estimate this: {previewError}</div>}
+            {previewError && <div className="ui-error" role="alert">Couldn't estimate this: {previewError}</div>}
             {preview && preview.blockers.length > 0 && (
               <ul className="pt-notes pt-notes-problem" role="alert">
                 {preview.blockers.map((text) => <li key={text}>{text}</li>)}
@@ -216,15 +217,15 @@ export function CloseDialog({
         )}
 
         <Field label="Reason" hint="Recorded in the audit log.">
-          {(id) => <input id={id} className="pt-input" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />}
+          {(id) => <input id={id} className="ui-input" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />}
         </Field>
         {single && (
           <Field label="Price (₹), when there is no fresh real price" hint="Leave empty to use a real price under two minutes old. With the market shut there is none, so enter one; it is recorded as supplied by you.">
-            {(id) => <input id={id} className="pt-input" type="number" min={0} step="any" value={price} onChange={(e) => setPrice(e.target.value)} />}
+            {(id) => <input id={id} className="ui-input" type="number" min={0} step="any" value={price} onChange={(e) => setPrice(e.target.value)} />}
           </Field>
         )}
         {single && isAdmin && (
-          <label className="pt-radio" data-on={administrative}>
+          <label className="ui-radio" data-on={administrative}>
             <input type="checkbox" checked={administrative} onChange={(e) => { setAdministrative(e.target.checked); setTyped('') }} />
             <div><strong>Administrative close</strong><span>For clearing stale or demo positions: skips the risk gate and fills the whole quantity at the price above, with no costs. Audited as administrative.</span></div>
           </label>
@@ -239,12 +240,12 @@ export function CloseDialog({
         )}
 
         <Field label={`Type ${phrase} to confirm`}>
-          {(id) => <input id={id} className="pt-input pt-confirm" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby="pt-close-missing" />}
+          {(id) => <input id={id} className="ui-input ui-confirm" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby="pt-close-missing" />}
         </Field>
 
-        {error && <div className="pt-error" role="alert">{error}</div>}
-        <div className="pt-modal-foot">
-          {missing && <small id="pt-close-missing" className="pt-foot-hint">{missing}</small>}
+        {error && <div className="ui-error" role="alert">{error}</div>}
+        <div className="ui-modal-foot">
+          {missing && <small id="pt-close-missing" className="ui-foot-hint">{missing}</small>}
           <button type="button" className="button-secondary" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="submit" className="button-danger" disabled={busy || missing !== null}>{busy ? 'Closing…' : 'Close position'}</button>
         </div>
