@@ -198,6 +198,10 @@ critical_files = [
   "src/engine/validation.py",
   # ... and who may do what.
   "src/core/rbac.py",
+  # ... and the copy everything above can be restored from. Not in the mutation list below: a
+  # mutant of this module needs a real dump to be noticed, about a minute of tests per mutant.
+  "src/data/pg_backup.py",
+  "src/orchestration/backup_scheduler.py",
 ]
 
 [tool.tradingos.coverage.package_floors]

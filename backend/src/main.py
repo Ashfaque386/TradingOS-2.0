@@ -33,6 +33,7 @@ from src.observability.rate_limit_middleware import RateLimitMiddleware
 from src.observability.scheduled_job_history import attach_run_history_listener
 from src.observability.scheduler_registry import register_scheduler, unregister_all
 from src.orchestration.audit_scheduler import start_audit_scheduler
+from src.orchestration.backup_scheduler import backup_gauge_updater, start_backup_scheduler
 from src.orchestration.engine_alert_watcher import start_engine_alert_watcher
 from src.orchestration.investor_reporting_scheduler import start_investor_reporting_scheduler
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
@@ -183,6 +184,19 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     )
     trading_holiday_task = trading_holiday_gauge_updater()
 
+    # Nightly Postgres backup (Phase 7): a dump and a manifest on a volume of its own, retention,
+    # and an engine alert the night it fails.
+    backup_scheduler = start_backup_scheduler(
+        AsyncSessionLocal,
+        root=Path(settings.postgres_backup_path),
+        database_url=settings.database_url,
+    )
+    # What notices a night the job never ran (Prometheus rule BackupStale); a failed run raises its
+    # own engine alert.
+    backup_gauge_task = backup_gauge_updater(
+        Path(settings.postgres_backup_path), Path(settings.data_lake_backup_path)
+    )
+
     # Automatic kill switch (Phase 3): reads each mode's equity every minute while the market is
     # open and once at the close, and trips the switch when the drawdown reaches the applied limit.
     risk_monitor_scheduler = start_risk_monitor_scheduler(AsyncSessionLocal, redis=redis)
@@ -225,6 +239,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ("paper_trading", paper_trading_scheduler),
         ("live_trading", live_trading_scheduler),
         ("audit", audit_scheduler),
+        ("backups", backup_scheduler),
         ("risk_monitor", risk_monitor_scheduler),
         ("shadow_mode", shadow_mode_scheduler),
         ("engine_alerts", engine_alert_scheduler),
@@ -245,12 +260,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     stall_sweep_task.cancel()
     heartbeat_task.cancel()
     trading_holiday_task.cancel()
+    backup_gauge_task.cancel()
     for task in recovery_tasks:
         task.cancel()
     market_data_scheduler.shutdown(wait=False)
     paper_trading_scheduler.shutdown(wait=False)
     live_trading_scheduler.shutdown(wait=False)
     audit_scheduler.shutdown(wait=False)
+    backup_scheduler.shutdown(wait=False)
     risk_monitor_scheduler.shutdown(wait=False)
     shadow_mode_scheduler.shutdown(wait=False)
     engine_alert_scheduler.shutdown(wait=False)

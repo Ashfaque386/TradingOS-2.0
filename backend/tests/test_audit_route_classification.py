@@ -280,6 +280,7 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/system/scheduled-jobs/{scheduler_name}/{job_id}/run-now"): (N, "triggers a job"),
     ("PUT", "/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule"): (S, "saves a schedule"),
     ("POST", "/system/jwt-signing-key/rotate"): (N, "always rotates"),
+    ("POST", "/system/postgres-backup"): (N, "makes a new backup every time"),
     ("POST", "/webhooks/telegram"): (N, "inbound webhook"),
     ("POST", "/webhooks/discord"): (N, "inbound webhook"),
     ("POST", "/webhooks/slack"): (N, "inbound webhook"),

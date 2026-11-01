@@ -84,6 +84,7 @@ with the URL you need (`docker compose build frontend`).
 docker run -d -p 8080:8080 --security-opt seccomp=deploy/seccomp/backend.json \
   -v tradingos_secrets:/app/secrets -v tradingos_data_lake:/app/data_lake \
   -v tradingos_data_lake_backups:/app/data_lake_backups -v tradingos_audit_archive:/app/audit_archive \
+  -v tradingos_backups:/app/backups \
   -e SECRETS_ENCRYPTION_KEY=<fernet key> -e JWT_SECRET_KEY=<long random string> \
   ghcr.io/ashfaque386/tradingos-2.0-allinone:latest
 ```
@@ -92,7 +93,8 @@ The seccomp profile is required for strategy creation (the sandbox needs `unshar
 
 **What lives where.** Everything the app writes is on a named volume, so `docker compose down && docker compose up --build`
 keeps it: `tradingos-2.0_pgdata` (the database), `…_secrets` (the encrypted broker, LLM and channel stores; useless without
-`SECRETS_ENCRYPTION_KEY`), `…_data_lake`, `…_data_lake_backups` and `…_audit_archive`. The last three were inside the
+`SECRETS_ENCRYPTION_KEY`), `…_data_lake`, `…_data_lake_backups`, `…_audit_archive` and `…_backups` (the nightly Postgres dumps, see below).
+The data lake, its backups and the audit archive were inside the
 container until recently, so every rebuild deleted them. **Upgrading an existing stack:** before the first rebuild that
 includes the volumes, copy them out of the running container, then copy them back in afterwards:
 
@@ -101,6 +103,8 @@ for d in data_lake data_lake_backups audit_archive; do docker cp TradingOS-2.0-B
 docker compose down && docker compose up --build -d
 for d in data_lake data_lake_backups audit_archive; do docker cp ./$d.keep/. TradingOS-2.0-Backend:/app/$d; done
 ```
+
+**Backups.** The database is dumped every night at 22:45 IST to the `tradingos-2.0_backups` volume (the newest 7, and any younger than 14 days, are kept), each with a manifest and a checksum, and Settings > System and backups shows them and can take one now. A failed night raises an alert. `python -m scripts.restore_postgres list|verify|restore` (run with `docker exec TradingOS-2.0-Backend`) puts one back and checks the result against its manifest. A backup does **not** contain `SECRETS_ENCRYPTION_KEY` (without it the saved broker, LLM and notification credentials cannot be read, so keep it somewhere other than this machine), and the dump holds the login signing keys in plain text. It is on the same machine as the database: copy the newest one elsewhere. See [docs/runbooks/postgres-restore.md](docs/runbooks/postgres-restore.md).
 
 ## Developing and testing
 

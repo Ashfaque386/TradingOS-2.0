@@ -86,6 +86,59 @@ def create_backup(root: Path, backup_root: Path) -> BackupManifest:
     return manifest
 
 
+@dataclass(frozen=True, slots=True)
+class LakeBackupInfo:
+    """One lake backup as found on disk (`status` is `incomplete` when its manifest is missing or
+    unreadable). `sha256` is the digest of the manifest, which itself holds every file's digest."""
+
+    backup_id: str
+    status: str
+    created_at: datetime
+    files: int
+    total_rows: int
+    size_bytes: int
+    sha256: str | None
+    note: str | None = None
+
+
+def list_lake_backups(backup_root: Path) -> list[LakeBackupInfo]:
+    """Every lake backup in `backup_root`, newest first. Reads each manifest, not the data files:
+    checking those is `validate_backup`'s job."""
+    if not backup_root.is_dir():
+        return []
+    found: list[LakeBackupInfo] = []
+    for directory in backup_root.iterdir():
+        if not directory.is_dir():
+            continue
+        try:
+            created = datetime.strptime(directory.name, "%Y%m%dT%H%M%S%fZ").replace(tzinfo=UTC)
+        except ValueError:
+            continue  # not one of ours
+        manifest = directory / MANIFEST_FILENAME
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            entries = data["files"]
+            found.append(
+                LakeBackupInfo(
+                    backup_id=directory.name,
+                    status="ok",
+                    created_at=created,
+                    files=len(entries),
+                    total_rows=sum(int(e["row_count"]) for e in entries),
+                    size_bytes=sum(int(e["size_bytes"]) for e in entries),
+                    sha256=_sha256_of(manifest),
+                )
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            note = (
+                "the manifest is missing"
+                if not manifest.exists()
+                else f"the manifest is unreadable: {exc}"
+            )
+            found.append(LakeBackupInfo(directory.name, "incomplete", created, 0, 0, 0, None, note))
+    return sorted(found, key=lambda info: info.backup_id, reverse=True)
+
+
 def validate_backup(backup_dir: Path) -> ValidationResult:
     manifest_path = backup_dir / MANIFEST_FILENAME
     if not manifest_path.exists():

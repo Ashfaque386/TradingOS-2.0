@@ -77,6 +77,9 @@ backend/audit_archive/
 # ingestion, not project content.
 backend/data_lake/
 backend/data_lake_backups/
+# Postgres dumps and their manifests (src/data/pg_backup.py): the whole database, including the JWT
+# signing keys in plaintext. Never committed.
+backend/backups/
 
 # Playwright's own run artifacts (screenshots/traces/HTML report from
 # e2e/ -- see playwright.config.ts) -- local test output, not project

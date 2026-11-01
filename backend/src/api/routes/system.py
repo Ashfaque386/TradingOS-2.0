@@ -9,33 +9,41 @@ Same authenticated-read RBAC posture as every other read surface in this
 codebase (not `/metrics`'s unauthenticated Prometheus scrape convention).
 """
 
+import asyncio
 import secrets
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from apscheduler.job import Job
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy import CursorResult, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.agents.llm_router import active_llm_provider, llm_provider_health_vitals
 from src.agents.scheduler import DEFAULT_HEARTBEAT_INTERVAL_SECONDS
 from src.api.schemas import (
+    BackupEntryResponse,
+    BackupKindResponse,
+    BackupsResponse,
     JwtSigningKeyRotateResponse,
     JwtSigningKeyStatusResponse,
+    PostgresBackupRunResponse,
     SystemVitalsResponse,
 )
 from src.audit.service import write_audit_entry
 from src.core.config import get_settings
-from src.core.db import get_db
+from src.core.db import get_db, get_session_factory
 from src.core.rbac import Role, register_policy, require_role
 from src.core.redis_client import get_redis
 from src.core.security import get_signing_key_status, invalidate_signing_key_cache
+from src.data.backup import LakeBackupInfo, list_lake_backups
+from src.data.pg_backup import BackupInfo, PostgresBackupError, backup_is_stale, list_backups
 from src.gateway.schema import LlmProvider
 from src.models.jwt_signing_key import JwtSigningKey
 from src.models.refresh_token import RefreshToken
@@ -43,6 +51,7 @@ from src.models.scheduled_job_run import ScheduledJobRun
 from src.models.user import User
 from src.observability.scheduler_registry import get_all_schedulers
 from src.observability.vitals import build_system_vitals
+from src.orchestration.backup_scheduler import BackupAlreadyRunningError, run_postgres_backup
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -61,6 +70,8 @@ register_policy(
     "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule",
     roles=[Role.SYSTEM_ADMINISTRATOR],
 )
+register_policy("GET", "/api/v1/system/backups", roles=[Role.SYSTEM_ADMINISTRATOR])
+register_policy("POST", "/api/v1/system/postgres-backup", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("GET", "/api/v1/system/jwt-signing-key", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("POST", "/api/v1/system/jwt-signing-key/rotate", roles=[Role.SYSTEM_ADMINISTRATOR])
 
@@ -303,6 +314,99 @@ async def system_vitals_endpoint(
         provider_health=llm_provider_health_vitals(),
     )
     return SystemVitalsResponse(**payload)
+
+
+_BACKUPS_SHOWN = 10
+
+
+def _backup_entry(info: BackupInfo | LakeBackupInfo, now: datetime) -> BackupEntryResponse:
+    common: dict[str, Any] = dict(
+        backup_id=info.backup_id,
+        status=info.status,
+        created_at=info.created_at,
+        age_seconds=max(0.0, (now - info.created_at).total_seconds()),
+        size_bytes=info.size_bytes,
+        sha256=info.sha256,
+        note=info.note,
+    )
+    if isinstance(info, LakeBackupInfo):
+        return BackupEntryResponse(**common, files=info.files, total_rows=info.total_rows)
+    return BackupEntryResponse(
+        **common,
+        alembic_revision=info.alembic_revision,
+        audit_tip_sequence=info.audit_tip_sequence,
+        audit_tip_hash=info.audit_tip_hash,
+        table_count=info.table_count,
+        total_rows=info.total_rows,
+    )
+
+
+def _backup_kind(
+    kind: str,
+    directory: str,
+    infos: list[BackupInfo] | list[LakeBackupInfo],
+    stale_after_hours: float,
+) -> BackupKindResponse:
+    now = datetime.now(UTC)
+    entries = [_backup_entry(info, now) for info in infos[:_BACKUPS_SHOWN]]
+    newest_ok = next((e.age_seconds for e in entries if e.status == "ok"), None)
+    return BackupKindResponse(
+        kind=kind,  # type: ignore[arg-type]
+        directory=directory,
+        backups=entries,
+        newest_ok_age_seconds=newest_ok,
+        stale=backup_is_stale(newest_ok, stale_after_hours),
+    )
+
+
+@router.get("/backups")
+async def list_backups_endpoint(
+    _current_user: User = Depends(require_role),
+) -> BackupsResponse:
+    """What backups exist, of the database and of the data lake: when, how big, their checksum, and
+    whether the newest is older than it should be. Reads the folders and the manifests only; it does
+    not re-read the dumps (the backup run verifies each one as it is made)."""
+    settings = get_settings()
+    postgres, lake = await asyncio.gather(
+        asyncio.to_thread(list_backups, Path(settings.postgres_backup_path)),
+        asyncio.to_thread(list_lake_backups, Path(settings.data_lake_backup_path)),
+    )
+    return BackupsResponse(
+        stale_after_hours=settings.backup_stale_after_hours,
+        keep_count=settings.postgres_backup_keep_count,
+        retention_days=settings.postgres_backup_retention_days,
+        schedule=(
+            f"Postgres every day at {settings.postgres_backup_hour_ist:02d}:"
+            f"{settings.postgres_backup_minute_ist:02d} IST; the data lake every day at 22:15 IST"
+        ),
+        postgres=_backup_kind(
+            "postgres", settings.postgres_backup_path, postgres, settings.backup_stale_after_hours
+        ),
+        lake=_backup_kind(
+            "lake", settings.data_lake_backup_path, lake, settings.backup_stale_after_hours
+        ),
+    )
+
+
+@router.post("/postgres-backup")
+async def run_postgres_backup_endpoint(
+    _current_user: User = Depends(require_role),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+) -> PostgresBackupRunResponse:
+    """Backs the database up now, exactly as the nightly job does (dump, check, retention). Takes as
+    long as the dump does. A failure is reported here and also opens the engine alert."""
+    settings = get_settings()
+    root = Path(settings.postgres_backup_path)
+    try:
+        run = await run_postgres_backup(session_factory, root, database_url=settings.database_url)
+    except BackupAlreadyRunningError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PostgresBackupError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    made = next(i for i in list_backups(root) if i.backup_id == run.manifest.backup_id)
+    return PostgresBackupRunResponse(
+        backup=_backup_entry(made, datetime.now(UTC)), pruned=run.pruned
+    )
 
 
 @router.get("/jwt-signing-key")

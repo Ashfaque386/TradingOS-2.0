@@ -137,6 +137,21 @@ engine_alert_watch_last_success_timestamp_seconds = Gauge(
     "Unix time the engine-alert watcher last completed a look (0 until its first)",
 )
 
+# Backups (src.orchestration.backup_scheduler): the age of the newest usable backup of each kind
+# ("postgres", "lake") and whether that is older than BACKUP_STALE_AFTER_HOURS. The job's own
+# failure raises an engine alert; this is what notices a job that never ran at all.
+backup_newest_ok_age_seconds = Gauge(
+    "tradingos_backup_newest_ok_age_seconds",
+    "Age of the newest usable backup, by kind (absent while there is none)",
+    labelnames=("kind",),
+)
+backup_stale = Gauge(
+    "tradingos_backup_stale",
+    "1 if the newest usable backup is older than BACKUP_STALE_AFTER_HOURS, or none has been made "
+    "since this process started that long ago, by kind",
+    labelnames=("kind",),
+)
+
 
 def render_latest_metrics() -> tuple[bytes, str]:
     return generate_latest(), CONTENT_TYPE_LATEST

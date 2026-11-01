@@ -85,6 +85,14 @@ this is where it stands.
 
 **Still open from this phase:** Upstox's exchange stamp, and the circuit-limit fields of a recorded live response, need a first real session (operator); the age limit stays off until that session's lag panel says what is normal.
 
+**Closed in phase 7 (Postgres backup and key custody):**
+
+| Gap | What changed |
+|---|---|
+| G5 | A nightly `pg_dump` (22:45 IST) with a manifest that records the schema revision, the audit log's tip and every table's row count from the same snapshot as the dump; checksummed and listed by `pg_restore` before it is kept; files readable by their owner only; retention by count and age that never removes the newest complete backup; a failed night opens a critical engine alert, and a night that never ran is caught by a Prometheus rule through Alertmanager. A restore tool that verifies first, restores, and checks the result against the manifest (row counts, audit chain, audit tip, append-only trigger). A runbook with what is and is not in a backup and what each loss costs, including the key custody of `SECRETS_ENCRYPTION_KEY`, and a restore drill that was run (4 s, every check passing, also as a non-superuser). Settings > System and backups shows both kinds of backup and runs one on request. |
+
+**Still open from this phase:** a drill on the live database's real data (the live stack has no backups until it is rebuilt); no WAL archiving, so up to a day of changes can be lost; the backups sit on the same machine as the database (copy the newest dump elsewhere); Qdrant, Redis and the monitoring volumes have no backup; `SECRETS_ENCRYPTION_KEY` custody is the operator's.
+
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
 - The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.

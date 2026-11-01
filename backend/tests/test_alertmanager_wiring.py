@@ -108,6 +108,18 @@ def test_the_watcher_rule_reads_a_metric_the_backend_really_exposes():
     assert "# TYPE tradingos_engine_alerts_open gauge" in exposed
 
 
+def test_the_backup_rules_read_a_gauge_the_backend_really_exposes():
+    rules = {r["alert"]: r for group in RULES["groups"] for r in group["rules"]}
+    exposed = render_latest_metrics()[0].decode()
+
+    assert rules["PostgresBackupStale"]["labels"]["severity"] == "critical"
+    assert rules["LakeBackupStale"]["labels"]["severity"] == "warning"
+    assert 'tradingos_backup_stale{kind="postgres"}' in rules["PostgresBackupStale"]["expr"]
+    assert 'tradingos_backup_stale{kind="lake"}' in rules["LakeBackupStale"]["expr"]
+    assert "# TYPE tradingos_backup_stale gauge" in exposed
+    assert "# TYPE tradingos_backup_newest_ok_age_seconds gauge" in exposed
+
+
 def test_every_alert_rule_carries_a_severity_the_webhook_understands():
     rules = [r for group in RULES["groups"] for r in group["rules"]]
 

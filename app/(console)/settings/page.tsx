@@ -13,6 +13,7 @@ import {
   Circle,
   Copy,
   Cpu,
+  DatabaseBackup,
   ExternalLink,
   GripVertical,
   History,
@@ -37,6 +38,7 @@ import {
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { AlertmanagerStatus } from '@/components/settings/alertmanager-status'
+import { BackupsSection } from '@/components/settings/backups-section'
 import { describeQuoteRefusals } from '@/lib/broker-quotes'
 import { InboundSettings } from '@/components/settings/inbound-settings'
 import { RiskLimitsSection } from '@/components/settings/risk-limits-section'
@@ -84,7 +86,7 @@ import {
 } from '@/lib/api'
 import { can } from '@/lib/permissions'
 
-type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'security'
+type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'security' | 'backups'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: string }[] = [
   { id: 'gateway', label: 'Agent Gateway Config', icon: Braces, desc: 'Infra & agent defaults' },
@@ -94,6 +96,7 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: strin
   { id: 'skills', label: 'Skill Marketplace', icon: Sparkles, desc: 'Grant tools to agents' },
   { id: 'risk', label: 'Risk Limits', icon: SlidersHorizontal, desc: 'Dual-control thresholds' },
   { id: 'security', label: 'Security', icon: Lock, desc: 'Login signing key' },
+  { id: 'backups', label: 'System and backups', icon: DatabaseBackup, desc: 'Database and data lake backups' },
 ]
 
 function copyToClipboard(text: string) {
@@ -1223,6 +1226,7 @@ export default function SettingsPage() {
             {section === 'skills' && <SkillsSection />}
             {section === 'risk' && <RiskLimitsSection />}
             {section === 'security' && <SigningKeyCard />}
+            {section === 'backups' && <BackupsSection />}
           </section>
         </div>
       </main>

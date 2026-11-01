@@ -483,6 +483,9 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/system/backups": [
+    "SystemAdministrator"
+  ],
   "GET /api/v1/system/jwt-signing-key": [
     "SystemAdministrator"
   ],
@@ -824,6 +827,9 @@
     "SystemAdministrator"
   ],
   "POST /api/v1/system/jwt-signing-key/rotate": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/system/postgres-backup": [
     "SystemAdministrator"
   ],
   "POST /api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/run-now": [

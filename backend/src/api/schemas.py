@@ -65,6 +65,56 @@ class JwtSigningKeyStatusResponse(BaseModel):
     weakness: str | None
 
 
+class BackupEntryResponse(BaseModel):
+    """One backup of either kind. `status` is `incomplete` for anything that is not a usable backup
+    (a Postgres dump with no manifest, a lake backup whose manifest cannot be read): it is listed so
+    it is seen, not so it is restored from."""
+
+    backup_id: str
+    status: Literal["ok", "incomplete"]
+    created_at: datetime_type
+    age_seconds: float
+    size_bytes: int
+    # The SHA-256 of the dump (Postgres) or of the manifest (lake: it holds each file's own).
+    sha256: str | None = None
+    note: str | None = None
+    # Postgres only.
+    alembic_revision: str | None = None
+    audit_tip_sequence: int | None = None
+    audit_tip_hash: str | None = None
+    table_count: int | None = None
+    # Lake only.
+    files: int | None = None
+    # Rows the backup holds: every table's for Postgres, every Parquet file's for the lake.
+    total_rows: int | None = None
+
+
+class BackupKindResponse(BaseModel):
+    kind: Literal["postgres", "lake"]
+    directory: str
+    # Newest first, at most ten.
+    backups: list[BackupEntryResponse]
+    # Age of the newest usable backup; null when there is none.
+    newest_ok_age_seconds: float | None
+    # No usable backup, or the newest is older than `stale_after_hours`.
+    stale: bool
+
+
+class BackupsResponse(BaseModel):
+    stale_after_hours: float
+    keep_count: int
+    retention_days: int
+    schedule: str
+    postgres: BackupKindResponse
+    lake: BackupKindResponse
+
+
+class PostgresBackupRunResponse(BaseModel):
+    backup: BackupEntryResponse
+    # Ids of the older backups removed by retention in the same run.
+    pruned: list[str]
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str

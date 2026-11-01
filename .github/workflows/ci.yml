@@ -140,6 +140,13 @@ jobs:
         # own fixed versions -- bring it current before installing anything.
         run: python -m pip install --upgrade pip && pip install ".[dev]"
 
+      # The nightly Postgres backup shells out to pg_dump and pg_restore (src/data/pg_backup.py), as
+      # the backend image does with its own postgresql-16. pg_dump refuses a server newer than
+      # itself, so the runner's client is pinned to the service's major version rather than left to
+      # whatever the image carries; tests/test_pg_backup.py fails in CI if the tools are missing.
+      - name: Install the Postgres 16 client tools (pg_dump, pg_restore)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client-16
+
       # config/tradingos.config.json and config/nse_holidays.json live at
       # the repo root and reach the backend container at runtime via
       # docker-compose.yml's bind mount (./config:/app/config onto
@@ -351,6 +358,13 @@ jobs:
 
       - name: Install Playwright + Chromium
         run: pnpm exec playwright install --with-deps chromium
+
+      # The nightly Postgres backup shells out to pg_dump and pg_restore (src/data/pg_backup.py), as
+      # the backend image does with its own postgresql-16. pg_dump refuses a server newer than
+      # itself, so the runner's client is pinned to the service's major version rather than left to
+      # whatever the image carries; tests/test_pg_backup.py fails in CI if the tools are missing.
+      - name: Install the Postgres 16 client tools (pg_dump, pg_restore)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client-16
 
       # e2e/utils.ts::runSeedScript hardcodes `backend/.venv/bin/python` --
       # live-autonomy.spec.ts calls it mid-test, so this exact venv path

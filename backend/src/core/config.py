@@ -112,6 +112,21 @@ class Settings(BaseSettings):
     # different directory than data_lake_path so a backup is a real, separate
     # copy rather than a no-op self-copy.
     data_lake_backup_path: str = "data_lake_backups"
+    # Phase 7: nightly Postgres backups (src/data/pg_backup.py), a dump and a manifest each,
+    # readable by their owner only (a dump holds the JWT signing keys in plaintext). On a volume of
+    # its own in Docker, apart from the database it protects. Relative to CWD, like the other data
+    # folders.
+    postgres_backup_path: str = "backups"
+    # A backup is kept if it is one of the newest `keep_count` or younger than `retention_days`; the
+    # newest complete one is always kept.
+    postgres_backup_keep_count: int = 7
+    postgres_backup_retention_days: int = 14
+    # 22:45 IST: after the lake backup (22:15), every day, weekends included.
+    postgres_backup_hour_ist: int = 22
+    postgres_backup_minute_ist: int = 45
+    postgres_backup_timeout_seconds: float = 1800.0
+    # Settings warns when the newest backup of either kind is older than this.
+    backup_stale_after_hours: float = 36.0
     # Phase 10 (src/data/nse_calendar.py): movable/lunisolar NSE holiday
     # reference file. Relative to CWD, same convention as
     # agent_gateway_config_path -- local `uvicorn` dev from backend/ needs

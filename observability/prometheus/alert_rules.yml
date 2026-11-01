@@ -58,6 +58,36 @@ groups:
             during market hours, so a position nobody is watching or a stopped price feed would
             not be reported. Check the backend logs for engine_alerts errors.
 
+  - name: tradingos-backups
+    rules:
+      # The backend sets tradingos_backup_stale from what is on the backups volume
+      # (src/orchestration/backup_scheduler.py): 1 when the newest usable backup is older than
+      # BACKUP_STALE_AFTER_HOURS (36 by default), or when none has been made since the backend
+      # started that long ago. A failed run raises its own engine alert from inside the backend;
+      # this is the one that notices a run that never happened (the backend was down at 22:45 IST).
+      - alert: PostgresBackupStale
+        expr: tradingos_backup_stale{kind="postgres"} == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The newest Postgres backup is too old, or there is none"
+          description: >-
+            No usable database backup is newer than BACKUP_STALE_AFTER_HOURS. Until one is made
+            there is nothing recent to restore the database from. Settings > System and backups
+            shows what exists; "Back up now" takes one.
+
+      - alert: LakeBackupStale
+        expr: tradingos_backup_stale{kind="lake"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The newest data lake backup is too old, or there is none"
+          description: >-
+            No usable data lake backup is newer than BACKUP_STALE_AFTER_HOURS. The lake can be
+            refetched, but a backup saves the time. Settings > System and backups shows what exists.
+
   - name: tradingos-latency-budgets
     rules:
       - alert: OrderDispatchLatencyBudgetBreached

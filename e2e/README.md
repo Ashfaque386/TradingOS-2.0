@@ -59,6 +59,12 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `backups-logic.spec.ts` -- the wording of Settings > System and backups (sizes, ages, the one line per
+  kind of backup, what a row holds). No browser or backend.
+- `backups.spec.ts` -- the same section against the real backend: nothing backed up yet, **Back up now** making
+  a real `pg_dump` and manifest (so `pg_dump` must be installed, as CI's `postgresql-client-16` step does), an
+  unfinished dump shown as not usable, and the section refused to other roles. It empties `backend/backups`
+  first and afterwards.
 - `engine-alerts-logic.spec.ts` -- the wording of the engine-alert panel, the top-bar
   count and Settings' Alertmanager line. No browser or backend.
 - `engine-alerts.spec.ts` -- what the trading engine needed a person for: the

@@ -1781,6 +1781,49 @@ export type JwtSigningKeyStatus = {
 export const getJwtSigningKeyStatus = () => apiGet<JwtSigningKeyStatus>('/api/v1/system/jwt-signing-key')
 export const rotateJwtSigningKey = () =>
   apiPost<{ rotated_at: string; rotated_by: string; sessions_revoked: number }>('/api/v1/system/jwt-signing-key/rotate')
+// Backups of the database (Postgres dumps) and of the data lake. Listing reads the folders and the
+// manifests only; the run that makes each backup also checks it.
+export type BackupEntry = {
+  backup_id: string
+  // incomplete: a dump with no manifest, a manifest that cannot be read -- listed so it is seen, never to restore from
+  status: 'ok' | 'incomplete'
+  created_at: string
+  age_seconds: number
+  size_bytes: number
+  sha256: string | null
+  note: string | null
+  // Postgres only
+  alembic_revision: string | null
+  audit_tip_sequence: number | null
+  audit_tip_hash: string | null
+  table_count: number | null
+  // Lake only
+  files: number | null
+  // Rows held: every table's (Postgres) or every Parquet file's (lake)
+  total_rows: number | null
+}
+export type BackupKind = {
+  kind: 'postgres' | 'lake'
+  directory: string
+  // Newest first, at most ten
+  backups: BackupEntry[]
+  // Age of the newest usable backup; null when there is none
+  newest_ok_age_seconds: number | null
+  // No usable backup, or the newest is older than stale_after_hours
+  stale: boolean
+}
+export type BackupsResponse = {
+  stale_after_hours: number
+  keep_count: number
+  retention_days: number
+  schedule: string
+  postgres: BackupKind
+  lake: BackupKind
+}
+export type PostgresBackupRun = { backup: BackupEntry; pruned: string[] }
+export const getBackups = () => apiGet<BackupsResponse>('/api/v1/system/backups')
+// Takes as long as the dump does (seconds to minutes); the nightly job does exactly this.
+export const runPostgresBackup = () => apiPost<PostgresBackupRun>('/api/v1/system/postgres-backup')
 export const listRiskLimits = () => apiGet<RiskLimit[]>('/api/v1/risk-limits')
 export const listRiskLimitChanges = (statusFilter?: string) =>
   apiGet<RiskLimitChange[]>(`/api/v1/risk-limits/changes${statusFilter ? `?status_filter=${statusFilter}` : ''}`)
