@@ -54,13 +54,16 @@ test('an admin can save the embedding choice, it persists across a reload, and c
   await expect(form).toBeVisible()
 
   // The dev server can re-render this page while a route finishes compiling, which would drop what was
-  // typed: type again until the form holds both values, then save.
+  // typed -- before the Save button is checked, or in the moment between the check and the click (CI
+  // runs 86 and 93). So typing, checking and saving are one attempt, and a form found emptied at any of
+  // the three steps costs another attempt, not the test's whole timeout. The click gets a short timeout
+  // of its own for that reason: a disabled button means the values are gone, so type them again.
   await expect(async () => {
     await form.getByLabel('Embedding provider').selectOption('ollama')
     await form.getByLabel('Embedding model').fill('nomic-embed-text')
     await expect(form.getByRole('button', { name: 'Save' })).toBeEnabled({ timeout: 2_000 })
+    await form.getByRole('button', { name: 'Save' }).click({ timeout: 3_000 })
   }).toPass({ timeout: 30_000 })
-  await form.getByRole('button', { name: 'Save' }).click()
   await expect(form.getByText(/Saved by e2e\.admin@example\.com/)).toBeVisible()
 
   // Stored server-side (the database), not in the page: a reload shows it.
