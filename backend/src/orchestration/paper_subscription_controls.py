@@ -18,8 +18,8 @@ These functions make each step explicit and recorded:
   gate and fills the whole quantity at the given price; it exists for stale or demo cleanup and is
   audited as such.
 
-A price is never invented: a manual close uses a tick no older than `MAX_TICK_AGE_SECONDS`, or the
-price the operator supplies (labelled `supplied`). When the market is shut the newest tick is
+A price is never invented: a manual close uses a tick no older than `PAPER_STALE_PRICE_SECONDS`, or
+the price the operator supplies (labelled `supplied`). When the market is shut the newest tick is
 stale, so the operator must supply one.
 """
 
@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
 from src.brokers.tick_source import feed_unavailable_reason
+from src.core.config import get_settings
 from src.engine.paper_trading.depth import DepthUnavailableError
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.order_book import (
@@ -58,8 +59,6 @@ from src.orchestration.risk_gate import OrderIntentRejectedError, create_order_i
 
 logger = structlog.get_logger(__name__)
 
-# A manual close will not price off a tick older than this: a stale price is not a price.
-MAX_TICK_AGE_SECONDS = 120.0
 HISTORY_LOOKBACK_DAYS = 30
 
 OnOpenPosition = Literal["close", "leave_unmanaged"]
@@ -121,6 +120,12 @@ class SubscriptionView:
     last_tick: Tick | None = None
     last_tick_age_seconds: float | None = None
     unrealized_pnl: float | None = None
+
+    @property
+    def managed(self) -> bool:
+        """False for a switched-off subscription that still holds a position: nothing runs its
+        stop-loss. (A switched-off one with nothing open has nothing to manage.)"""
+        return self.subscription.is_active or self.open_legs == 0
 
 
 # ---- state ----
@@ -302,9 +307,11 @@ async def _price_for_close(
             f"no price has ever been published for {symbol}; supply `price` to close at"
         )
     age = now.timestamp() - tick.timestamp_ms / 1000.0
-    if age > MAX_TICK_AGE_SECONDS:
+    # A manual close will not price off a tick older than this: a stale price is not a price.
+    limit = get_settings().paper_stale_price_seconds
+    if age > limit:
         raise PriceUnavailableError(
-            f"the newest {symbol} price is {age:.0f}s old (limit {MAX_TICK_AGE_SECONDS:.0f}s; the "
+            f"the newest {symbol} price is {age:.0f}s old (limit {limit:.0f}s; the "
             "market may be shut); supply `price` to close at"
         )
     return tick.price, f"live tick ({age:.0f}s old)", tick.source

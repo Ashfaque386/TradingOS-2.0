@@ -170,6 +170,7 @@ async def test_a_position_expiring_tomorrow_is_squared_off_through_the_normal_cl
     outcomes = await _sweep(db_session_factory, redis)
 
     assert [(o.symbol, o.status) for o in outcomes] == [(TOMORROW, "closed")]
+    assert outcomes[0].forced is False  # squared off on time: nothing to report
     [fill] = await _fills(db_session_factory, subscription)
     assert (fill.side, fill.filled_quantity, fill.avg_fill_price) == ("sell", 65, 79.0)  # the bid
     assert fill.costs_total > 0 and fill.costs_breakdown["segment"] == "option"  # a trade: charged
@@ -289,6 +290,7 @@ async def test_a_position_still_open_after_expiry_is_closed_at_the_last_real_quo
     [outcome] = await _sweep(db_session_factory, redis)
 
     assert outcome.status == "closed" and "12.5" in outcome.detail
+    assert outcome.forced is True  # closed only after the contract had expired
     [fill] = await _fills(db_session_factory, subscription)
     assert (fill.side, fill.filled_quantity, fill.avg_fill_price) == ("sell", 65, 12.5)
     assert fill.costs_total == 0.0 and fill.costs_breakdown is None  # a cleanup is not a trade

@@ -1,0 +1,133 @@
+{
+  "_comment": "One set of cases for what the Paper Desk flags, run by BOTH implementations: attentionItems in lib/paper-trading.ts (e2e/paper-trading-logic.spec.ts) and attention_items in backend/src/orchestration/paper_attention.py (backend/tests/test_paper_attention.py). A rule changed on one side makes the other fail until it follows. Subscriptions carry only the fields the rules read, in the shape GET /paper-trading/subscriptions returns them.",
+  "stale_price_seconds": 120,
+  "cases": [
+    {
+      "name": "nothing to flag",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "a1", "symbol": "RELIANCE", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 1, "unrealized_pnl": 0, "last_tick": {"age_seconds": 5}}
+      ],
+      "expected": []
+    },
+    {
+      "name": "a switched-off subscription still holding a position is critical and can be closed",
+      "market_open": false,
+      "subscriptions": [
+        {"id": "a1", "symbol": "RELIANCE", "instrument_kind": "equity", "option_strategy": null, "is_active": false, "managed": false, "state": "inactive", "state_reason": null, "open_legs": 1, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": [
+        {"id": "a1:unmanaged", "severity": "critical", "title": "RELIANCE is holding a position nobody is watching", "detail": "The subscription is switched off, so its stop-loss no longer runs. Close the position, or switch the subscription back on.", "action": "close"}
+      ]
+    },
+    {
+      "name": "a switched-off subscription with nothing open is not flagged",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "a1", "symbol": "RELIANCE", "instrument_kind": "equity", "option_strategy": null, "is_active": false, "managed": true, "state": "inactive", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": []
+    },
+    {
+      "name": "no price feed is a warning with the reason, or a default one",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "a1", "symbol": "TCS", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "halted_no_data", "state_reason": "zerodha rejected the stored credentials (HTTP 403)", "open_legs": 0, "unrealized_pnl": null, "last_tick": null},
+        {"id": "a2", "symbol": "INFY", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "halted_no_data", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": [
+        {"id": "a2:halted", "severity": "warning", "title": "INFY is not trading", "detail": "There is no real price feed for it.", "action": null},
+        {"id": "a1:halted", "severity": "warning", "title": "TCS is not trading", "detail": "zerodha rejected the stored credentials (HTTP 403)", "action": null}
+      ]
+    },
+    {
+      "name": "waiting for history is information, with the reason or a default one",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "a1", "symbol": "TCS", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "awaiting_history", "state_reason": "only 9 daily bars on record, 15 needed", "open_legs": 0, "unrealized_pnl": null, "last_tick": null},
+        {"id": "a2", "symbol": "INFY", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "awaiting_history", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": [
+        {"id": "a2:history", "severity": "info", "title": "INFY is waiting for price history", "detail": "It needs more real price history before it can signal.", "action": null},
+        {"id": "a1:history", "severity": "info", "title": "TCS is waiting for price history", "detail": "only 9 daily bars on record, 15 needed", "action": null}
+      ]
+    },
+    {
+      "name": "an open position with no price is a warning, even one leg; flat, or priced at zero, is not",
+      "market_open": false,
+      "subscriptions": [
+        {"id": "a1", "symbol": "RELIANCE", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 2, "unrealized_pnl": null, "last_tick": null},
+        {"id": "a2", "symbol": "TCS", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": null},
+        {"id": "a3", "symbol": "INFY", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 1, "unrealized_pnl": 0, "last_tick": null},
+        {"id": "a4", "symbol": "SBIN", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 1, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": [
+        {"id": "a1:unpriced", "severity": "warning", "title": "RELIANCE has a position with no price", "detail": "At least one open leg has never been priced, so its value and stop-loss are unknown.", "action": null},
+        {"id": "a4:unpriced", "severity": "warning", "title": "SBIN has a position with no price", "detail": "At least one open leg has never been priced, so its value and stop-loss are unknown.", "action": null}
+      ]
+    },
+    {
+      "name": "a stale price counts only after the limit, only while the market is open",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "a1", "symbol": "AAA", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 120}},
+        {"id": "a2", "symbol": "BBB", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 121}}
+      ],
+      "expected": [
+        {"id": "a2:stale", "severity": "warning", "title": "BBB has a stale price", "detail": "The last price arrived 2m ago while the market is open.", "action": null}
+      ]
+    },
+    {
+      "name": "the same stale price is nothing once the market is shut",
+      "market_open": false,
+      "subscriptions": [
+        {"id": "a2", "symbol": "BBB", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 5000}}
+      ],
+      "expected": []
+    },
+    {
+      "name": "how long ago is said in minutes, hours (one place, half rounded up) or days",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "m1", "symbol": "MIN", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 150}},
+        {"id": "h1", "symbol": "HRS", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 4500}},
+        {"id": "d1", "symbol": "DAY", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 200000}}
+      ],
+      "expected": [
+        {"id": "d1:stale", "severity": "warning", "title": "DAY has a stale price", "detail": "The last price arrived 2d ago while the market is open.", "action": null},
+        {"id": "h1:stale", "severity": "warning", "title": "HRS has a stale price", "detail": "The last price arrived 1.3h ago while the market is open.", "action": null},
+        {"id": "m1:stale", "severity": "warning", "title": "MIN has a stale price", "detail": "The last price arrived 3m ago while the market is open.", "action": null}
+      ]
+    },
+    {
+      "name": "options and futures are named for what they are",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "o1", "symbol": "NIFTY", "instrument_kind": "option", "option_strategy": "vertical_spread", "is_active": false, "managed": false, "state": "inactive", "state_reason": null, "open_legs": 2, "unrealized_pnl": null, "last_tick": null},
+        {"id": "o2", "symbol": "NIFTY", "instrument_kind": "option", "option_strategy": "long_option", "is_active": false, "managed": false, "state": "inactive", "state_reason": null, "open_legs": 1, "unrealized_pnl": null, "last_tick": null},
+        {"id": "f1", "symbol": "NIFTY", "instrument_kind": "future", "option_strategy": null, "is_active": false, "managed": false, "state": "inactive", "state_reason": null, "open_legs": 1, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": [
+        {"id": "o1:unmanaged", "severity": "critical", "title": "NIFTY credit spread is holding a position nobody is watching", "detail": "The subscription is switched off, so its stop-loss no longer runs. Close the position, or switch the subscription back on.", "action": "close"},
+        {"id": "f1:unmanaged", "severity": "critical", "title": "NIFTY future is holding a position nobody is watching", "detail": "The subscription is switched off, so its stop-loss no longer runs. Close the position, or switch the subscription back on.", "action": "close"},
+        {"id": "o2:unmanaged", "severity": "critical", "title": "NIFTY long option is holding a position nobody is watching", "detail": "The subscription is switched off, so its stop-loss no longer runs. Close the position, or switch the subscription back on.", "action": "close"}
+      ]
+    },
+    {
+      "name": "the most urgent comes first, then by name",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "w1", "symbol": "ZED", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "halted_no_data", "state_reason": "no broker is connected", "open_legs": 0, "unrealized_pnl": null, "last_tick": null},
+        {"id": "c1", "symbol": "MID", "instrument_kind": "equity", "option_strategy": null, "is_active": false, "managed": false, "state": "inactive", "state_reason": null, "open_legs": 1, "unrealized_pnl": null, "last_tick": null},
+        {"id": "w2", "symbol": "ABC", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "halted_no_data", "state_reason": "no broker is connected", "open_legs": 0, "unrealized_pnl": null, "last_tick": null},
+        {"id": "i1", "symbol": "AAA", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "awaiting_history", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": null}
+      ],
+      "expected": [
+        {"id": "c1:unmanaged", "severity": "critical", "title": "MID is holding a position nobody is watching", "detail": "The subscription is switched off, so its stop-loss no longer runs. Close the position, or switch the subscription back on.", "action": "close"},
+        {"id": "w2:halted", "severity": "warning", "title": "ABC is not trading", "detail": "no broker is connected", "action": null},
+        {"id": "w1:halted", "severity": "warning", "title": "ZED is not trading", "detail": "no broker is connected", "action": null},
+        {"id": "i1:history", "severity": "info", "title": "AAA is waiting for price history", "detail": "It needs more real price history before it can signal.", "action": null}
+      ]
+    }
+  ]
+}

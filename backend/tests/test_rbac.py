@@ -113,6 +113,9 @@ _RBAC_EXEMPT_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/v1/webhooks/discord"),
         ("POST", "/api/v1/webhooks/slack"),
         ("POST", "/api/v1/webhooks/telegram"),
+        # Alertmanager (Phase 5): another container with no user to sign in as, authenticated by a
+        # bearer token created on first boot (src.notifications.alertmanager_token).
+        ("POST", "/api/v1/webhooks/alertmanager"),
     }
 )
 

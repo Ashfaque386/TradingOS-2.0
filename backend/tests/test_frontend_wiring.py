@@ -39,6 +39,7 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/webhooks/telegram"): "inbound webhook, called by Telegram",
     ("POST", "/api/v1/webhooks/discord"): "inbound webhook, called by Discord",
     ("POST", "/api/v1/webhooks/slack"): "inbound webhook, called by Slack",
+    ("POST", "/api/v1/webhooks/alertmanager"): "inbound webhook, called by Alertmanager",
     # ---- by design: a scheduled job's manual trigger (Mission Control's Run now runs it) ----
     ("POST", "/api/v1/market-data/backup"): "scheduled data-lake backup",
     ("POST", "/api/v1/market-data/bhavcopy-fallback"): "scheduled bhavcopy fallback",

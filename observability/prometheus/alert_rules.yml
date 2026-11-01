@@ -37,6 +37,27 @@ groups:
             Mon-Fri). No orders, signals, or risk-gate checks can run while
             the backend is down -- page immediately.
 
+  - name: tradingos-engine-alerts
+    rules:
+      # The watcher (src/orchestration/engine_alert_watcher.py) completes a look every minute and
+      # stamps this gauge. A stopped watcher would otherwise look like a quiet day: no alerts is
+      # exactly what it would show. Judged only in the approximate market window the rule above
+      # uses, 03:45-10:00 UTC on weekdays, and not for the first minutes after a restart.
+      - alert: EngineAlertWatcherStalled
+        expr: |
+          (time() - tradingos_engine_alert_watch_last_success_timestamp_seconds > 300)
+          and on() (hour(vector(time())) >= 3 and hour(vector(time())) < 10)
+          and on() (day_of_week(vector(time())) >= 1 and day_of_week(vector(time())) <= 5)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The engine-alert watcher has stopped"
+          description: >-
+            No look at the Paper Desk's attention conditions has completed for over 5 minutes
+            during market hours, so a position nobody is watching or a stopped price feed would
+            not be reported. Check the backend logs for engine_alerts errors.
+
   - name: tradingos-latency-budgets
     rules:
       - alert: OrderDispatchLatencyBudgetBreached

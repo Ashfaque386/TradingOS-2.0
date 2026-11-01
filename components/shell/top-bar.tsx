@@ -1,8 +1,10 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
+  BellRing,
   Search,
   Command,
   Circle,
@@ -17,6 +19,7 @@ import { roleLabel } from '@/components/auth/auth-provider'
 import type { Role } from '@/lib/api'
 import { PALETTES } from '@/components/providers/preferences-provider'
 import { OPEN_COMMAND_PALETTE_EVENT } from '@/components/shell/command-palette'
+import { chipLabel } from '@/lib/engine-alerts'
 
 function openCommandPalette() {
   window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE_EVENT))
@@ -30,6 +33,8 @@ interface TopBarProps {
   /** `checking` is the first read still in flight; `unknown` is a read that failed. */
   marketHours?: 'open' | 'closed' | 'unknown' | 'checking'
   systemHealth?: 'healthy' | 'degraded' | 'critical' | 'checking'
+  /** Open engine alerts; null when they could not be read (then nothing is shown, not a zero). */
+  engineAlerts?: { open: number; critical: number } | null
   userName?: string
   onUserMenu?: () => void
   role?: Role
@@ -43,6 +48,7 @@ export function TopBar({
   onPowerSaveChange,
   marketHours = 'open',
   systemHealth = 'healthy',
+  engineAlerts = null,
   userName = 'User',
   onUserMenu,
   role = 'ReadOnlyAuditor',
@@ -60,6 +66,7 @@ export function TopBar({
   }[systemHealth]
 
   const currentPalette = PALETTES.find((p) => p.id === palette)
+  const alertsChip = engineAlerts ? chipLabel(engineAlerts.open, engineAlerts.critical) : null
 
   return (
     <header className="shell-topbar fixed top-0 left-0 right-0 h-16 border-b border-[var(--glass-border)] flex items-center justify-between px-6 z-40">
@@ -103,6 +110,25 @@ export function TopBar({
           />
           <span className="hidden sm:inline capitalize">{systemHealth}</span>
         </div>
+
+        {/* Open engine alerts: links to the panel on the paper desk */}
+        {alertsChip && engineAlerts && (
+          <Link
+            href="/paper-trading#engine-alerts"
+            title={alertsChip.title}
+            aria-label={alertsChip.title}
+            data-testid="engine-alerts-chip"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all duration-200 ${
+              engineAlerts.critical > 0
+                ? 'border-rose-400/40 bg-rose-400/10 text-rose-200 hover:bg-rose-400/20'
+                : 'border-amber-400/40 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20'
+            }`}
+          >
+            <BellRing className="w-4 h-4" aria-hidden="true" />
+            <span className="hidden sm:inline">{alertsChip.text}</span>
+            <span className="sm:hidden">{engineAlerts.open}</span>
+          </Link>
+        )}
 
         {/* Market hours */}
         <div

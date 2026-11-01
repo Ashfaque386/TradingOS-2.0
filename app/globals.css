@@ -653,6 +653,13 @@
   .pt-alert-critical svg { color: #fb7185; } .pt-alert-warning svg { color: #f59e0b; } .pt-alert-info svg { color: #22d3ee; }
   .pt-alert h3 { color: #f1f5f9; font-size: .74rem; font-weight: 600; }
   .pt-alert p { margin-top: .15rem; color: #94a3b8; font-size: .66rem; max-width: 70ch; }
+  .pt-engine-alerts { display: grid; gap: .55rem; scroll-margin-top: 5rem; }
+  .pt-engine-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .2rem 1rem; }
+  .pt-engine-head h2 { color: #f1f5f9; font-size: .8rem; font-weight: 600; }
+  .pt-engine-head p { color: #94a3b8; font-size: .64rem; }
+  .pt-alert .pt-alert-facts { margin-top: .3rem; color: #64748b; font: .56rem 'JetBrains Mono', monospace; }
+  .pt-engine-cleared > summary { cursor: pointer; width: fit-content; margin-bottom: .45rem; color: #94a3b8; font-size: .66rem; }
+  .pt-engine-cleared > summary:hover { color: #e2e8f0; }
 
   /* Toolbar */
   .pt-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem 1rem; }

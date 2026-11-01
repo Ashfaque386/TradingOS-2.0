@@ -24,14 +24,10 @@ scrape_configs:
 
 alerting:
   alertmanagers:
+    # The `alertmanager` compose service (observability/alertmanager/alertmanager.yml), reached
+    # over the internal network like the backend above; it is not published to the host. It
+    # forwards what fires to the TradingOS backend's alert webhook, which tells the channels
+    # subscribed to the `engine` alert level. The rules stay visible in Prometheus's own UI
+    # (http://localhost:9090/alerts) and Grafana whether or not anything is subscribed.
     - static_configs:
-        - targets: []
-      # No Alertmanager service in this stack (by design, per the
-      # solo-operator scale this codebase has picked consistently --
-      # same call as skipping Vault/Kubernetes/a separate object-store
-      # service elsewhere): alert *rules* below are real and evaluated,
-      # their firing state is visible in Prometheus's own UI/API
-      # (http://localhost:9090/alerts) and in the Grafana dashboard's
-      # alert panel, but nothing routes them to email/Slack/PagerDuty
-      # yet. Add an alertmanager static_config target here (and an
-      # `alertmanager` compose service) if/when that's wanted.
+        - targets: ["alertmanager:9093"]

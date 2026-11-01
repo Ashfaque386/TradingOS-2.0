@@ -309,7 +309,8 @@ export type AttentionItem = {
   action: 'close' | 'activate' | 'deactivate' | null
 }
 
-const STALE_PRICE_SECONDS = 120
+/** The backend's PAPER_STALE_PRICE_SECONDS default; the shared fixture pins the two together. */
+export const STALE_PRICE_SECONDS = 120
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 } as const
 
 export function subscriptionName(sub: Pick<PaperSubscription, 'symbol' | 'instrument_kind' | 'option_strategy'>): string {

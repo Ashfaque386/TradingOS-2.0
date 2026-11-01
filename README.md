@@ -21,12 +21,12 @@ self-hosted, single-operator system, not a multi-tenant product.
 | **The Paper Desk** (`/paper-trading`) | Today's result as *price result − costs = net*, what needs attention, one lane per subscription (legs, payoff at expiry, costs and fills, settings), add / switch off / close / edit dialogs with live previews and typed confirmation. |
 | **Live trading** | Order-intent pipeline with the safety layer in front of the broker, per-strategy autonomy switch, standing rate and notional caps, Zerodha Kite and Upstox adapters. |
 | **Safety and audit** | Kill switch, compliance checker, naked-options scanner, correlation constraint, dual-control risk limits, a hash-chained append-only audit log with a WORM archive. |
-| **Operations** | Prometheus + Grafana (tick age, quote-call latency, order dispatch), notifications to Telegram / Discord / Slack, scheduled market-data ingestion into a DuckDB/Parquet lake, nightly lake backup. |
+| **Operations** | Prometheus + Alertmanager + Grafana (tick age, quote-call latency, order dispatch), notifications to Telegram / Discord / Slack, **engine alerts** (a position nobody is watching, a stopped price feed, a stop-loss exit, a roll or square-off that could not be done, a broker refusing its credentials; listed on the Paper Desk, counted in the top bar), scheduled market-data ingestion into a DuckDB/Parquet lake, nightly lake backup. |
 
 ## Running it
 
 Docker is the supported way. `docker compose up` builds and runs the frontend, the backend (API and
-its Postgres in one container), Redis, Qdrant, Temporal, Prometheus and Grafana.
+its Postgres in one container), Redis, Qdrant, Temporal, Prometheus, Alertmanager and Grafana.
 
 ```bash
 cp .env.example .env        # then set SECRETS_ENCRYPTION_KEY, see below
@@ -34,7 +34,8 @@ docker compose up --build -d
 ```
 
 Ports (all bound to `127.0.0.1` unless you set `BIND_HOST`): frontend **3000**, API **8000**,
-Prometheus **9090**, Grafana **3001**. Open <http://localhost:3000> and register: **the first user to
+Prometheus **9090**, Grafana **3001** (Alertmanager has no host port: Prometheus and the backend reach
+it over the stack's network). Open <http://localhost:3000> and register: **the first user to
 register becomes the SystemAdministrator**, so do that before exposing the port to anyone else.
 
 **First-time setup — Settings UI (Broker Config, LLM Providers, Notification Channels):** these three
@@ -53,6 +54,8 @@ trading on generated data (`PAPER_TRADING_SYNTHETIC=true`), works without it.
 your notification channels). Paper trading needs a connected broker for quotes, depth, history and
 the instrument lists; without one the Paper Desk's symbol search and previews say so and subscriptions
 wait.
+
+**Alerts.** Settings → Notification Channels has five alert levels per channel. *Engine alerts* tells you when the trading engine needs you: a switched-off subscription still holding a position, a price feed that has stopped, a position with no price, a stop-loss exit, a futures roll or an expiry square-off that could not be done, a broker refusing the stored credentials. A condition is announced once when it starts (a warning must last `ENGINE_ALERT_CONFIRM_SECONDS`, two minutes by default; a position nobody is watching is announced at once) and once when it clears. Every alert, open or cleared, is listed on the Paper Desk and counted in the top bar. Prometheus's rules reach the same channels through Alertmanager, which posts to the backend with a token created on first boot; Settings shows whether that path is up. One limit: an alert about the backend being down cannot be delivered by the backend.
 
 **Tuning.** Every `PAPER_*` setting (tick and order-book age limits, futures margin and roll, option
 expiry rules, cost overrides) is in `.env.example`, forwarded by `docker-compose.yml`, and explained in

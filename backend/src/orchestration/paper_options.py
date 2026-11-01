@@ -79,6 +79,7 @@ from src.models.data_source import DataSource, combine
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
+from src.orchestration.engine_alerts import AlertCandidate, record_event_safely
 from src.orchestration.paper_subscription_controls import (
     CloseBlockedError,
     PriceUnavailableError,
@@ -648,6 +649,21 @@ async def _exit(
         reason=reason,
         legs=[(f.symbol, f.side, f.filled_quantity) for f in fills],
     )
+    if reason.startswith("stop-loss") and any(f.filled_quantity > 0 for f in fills):
+        await record_event_safely(
+            db,
+            AlertCandidate(
+                key=f"stop_loss:{group}",
+                kind="stop_loss",
+                severity="warning",
+                title=f"{subscription.symbol}: option stop-loss hit, structure closed",
+                detail=(
+                    f"Closed {sum(1 for f in fills if f.filled_quantity > 0)} of {len(held)} "
+                    f"legs: {reason}."
+                ),
+                subscription_id=subscription.id,
+            ),
+        )
     return OptionEvaluation("exited", tuple(fills), reason)
 
 
@@ -660,6 +676,8 @@ class SweepOutcome:
     symbol: str
     status: Literal["closed", "postponed", "no_price"]
     detail: str = ""
+    # Closed at the last quote after the contract had already expired, not squared off on time.
+    forced: bool = False
 
 
 def _expiry_of(subscription: PaperTradingSubscription, symbol: str) -> date | None:
@@ -798,5 +816,9 @@ async def _close_at_last_quote(
         price_basis=(f"last real quote, {age / 3600:.1f}h old, at the expiry sweep", tick.source),
     )
     return SweepOutcome(
-        str(subscription.id), position.symbol, "closed", f"at the last quote, {tick.price}"
+        str(subscription.id),
+        position.symbol,
+        "closed",
+        f"at the last quote, {tick.price}",
+        forced=True,
     )

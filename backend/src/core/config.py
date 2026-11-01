@@ -204,6 +204,12 @@ class Settings(BaseSettings):
     # to trade or stop out on. It is not the 100 ms WebSocket-relay guard, which would discard
     # nearly every polled tick (found by measuring the cadence; see docs/CLAUDE.md, Phase 7).
     paper_tick_max_age_seconds: float = 20.0
+    # How old the newest price may be before it counts as stale to a person: the Paper Desk's
+    # "stale price" notice and the engine-alert watcher use it, and so does a manual close, which
+    # will not use a tick older than this. One setting, so what the screen says is stale and what
+    # the alert says is stale cannot differ (the console mirrors the default in
+    # lib/paper-trading.ts, pinned by a shared test fixture).
+    paper_stale_price_seconds: float = 120.0
     # The newest ticks kept per symbol stream (approximate trim). At one tick per 3 seconds over a
     # 6.25-hour session this is ~7,500 a day, so the default keeps about a day; a consumer that
     # falls further behind than that loses the oldest ticks, not the newest.
@@ -270,6 +276,19 @@ class Settings(BaseSettings):
     # ciphertext blob. Relative to CWD, same convention as
     # secrets_store_path above.
     notification_channel_store_path: str = "secrets/notification_channels.enc"
+
+    # Engine alerts (src.orchestration.engine_alerts). A condition the watcher sees is announced
+    # only once it has lasted this long, so a price that is late for one poll does not message
+    # anyone; a critical one (a position nobody is watching) is announced at once.
+    engine_alert_confirm_seconds: float = 120.0
+    # Alertmanager (the compose service Prometheus sends its alerts to) posts them back to
+    # POST /api/v1/webhooks/alertmanager with a bearer token. The token is created on first boot
+    # in this file, on a volume only the backend writes and Alertmanager reads, kept apart from
+    # the encrypted stores. An empty path turns the webhook off (it then refuses every call).
+    alertmanager_token_path: str = "alertmanager_token/webhook_token"
+    # Where the backend asks whether Alertmanager is up (Settings shows the answer). Empty = not
+    # part of this deployment.
+    alertmanager_url: str = ""
 
 
 @lru_cache

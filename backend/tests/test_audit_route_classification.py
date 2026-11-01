@@ -283,6 +283,7 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/webhooks/telegram"): (N, "inbound webhook"),
     ("POST", "/webhooks/discord"): (N, "inbound webhook"),
     ("POST", "/webhooks/slack"): (N, "inbound webhook"),
+    ("POST", "/webhooks/alertmanager"): (N, "inbound webhook; the alert episode is its own record"),
 }
 
 

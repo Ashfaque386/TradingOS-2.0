@@ -66,6 +66,7 @@ from src.models.data_source import DataSource, combine
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
+from src.orchestration.engine_alerts import AlertCandidate, record_event_safely
 from src.orchestration.risk_gate import OrderIntentRejectedError, create_order_intent
 
 logger = structlog.get_logger(__name__)
@@ -502,6 +503,7 @@ async def process_tick(
         return None
 
     fill = simulate_fill(side=side, quantity=quantity, book=book)
+    cost_before_fill = position.avg_cost
 
     await _persist_fill(
         db,
@@ -522,4 +524,22 @@ async def process_tick(
         .order_by(PaperFill.created_at.desc())
         .limit(1)
     )
-    return result.scalar_one()
+    persisted = result.scalar_one()
+    if stop.triggered and fill.filled_quantity > 0 and fill.avg_fill_price is not None:
+        await record_event_safely(
+            db,
+            AlertCandidate(
+                key=f"stop_loss:{persisted.id}",
+                kind="stop_loss",
+                severity="warning",
+                title=f"{subscription.trading_symbol}: stop-loss hit, position closed",
+                detail=(
+                    f"{'Sold' if side == 'sell' else 'Bought back'} {fill.filled_quantity} of "
+                    f"{fill.requested_quantity} at an average {fill.avg_fill_price:.2f} "
+                    f"(position cost {cost_before_fill:.2f}, "
+                    f"stop-loss {subscription.stop_loss_pct:g}%)."
+                ),
+                subscription_id=subscription.id,
+            ),
+        )
+    return persisted

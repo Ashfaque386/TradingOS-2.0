@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
+import { AlertmanagerStatus } from '@/components/settings/alertmanager-status'
 import { InboundSettings } from '@/components/settings/inbound-settings'
 import { RiskLimitsSection } from '@/components/settings/risk-limits-section'
 import { SigningKeyCard } from '@/components/settings/signing-key-card'
@@ -933,7 +934,7 @@ function SkillsSection() {
 
 /* --------------------------- Notification wizard --------------------------- */
 
-const ALERT_LABELS: Record<AlertLevel, string> = { 'kill-switch': 'Kill-switch trips', 'sign-off': 'Sign-off items', 'go-live': 'Go-live gate passes', daily: 'Daily summary' }
+const ALERT_LABELS: Record<AlertLevel, string> = { 'kill-switch': 'Kill-switch trips', 'sign-off': 'Sign-off items', 'go-live': 'Go-live gate passes', daily: 'Daily summary', engine: 'Engine alerts' }
 
 function TelegramWizard({ status, canEdit, onChanged }: { status: NotificationChannelStatus; canEdit: boolean; onChanged: () => void }) {
   const [botToken, setBotToken] = useState('')
@@ -1153,6 +1154,7 @@ function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void
       <div className="set-block-head"><div><h2>Notification Channels</h2><p>A guided setup per channel, ending in a real test message you can watch land in your chat.</p></div></div>
       <SectionStatus load={load} what="the notification channels" onRetry={reload} />
       {load.loaded && <div className="set-channel-grid">{NOTIFICATION_CHANNELS.map((c) => <ChannelWizardCard key={c} channel={c as 'telegram' | 'discord' | 'slack'} status={byChannel(c)} canEdit={canEdit} onChanged={reload} />)}</div>}
+      {load.loaded && <AlertmanagerStatus />}
     </div>
   )
 }

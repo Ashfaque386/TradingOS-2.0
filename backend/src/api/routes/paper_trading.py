@@ -481,7 +481,7 @@ def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
         realized_pnl=view.realized_pnl,
         costs_total=view.costs_total,
         net_realized_pnl=view.realized_pnl - view.costs_total,
-        managed=sub.is_active or view.open_legs == 0,
+        managed=view.managed,
         last_tick=(
             PaperLastTick(
                 price=view.last_tick.price,

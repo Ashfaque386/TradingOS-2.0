@@ -1538,6 +1538,43 @@ class NotificationChannelStatusResponse(BaseModel):
     alert_levels: list[str]
 
 
+class EngineAlertResponse(BaseModel):
+    id: uuid.UUID
+    key: str
+    source: Literal["watcher", "event", "alertmanager"]
+    kind: str
+    severity: Literal["critical", "warning", "info"]
+    title: str
+    detail: str
+    subscription_id: uuid.UUID | None
+    opened_at: datetime_type
+    last_seen_at: datetime_type
+    # None while it is still happening.
+    resolved_at: datetime_type | None
+    # When the opening notice went out to the channels; None if it cleared before it had lasted
+    # long enough to be announced.
+    notified_at: datetime_type | None
+
+
+class EngineAlertListResponse(BaseModel):
+    # Across all sources and independent of `limit`, so the top-bar count is the real number.
+    open_count: int
+    critical_open_count: int
+    alerts: list[EngineAlertResponse]
+
+
+class AlertmanagerStatusResponse(BaseModel):
+    # False when the deployment has no Alertmanager (ALERTMANAGER_URL unset).
+    configured: bool
+    # None when it was not asked (not configured); otherwise whether /-/healthy answered.
+    reachable: bool | None
+    detail: str
+    # The webhook token exists on its volume.
+    token_ready: bool
+    # Newest alert Prometheus has sent through it: the proof the whole path works.
+    last_alert_received_at: datetime_type | None
+
+
 class DetectTelegramChatIdRequest(BaseModel):
     bot_token: str = Field(min_length=1)
 

@@ -144,6 +144,18 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/engine-alerts": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/engine-alerts/alertmanager": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/equity/{mode}": [
     "PortfolioManager",
     "ReadOnlyAuditor",

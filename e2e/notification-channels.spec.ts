@@ -91,6 +91,39 @@ test('an alert-level change that fails to save is shown as not saved', async ({ 
   }
 })
 
+test('engine alerts can be turned on for a channel, next to the other four levels', async ({ page }) => {
+  const token = await adminToken()
+  await removeSlack(token)
+  await configureSlack(token)
+  try {
+    await login(page, E2E_USERS.admin)
+    await page.goto('/settings?section=notifications')
+    const levels = slackCard(page).locator('.set-alert-pref')
+    await expect(levels).toHaveText([
+      'Kill-switch trips',
+      'Sign-off items',
+      'Go-live gate passes',
+      'Daily summary',
+      'Engine alerts',
+    ])
+
+    await slackCard(page).getByRole('button', { name: 'Enable Engine alerts on slack' }).click()
+
+    await expect(slackCard(page).getByRole('button', { name: 'Disable Engine alerts on slack' })).toBeVisible()
+    await expect
+      .poll(async () => {
+        const res = await fetch(`${API_BASE_URL}/api/v1/notification-channels`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const channels = (await res.json()) as { channel: string; alert_levels: string[] }[]
+        return channels.find((c) => c.channel === 'slack')?.alert_levels
+      })
+      .toEqual(['engine'])
+  } finally {
+    await removeSlack(token)
+  }
+})
+
 test('an alert-level change is saved without losing the channel', async ({ page }) => {
   const token = await adminToken()
   await removeSlack(token)

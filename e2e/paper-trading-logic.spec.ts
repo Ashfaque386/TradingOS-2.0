@@ -19,11 +19,13 @@ import {
   payoffSummary,
   planSettingsChange,
   settingsForm,
+  STALE_PRICE_SECONDS,
   tone,
   underlyingSpot,
   waterfall,
 } from '../lib/paper-trading'
 import type { PaperFill, PaperPosition, PaperSubscription } from '../lib/api'
+import attentionFixture from './fixtures/paper-attention.json'
 
 // The desk's pure logic -- no browser, no backend. Each case states the answer worked out by hand.
 
@@ -211,6 +213,43 @@ test.describe('what needs attention', () => {
 
   test('a healthy desk has nothing to show', () => {
     expect(attentionItems([sub()], true)).toEqual([])
+  })
+
+  // The same cases the server runs (backend/tests/test_paper_attention.py): the engine alerts that
+  // message a person must say exactly what this screen says, so neither side may change a rule alone.
+  test.describe('agrees with the server on the shared cases', () => {
+    test('with the same stale-price limit', () => {
+      expect(STALE_PRICE_SECONDS).toBe(attentionFixture.stale_price_seconds)
+    })
+
+    type FixtureSub = {
+      id: string
+      symbol: string
+      instrument_kind: PaperSubscription['instrument_kind']
+      option_strategy: PaperSubscription['option_strategy']
+      is_active: boolean
+      managed: boolean
+      state: PaperSubscription['state']
+      state_reason: string | null
+      open_legs: number
+      unrealized_pnl: number | null
+      last_tick: { age_seconds: number } | null
+    }
+    for (const fixtureCase of attentionFixture.cases) {
+      test(fixtureCase.name, () => {
+        const subs = (fixtureCase.subscriptions as FixtureSub[]).map((s) =>
+          sub({ ...s, last_tick: s.last_tick ? { price: 100, source: 'zerodha', ...s.last_tick } : null }),
+        )
+        const items = attentionItems(subs, fixtureCase.market_open).map((i) => ({
+          id: i.id,
+          severity: i.severity,
+          title: i.title,
+          detail: i.detail,
+          action: i.action,
+        }))
+        expect(items).toEqual(fixtureCase.expected)
+      })
+    }
   })
 })
 

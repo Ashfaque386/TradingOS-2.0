@@ -24,6 +24,7 @@ from src.gateway.apply import apply_config_from_file
 from src.gateway.watcher import ConfigWatcher
 from src.models.agent_config_version import ConfigVersionStatus
 from src.models.organization_run import RunStatus
+from src.notifications.alertmanager_token import ensure_token
 from src.observability.audit_middleware import AuditLoggingMiddleware
 from src.observability.correlation import CorrelationIdMiddleware
 from src.observability.logging import configure_logging
@@ -32,6 +33,7 @@ from src.observability.rate_limit_middleware import RateLimitMiddleware
 from src.observability.scheduled_job_history import attach_run_history_listener
 from src.observability.scheduler_registry import register_scheduler, unregister_all
 from src.orchestration.audit_scheduler import start_audit_scheduler
+from src.orchestration.engine_alert_watcher import start_engine_alert_watcher
 from src.orchestration.investor_reporting_scheduler import start_investor_reporting_scheduler
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
 from src.orchestration.market_data_scheduler import start_market_data_scheduler
@@ -77,6 +79,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await warn_if_signing_key_weak(session)
     except Exception:  # noqa: BLE001 - a diagnostic must never stop the app starting
         logger.warning("security.jwt_signing_key_check_failed")
+
+    # The bearer token Alertmanager presents to the alert webhook: created on first boot, on a
+    # volume of its own (see src/notifications/alertmanager_token.py).
+    ensure_token(settings.alertmanager_token_path)
 
     watcher = ConfigWatcher(config_path)
     watcher.start()
@@ -184,6 +190,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # day for each strategy in paper trading, so the streak builds up without anyone running it.
     shadow_mode_scheduler = start_shadow_mode_scheduler(AsyncSessionLocal)
 
+    # Engine alerts (Phase 5): a minute-by-minute look at what the Paper Desk would flag, so a
+    # position nobody is watching or a price feed that has stopped reaches a person who is not
+    # looking at the page.
+    engine_alert_scheduler = start_engine_alert_watcher(
+        AsyncSessionLocal, redis=redis, price_provider=data_lake_price_provider
+    )
+
     # Daily summary alert (Build Spec §18) -- the one alert level with no
     # single triggering event; kill-switch/sign-off/go-live fire
     # synchronously from the real code paths that produce them instead.
@@ -213,6 +226,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ("audit", audit_scheduler),
         ("risk_monitor", risk_monitor_scheduler),
         ("shadow_mode", shadow_mode_scheduler),
+        ("engine_alerts", engine_alert_scheduler),
         ("notification", notification_scheduler),
         ("screener", screener_scheduler),
         ("post_trade_review", post_trade_review_scheduler),
@@ -238,6 +252,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     audit_scheduler.shutdown(wait=False)
     risk_monitor_scheduler.shutdown(wait=False)
     shadow_mode_scheduler.shutdown(wait=False)
+    engine_alert_scheduler.shutdown(wait=False)
     notification_scheduler.shutdown(wait=False)
     screener_scheduler.shutdown(wait=False)
     post_trade_review_scheduler.shutdown(wait=False)

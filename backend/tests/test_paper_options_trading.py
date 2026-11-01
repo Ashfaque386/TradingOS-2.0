@@ -27,6 +27,7 @@ from src.engine.paper_trading.tick_feed import Tick, publish_tick, tick_stream_k
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.models.audit_log import AuditLog
 from src.models.daily_signal import DailySignal
+from src.models.engine_alert_event import EngineAlertEvent
 from src.models.paper_fill import PaperFill
 from src.models.paper_position import PaperPosition
 from src.orchestration.paper_options import (
@@ -526,6 +527,37 @@ async def test_a_structure_that_has_lost_half_its_premium_is_closed(db_session_f
     assert (fill.side, fill.filled_quantity, fill.avg_fill_price) == ("sell", 65, 48.0)
     assert fill.costs_breakdown["stt"] == pytest.approx(65 * 48.0 * 0.0015)  # a sell: STT
     assert (await _legs(db_session_factory, subscription))[CALL_24500].quantity == 0
+
+
+async def test_a_stop_loss_exit_is_recorded_as_an_engine_alert(db_session_factory, redis):
+    subscription = await _subscription(db_session_factory)
+    await _signal(db_session_factory, subscription, "BUY")
+    await _hold(db_session_factory, subscription, CALL_24500, 65, 100.0)
+    await _quote(redis, CALL_24500, 49.0)
+
+    await _evaluate(db_session_factory, redis, subscription)
+
+    async with db_session_factory() as db:
+        [event] = (await db.execute(select(EngineAlertEvent))).scalars().all()
+    assert (event.source, event.kind, event.severity) == ("event", "stop_loss", "warning")
+    assert event.title == "NIFTY: option stop-loss hit, structure closed"
+    assert event.detail == "Closed 1 of 1 legs: stop-loss (50% of the premium)."
+    assert event.subscription_id == subscription.id
+    assert event.resolved_at == event.opened_at  # over the moment it happened
+    assert event.key.startswith("stop_loss:")
+
+
+async def test_an_exit_for_another_reason_is_not_a_stop_loss_alert(db_session_factory, redis):
+    subscription = await _subscription(db_session_factory)
+    await _signal(db_session_factory, subscription, "BUY")
+    await _hold(db_session_factory, subscription, CALL_24500, 65, 100.0)
+    await _quote(redis, CALL_24500, 100.0)
+    await _signal(db_session_factory, subscription, "SELL")  # the signal turns: not a stop
+
+    assert (await _evaluate(db_session_factory, redis, subscription)).action == "exited"
+
+    async with db_session_factory() as db:
+        assert (await db.execute(select(EngineAlertEvent))).scalars().all() == []
 
 
 async def test_a_smaller_loss_is_held(db_session_factory, redis):

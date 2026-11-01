@@ -90,7 +90,7 @@ function ShellFrame({
   onLogout: () => void
   children: React.ReactNode
 }) {
-  const { marketHours, killSwitch, loading } = useConsoleState()
+  const { marketHours, killSwitch, engineAlerts, loading } = useConsoleState()
   // A switch we could not read is not a switch that is armed: show it as degraded, not healthy.
   const systemHealth =
     killSwitch.paper?.tripped || killSwitch.live?.tripped
@@ -111,6 +111,7 @@ function ShellFrame({
         onPowerSaveChange={setPowerSave}
         marketHours={marketHours === null ? (loading ? 'checking' : 'unknown') : marketHours.is_open ? 'open' : 'closed'}
         systemHealth={systemHealth}
+        engineAlerts={engineAlerts}
         userName={userName}
         role={role}
         onLogout={onLogout}

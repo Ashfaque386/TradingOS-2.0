@@ -41,3 +41,8 @@ def clear(broker: str | None = None) -> None:
 
 def get_rejection(broker: str) -> FeedRejection | None:
     return _rejections.get(broker)
+
+
+def all_rejections() -> dict[str, FeedRejection]:
+    """Every broker whose credentials are being refused right now (a copy)."""
+    return dict(_rejections)

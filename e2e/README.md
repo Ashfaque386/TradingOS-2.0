@@ -54,6 +54,16 @@ flows named in that pass and has grown since:
   than ignored.
 - `paper-trading-logic.spec.ts` -- the paper desk's pure logic (cost waterfall,
   option payoff, expiry in IST, what needs attention). No browser or backend.
+- `engine-alerts-logic.spec.ts` -- the wording of the engine-alert panel, the top-bar
+  count and Settings' Alertmanager line. No browser or backend.
+- `engine-alerts.spec.ts` -- what the trading engine needed a person for: the
+  panel on the Paper Desk (open and cleared alerts, the link to the subscription
+  an alert is about), the count in the top bar that leads to it, an auditor reading
+  it, and Settings' line about the path from Prometheus to a channel.
+  `backend/scripts/seed_e2e_engine_alerts.py` writes the episodes the watcher, the
+  engine and Alertmanager would have left. The paper-trading logic spec also runs
+  `e2e/fixtures/paper-attention.json`, the cases the server's own copy of the
+  attention rules runs (`backend/tests/test_paper_attention.py`).
 - `paper-trading-desk.spec.ts` -- the paper desk (`/paper-trading`) against the
   real backend. `backend/scripts/seed_e2e_paper_desk.py` writes what the engine
   would have left (positions, fills with costs, a switched-off subscription that

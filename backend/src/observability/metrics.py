@@ -113,6 +113,24 @@ trading_holiday_gauge = Gauge(
 
 TRADING_HOLIDAY_GAUGE_UPDATE_INTERVAL_SECONDS = 300
 
+# Engine alerts (src.orchestration.engine_alerts): what the engine currently needs a person for,
+# and proof that the watcher which looks for it is alive. The watcher's own staleness is a
+# Prometheus rule (EngineAlertWatcherStalled), so a stopped watcher does not look like a quiet day.
+engine_alerts_open = Gauge(
+    "tradingos_engine_alerts_open",
+    "Engine alert episodes currently open, by severity",
+    labelnames=("severity",),
+)
+engine_alerts_opened_total = Counter(
+    "tradingos_engine_alerts_opened_total",
+    "Engine alert episodes opened, by who raised them and how serious",
+    labelnames=("source", "severity"),
+)
+engine_alert_watch_last_success_timestamp_seconds = Gauge(
+    "tradingos_engine_alert_watch_last_success_timestamp_seconds",
+    "Unix time the engine-alert watcher last completed a look (0 until its first)",
+)
+
 
 def render_latest_metrics() -> tuple[bytes, str]:
     return generate_latest(), CONTENT_TYPE_LATEST

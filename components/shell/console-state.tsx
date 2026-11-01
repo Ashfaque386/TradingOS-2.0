@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useMemo } from 'react'
-import { type KillSwitchState, type MarketHours, getKillSwitch, getMarketHours } from '@/lib/api'
+import { type KillSwitchState, type MarketHours, getKillSwitch, getMarketHours, listEngineAlerts } from '@/lib/api'
 import { usePolling } from '@/lib/use-polling'
 
 const POLL_MS = 30_000
@@ -10,12 +10,21 @@ interface Snapshot {
   marketHours: MarketHours | null
   paper: KillSwitchState | null
   live: KillSwitchState | null
+  engineAlerts: EngineAlertCount | null
+}
+
+/** Engine alerts that are open right now, across every source. */
+export interface EngineAlertCount {
+  open: number
+  critical: number
 }
 
 export interface ConsoleState {
   /** Null until read, and null again when the last read failed: an unknown is never shown as "open" or "armed". */
   marketHours: MarketHours | null
   killSwitch: { paper: KillSwitchState | null; live: KillSwitchState | null }
+  /** Null when it could not be read: an unknown count is not shown as zero. */
+  engineAlerts: EngineAlertCount | null
   /** Set when none of the three reads succeeded. */
   error: string | null
   loading: boolean
@@ -26,10 +35,11 @@ export interface ConsoleState {
 const ConsoleStateContext = createContext<ConsoleState | null>(null)
 
 async function readSnapshot(): Promise<Snapshot> {
-  const [hours, paper, live] = await Promise.allSettled([
+  const [hours, paper, live, alerts] = await Promise.allSettled([
     getMarketHours(),
     getKillSwitch('paper'),
     getKillSwitch('live'),
+    listEngineAlerts('open', 1),
   ])
   if (hours.status === 'rejected' && paper.status === 'rejected' && live.status === 'rejected') {
     throw hours.reason
@@ -38,6 +48,10 @@ async function readSnapshot(): Promise<Snapshot> {
     marketHours: hours.status === 'fulfilled' ? hours.value : null,
     paper: paper.status === 'fulfilled' ? paper.value : null,
     live: live.status === 'fulfilled' ? live.value : null,
+    engineAlerts:
+      alerts.status === 'fulfilled'
+        ? { open: alerts.value.open_count, critical: alerts.value.critical_open_count }
+        : null,
   }
 }
 
@@ -55,6 +69,7 @@ export function ConsoleStateProvider({ children }: { children: React.ReactNode }
     return {
       marketHours: known?.marketHours ?? null,
       killSwitch: { paper: known?.paper ?? null, live: known?.live ?? null },
+      engineAlerts: known?.engineAlerts ?? null,
       error,
       loading,
       refresh: refreshNow,

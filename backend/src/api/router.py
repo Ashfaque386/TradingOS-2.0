@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from src.api.routes import (
     admin,
     agents,
+    alertmanager_webhook,
     approvals,
     audit,
     auth,
@@ -11,6 +12,7 @@ from src.api.routes import (
     broker_oauth,
     canvas,
     chat,
+    engine_alerts,
     equity,
     gateway,
     investor_reports,
@@ -57,6 +59,8 @@ api_router.include_router(market_data.router)
 api_router.include_router(audit.router)
 api_router.include_router(notification_channels.router)
 api_router.include_router(webhooks.router)
+api_router.include_router(alertmanager_webhook.router)
+api_router.include_router(engine_alerts.router)
 api_router.include_router(chat.router)
 api_router.include_router(canvas.router)
 api_router.include_router(orders.router)

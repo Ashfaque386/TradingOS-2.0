@@ -26,10 +26,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+import structlog
 from cryptography.fernet import Fernet, InvalidToken
 
 from src.core.config import get_settings
 from src.notifications.types import AlertLevel, NotificationChannel
+
+logger = structlog.get_logger(__name__)
+
+# The store's own bookkeeping lives under this key, beside the channels (whose keys are channel
+# names). Version 2 added the `engine` alert level: the store is opt-in (a channel receives
+# nothing it has not subscribed to), so a channel that already took kill-switch alerts is
+# subscribed to `engine` once, on first read after the upgrade -- and never again, so unticking it
+# later sticks.
+_META_KEY = "_meta"
+SCHEMA_VERSION = 2
 
 
 class NotificationChannelStoreError(Exception):
@@ -57,7 +68,7 @@ class NotificationChannelConfig:
     # Inbound routing (src.notifications.inbound_router).
     allowed_sender_ids: list[str] = field(default_factory=list)
 
-    # Outbound alert subscriptions -- which of the four fixed AlertLevel
+    # Outbound alert subscriptions -- which of the fixed AlertLevel
     # values this channel receives. Defaults to none (opt-in), matching
     # "deny by default" the same way allowed_sender_ids does.
     alert_levels: list[str] = field(default_factory=list)
@@ -89,10 +100,28 @@ class NotificationChannelStore:
                 f"notification channel store at {self._path} could not be decrypted "
                 "-- wrong encryption key or a corrupted file"
             ) from exc
-        return cast(dict[str, Any], json.loads(plaintext))
+        return self._upgraded(cast(dict[str, Any], json.loads(plaintext)))
+
+    def _upgraded(self, data: dict[str, Any]) -> dict[str, Any]:
+        meta = data.get(_META_KEY) or {}
+        if not data or meta.get("schema_version", 1) >= SCHEMA_VERSION:
+            return data
+        for name, row in data.items():
+            if name == _META_KEY:
+                continue
+            levels = list(row.get("alert_levels") or [])
+            if AlertLevel.KILL_SWITCH.value in levels and AlertLevel.ENGINE.value not in levels:
+                row["alert_levels"] = [*levels, AlertLevel.ENGINE.value]
+        try:
+            self._write_all(data)
+        except OSError:
+            # Read-only for now: the upgrade is applied to what is returned, and tried again.
+            logger.warning("notification_channel_store.upgrade_not_saved", path=str(self._path))
+        return data
 
     def _write_all(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        data[_META_KEY] = {"schema_version": SCHEMA_VERSION}
         plaintext = json.dumps(data).encode("utf-8")
         ciphertext = self._fernet.encrypt(plaintext)
         self._path.write_bytes(ciphertext)
@@ -118,7 +147,7 @@ class NotificationChannelStore:
         return True
 
     def list_configured_channels(self) -> list[str]:
-        return sorted(self._read_all().keys())
+        return sorted(name for name in self._read_all() if name != _META_KEY)
 
     def channels_subscribed_to(self, level: AlertLevel) -> list[NotificationChannel]:
         result = []

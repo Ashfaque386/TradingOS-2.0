@@ -29,6 +29,14 @@ services:
       LIVE_STARTING_CAPITAL: ${LIVE_STARTING_CAPITAL:-}
       PAPER_DEPTH_MAX_AGE_SECONDS: ${PAPER_DEPTH_MAX_AGE_SECONDS:-30}
       PAPER_TICK_MAX_AGE_SECONDS: ${PAPER_TICK_MAX_AGE_SECONDS:-20}
+      # How old the newest price may be before the Paper Desk, the engine alerts and a manual close
+      # call it stale (one setting for all three).
+      PAPER_STALE_PRICE_SECONDS: ${PAPER_STALE_PRICE_SECONDS:-120}
+      # How long a warning must last before the engine-alert watcher messages anyone (a critical
+      # one, such as a position nobody is watching, is announced at once).
+      ENGINE_ALERT_CONFIRM_SECONDS: ${ENGINE_ALERT_CONFIRM_SECONDS:-120}
+      # Where Settings checks that Alertmanager is up; empty = this deployment has none.
+      ALERTMANAGER_URL: ${ALERTMANAGER_URL:-http://alertmanager:9093}
       PAPER_TICK_STREAM_MAXLEN: ${PAPER_TICK_STREAM_MAXLEN:-10000}
       PAPER_FUTURES_MARGIN_PCT: ${PAPER_FUTURES_MARGIN_PCT:-15}
       PAPER_FUTURES_MAX_MARGIN_UTILISATION_PCT: ${PAPER_FUTURES_MAX_MARGIN_UTILISATION_PCT:-50}
@@ -162,6 +170,10 @@ services:
       - tradingos-2.0_data_lake:/app/data_lake
       - tradingos-2.0_data_lake_backups:/app/data_lake_backups
       - tradingos-2.0_audit_archive:/app/audit_archive
+      # The bearer token Alertmanager presents to the alert webhook. Its own volume, written here on
+      # first boot and mounted read-only into Alertmanager, so neither the encrypted stores above
+      # nor anything else is ever visible to that container.
+      - tradingos-2.0_alertmanager_token:/app/alertmanager_token
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -268,6 +280,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      alertmanager:
+        condition: service_healthy
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
@@ -282,6 +296,31 @@ services:
       - "${BIND_HOST:-127.0.0.1}:${PROMETHEUS_HOST_PORT:-9090}:9090"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  alertmanager:
+    # Routes what Prometheus's rules raise to the TradingOS backend (Phase 5), which tells the
+    # channels subscribed to the `engine` alert level. Not published to the host: nothing outside
+    # the stack needs to reach it, and Prometheus and the backend do so over the internal network.
+    # The tag is pinned (the other images here still float on `latest`).
+    image: prom/alertmanager:v0.28.1
+    container_name: TradingOS-2.0-Alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - tradingos-2.0_alertmanager_token:/etc/alertmanager/token:ro
+      - tradingos-2.0_alertmanager_data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9093/-/healthy"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -346,6 +385,10 @@ volumes:
     name: tradingos-2.0_audit_archive
   tradingos-2.0_qdrant_data:
     name: tradingos-2.0_qdrant_data
+  tradingos-2.0_alertmanager_token:
+    name: tradingos-2.0_alertmanager_token
+  tradingos-2.0_alertmanager_data:
+    name: tradingos-2.0_alertmanager_data
   tradingos-2.0_prometheus_data:
     name: tradingos-2.0_prometheus_data
   tradingos-2.0_grafana_data:

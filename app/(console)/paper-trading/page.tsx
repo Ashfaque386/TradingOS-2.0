@@ -5,6 +5,7 @@ import { Plus, RefreshCw } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Attention } from '@/components/paper-trading/attention'
 import { CloseDialog, DeactivateDialog, EnrolDialog, SettingsDialog, activate } from '@/components/paper-trading/dialogs'
+import { EngineAlertsPanel } from '@/components/paper-trading/engine-alerts'
 import { EquityPanel } from '@/components/equity/equity-panel'
 import { Ledger } from '@/components/paper-trading/ledger'
 import { Lane } from '@/components/paper-trading/lane'
@@ -113,6 +114,13 @@ export default function PaperTradingPage() {
     if (sub && item.action === 'close') setDialog({ kind: 'close', sub })
   }
 
+  // From an engine alert: open the subscription it is about and bring it into view.
+  const showSubscription = (id: string) => {
+    setFilter('all')
+    setExpanded((current) => new Set(current).add(id))
+    window.setTimeout(() => document.getElementById(`lane-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 50)
+  }
+
   const switchOn = async (sub: PaperSubscription) => {
     const problem = await activate(sub)
     if (problem) setActionError(problem)
@@ -149,6 +157,7 @@ export default function PaperTradingPage() {
         )}
 
         <Attention items={items} canAct={canManage} onAction={onAttentionAction} />
+        <EngineAlertsPanel onShowSubscription={showSubscription} />
 
         <div className="pt-toolbar">
           <div className="pt-filter" role="group" aria-label="Show">

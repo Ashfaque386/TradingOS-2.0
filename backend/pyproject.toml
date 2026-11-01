@@ -185,6 +185,9 @@ critical_files = [
   "src/orchestration/drawdown_monitor.py",
   "src/orchestration/go_live_evidence.py",
   "src/orchestration/equity.py",
+  # ... what tells a person the engine needs them ...
+  "src/orchestration/paper_attention.py",
+  "src/orchestration/engine_alerts.py",
   "src/orchestration/risk_gate.py",
   "src/orchestration/risk_limits.py",
   # ... the gates a strategy or an order must pass through ...
@@ -291,6 +294,23 @@ max_survivors = 5
 path = "src/orchestration/live_intent_expiry.py"
 tests = ["tests/test_orchestration_live_intent_expiry.py"]
 max_survivors = 0
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/paper_attention.py"
+tests = ["tests/test_paper_attention.py"]
+# 14 survivors, none able to change what the module does: the string members of the `Severity`,
+# `Kind` and `Action` type aliases (12), the rank of "info" (2 to 3: it stays last), and the
+# argument to `Decimal(1).quantize` (a different integer has the same exponent).
+max_survivors = 14
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/engine_alerts.py"
+tests = ["tests/test_engine_alerts.py"]
+# 16 survivors, none able to change what the module does: the string members and annotations of the
+# `Source` and `Severity` aliases, the `AlertCandidate` and task-set annotations (10 in all), the rank of
+# "info" (2 to 3: it stays last), the text of four log lines, and `return_exceptions` on a gather
+# whose tasks already catch their own errors.
+max_survivors = 16
 
 [tool.mutmut]
 # Build Spec §21-22 hardening pass: scoped to the pure, deterministic

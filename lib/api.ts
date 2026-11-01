@@ -1606,9 +1606,9 @@ export const listLlmProviderModels = (provider: string) =>
 
 // ---- Notification channels (write-only secrets) ----
 export type NotificationChannelName = 'telegram' | 'discord' | 'slack'
-export type AlertLevel = 'kill-switch' | 'sign-off' | 'go-live' | 'daily'
+export type AlertLevel = 'kill-switch' | 'sign-off' | 'go-live' | 'daily' | 'engine'
 export const NOTIFICATION_CHANNELS: NotificationChannelName[] = ['telegram', 'discord', 'slack']
-export const ALERT_LEVELS: AlertLevel[] = ['kill-switch', 'sign-off', 'go-live', 'daily']
+export const ALERT_LEVELS: AlertLevel[] = ['kill-switch', 'sign-off', 'go-live', 'daily', 'engine']
 export type NotificationChannelStatus = {
   channel: string
   configured: boolean
@@ -1665,6 +1665,44 @@ export const detectTelegramChatId = (botToken: string) =>
   apiPost<DetectTelegramChatIdResult>('/api/v1/notification-channels/telegram/detect-chat-id', {
     bot_token: botToken,
   })
+
+// ---- Engine alerts: what the trading engine needed a person for ----
+export type EngineAlertSource = 'watcher' | 'event' | 'alertmanager'
+export type EngineAlertSeverity = 'critical' | 'warning' | 'info'
+export type EngineAlert = {
+  id: string
+  key: string
+  source: EngineAlertSource
+  kind: string
+  severity: EngineAlertSeverity
+  title: string
+  detail: string
+  subscription_id: string | null
+  opened_at: string
+  last_seen_at: string
+  /** Null while it is still happening. */
+  resolved_at: string | null
+  /** When the opening notice went out; null if it cleared before it had lasted long enough to announce. */
+  notified_at: string | null
+}
+export type EngineAlertList = {
+  /** Across everything, whatever `limit` cut the list to. */
+  open_count: number
+  critical_open_count: number
+  alerts: EngineAlert[]
+}
+export const listEngineAlerts = (state: 'open' | 'resolved' | 'all' = 'all', limit = 100) =>
+  apiGet<EngineAlertList>(`/api/v1/engine-alerts?state=${state}&limit=${limit}`)
+export type AlertmanagerStatus = {
+  /** False when this deployment has no Alertmanager. */
+  configured: boolean
+  /** Null when it was not asked. */
+  reachable: boolean | null
+  detail: string
+  token_ready: boolean
+  last_alert_received_at: string | null
+}
+export const getAlertmanagerStatus = () => apiGet<AlertmanagerStatus>('/api/v1/engine-alerts/alertmanager')
 
 // ---- Dual-control risk limits ----
 export type RiskLimit = { name: string; value: number }

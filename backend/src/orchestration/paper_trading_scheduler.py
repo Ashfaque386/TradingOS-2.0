@@ -38,6 +38,7 @@ order" means operationally.
 """
 
 import time
+import uuid
 from collections.abc import Callable, Sequence
 
 import pandas as pd
@@ -69,9 +70,15 @@ from src.observability.metrics import (
     paper_tick_to_decision_seconds,
     paper_ticks_skipped_stale_total,
 )
-from src.orchestration.paper_futures import run_futures_roll
+from src.orchestration.engine_alerts import (
+    AlertCandidate,
+    record_event_safely,
+    sync_conditions_safely,
+)
+from src.orchestration.paper_futures import RollOutcome, run_futures_roll
 from src.orchestration.paper_options import (
     OptionContractsFn,
+    SweepOutcome,
     evaluate_option_subscription,
     option_contracts_from,
     option_quote_symbols,
@@ -103,6 +110,74 @@ FUTURES_ROLL_JOB_ID = "paper_trading_futures_roll"
 FUTURES_ROLL_INTERVAL_SECONDS = 600
 EXPIRY_SWEEP_JOB_ID = "paper_trading_expiry_sweep"
 EXPIRY_SWEEP_INTERVAL_SECONDS = 600
+
+
+ROLL_ALERT_PREFIX = "roll:"
+EXPIRY_ALERT_PREFIX = "expiry:"
+
+
+def roll_alerts(outcomes: Sequence[RollOutcome]) -> list[AlertCandidate]:
+    """A futures roll that could not be done is a position about to run past its contract: one
+    alert while it stays undone (the job retries every ten minutes), cleared once it goes through.
+    """
+    alerts = []
+    for outcome in outcomes:
+        if outcome.status not in ("postponed", "no_contract"):
+            continue
+        contract = outcome.old_contract or "the futures contract"
+        postponed = outcome.status == "postponed"
+        alerts.append(
+            AlertCandidate(
+                key=f"{ROLL_ALERT_PREFIX}{outcome.subscription_id}",
+                kind="roll_postponed" if postponed else "roll_no_contract",
+                severity="warning",
+                title=(
+                    f"Roll of {contract} postponed"
+                    if postponed
+                    else f"No contract to roll {contract} into"
+                ),
+                detail=outcome.detail or "It will be tried again.",
+                subscription_id=uuid.UUID(outcome.subscription_id),
+            )
+        )
+    return alerts
+
+
+def expiry_alerts(outcomes: Sequence[SweepOutcome]) -> list[AlertCandidate]:
+    """An option that could not be squared off before expiry (postponed), or a position left open
+    past its expiry with no price to close it at (critical: nothing can value or close it)."""
+    alerts = []
+    for outcome in outcomes:
+        if outcome.status == "closed":
+            continue
+        no_price = outcome.status == "no_price"
+        alerts.append(
+            AlertCandidate(
+                key=f"{EXPIRY_ALERT_PREFIX}{outcome.subscription_id}:{outcome.symbol}",
+                kind="expiry_no_price" if no_price else "expiry_postponed",
+                severity="critical" if no_price else "warning",
+                title=(
+                    f"{outcome.symbol} expired with no price to close it at"
+                    if no_price
+                    else f"Square-off of {outcome.symbol} before expiry postponed"
+                ),
+                detail=outcome.detail or "It will be tried again.",
+                subscription_id=uuid.UUID(outcome.subscription_id),
+            )
+        )
+    return alerts
+
+
+def forced_close_alert(outcome: SweepOutcome) -> AlertCandidate:
+    """A position that was closed only after its contract had expired, at the last quote seen."""
+    return AlertCandidate(
+        key=f"expiry_forced_close:{outcome.subscription_id}:{outcome.symbol}:{uuid.uuid4()}",
+        kind="expiry_forced_close",
+        severity="warning",
+        title=f"{outcome.symbol} was closed after its expiry",
+        detail=f"It was still open when the contract expired, so it was closed {outcome.detail}.",
+        subscription_id=uuid.UUID(outcome.subscription_id),
+    )
 
 
 async def _active_symbols(
@@ -259,6 +334,10 @@ async def run_futures_roll_job(
             new_contract=outcome.new_contract,
             detail=outcome.detail,
         )
+    async with session_factory() as db:
+        await sync_conditions_safely(
+            db, source="event", prefix=ROLL_ALERT_PREFIX, present=roll_alerts(outcomes)
+        )
 
 
 async def run_expiry_sweep_job(
@@ -289,6 +368,13 @@ async def run_expiry_sweep_job(
             status=outcome.status,
             detail=outcome.detail,
         )
+    async with session_factory() as db:
+        await sync_conditions_safely(
+            db, source="event", prefix=EXPIRY_ALERT_PREFIX, present=expiry_alerts(outcomes)
+        )
+        for outcome in outcomes:
+            if outcome.forced:
+                await record_event_safely(db, forced_close_alert(outcome))
 
 
 def start_paper_trading_scheduler(

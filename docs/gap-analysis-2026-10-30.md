@@ -66,6 +66,15 @@ this is where it stands.
 
 **Still open from this phase:** until backtests can be run from the data lake (Phase 9) a backtest on real data does not exist, so the win-rate condition can only be met through the override.
 
+**Closed in phase 5 (alerts):**
+
+| Gap | What changed |
+|---|---|
+| G4 | A fifth alert level, `engine`, and a watcher that tells the subscribed channels once when a position is left unwatched, a feed stops, a position has no price or a price goes stale, and once when it clears; events for a stop-loss exit, a roll or square-off that could not be done, a position closed after its expiry and a broker refusing its credentials; every alert is kept as an episode and listed on the Paper Desk and counted in the top bar. Prometheus's rules reach the same channels through an Alertmanager service that posts to a token-protected webhook, and a rule watches the watcher itself. |
+| (attention rules) | The Paper Desk's "needs attention" logic now exists on the server too, and the two are pinned to one shared set of cases. The stale-price limit is one setting instead of two constants. |
+
+**Still open from this phase:** an alert about the backend being down cannot be delivered by the backend (it is visible in Prometheus and Grafana); the live trading path raises no engine alerts yet.
+
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
 - The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.

@@ -104,7 +104,7 @@ export function Lane({
     .join('  ·  ')
 
   return (
-    <article className="pt-lane" data-state={sub.state} data-unmanaged={!sub.managed} data-testid={`lane-${sub.symbol}`}>
+    <article id={`lane-${sub.id}`} className="pt-lane" data-state={sub.state} data-unmanaged={!sub.managed} data-testid={`lane-${sub.symbol}`}>
       <button type="button" className="pt-lane-head" aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
         <div>
           <div className="pt-lane-title">
