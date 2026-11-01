@@ -65,7 +65,8 @@ class OrderIntent:
     compliance: ComplianceCheckResult
     correlation: CorrelationCheckResult | None
     # False only for a stop-loss exit, which is not held to the circuit band (see `stop_loss_exit`).
-    circuit_band_checked: bool = True
+    # No default: the one place an intent is built states it, so there is no value to drift.
+    circuit_band_checked: bool
 
 
 async def create_order_intent(
