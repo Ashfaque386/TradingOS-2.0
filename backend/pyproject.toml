@@ -307,10 +307,12 @@ max_survivors = 1
 [[tool.tradingos.mutation.module]]
 path = "src/orchestration/paper_attention.py"
 tests = ["tests/test_paper_attention.py"]
-# 14 survivors, none able to change what the module does: the string members of the `Severity`,
-# `Kind` and `Action` type aliases (12), the rank of "info" (2 to 3: it stays last), and the
-# argument to `Decimal(1).quantize` (a different integer has the same exponent).
-max_survivors = 14
+# 17 survivors, none able to change what the module does: the string members of the `Severity`,
+# `Kind` and `Action` type aliases (13: phase 6 added "refused" to `Kind`), the rank of "info" (2 to
+# 3: it stays last), the argument to `Decimal(1).quantize` (a different integer has the same
+# exponent), and the `|` to `&` in the annotations of the two refusal fields phase 6 added (an
+# annotation is not evaluated). The refusal fields' `None` defaults are pinned by a test.
+max_survivors = 17
 
 [[tool.tradingos.mutation.module]]
 path = "src/orchestration/engine_alerts.py"

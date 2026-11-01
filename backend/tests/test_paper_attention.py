@@ -205,6 +205,15 @@ def test_subjects_and_items_are_immutable_values():
         assert not hasattr(value, "__dict__")  # slotted, so no stray attributes either
 
 
+def test_a_subject_with_no_refusal_says_none_not_an_empty_string():
+    subject = AttentionSubject(
+        "x", "TCS", "equity", None, True, True, "active", None, 0, None, None
+    )
+
+    assert subject.refusal_broker is None
+    assert subject.refusal_reason is None
+
+
 def test_a_view_with_a_refused_quote_hands_on_who_refused_it_and_why():
     from datetime import UTC, datetime
 
