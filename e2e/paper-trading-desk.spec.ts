@@ -1,10 +1,14 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { E2E_USERS, login, parseSeedOutput, runSeedScript } from './utils'
 
 // The paper-trading desk against the real backend and database. The seed script writes what the
 // engine would have left behind (positions, fills with costs, a switched-off subscription that
 // still holds shares, a credit spread); see backend/scripts/seed_e2e_paper_desk.py. There is no
 // market data in this environment, so nothing is priced -- and the desk has to say so.
+
+// The desk's "Needs attention" list. The Engine alerts panel below it also renders open critical
+// alerts with role="alert", for the same positions, so an unscoped query sees both.
+const needsAttention = (page: Page) => page.getByRole('region', { name: 'Needs attention' })
 
 test.describe('paper-trading desk', () => {
   let seeded: Record<string, string>
@@ -24,7 +28,7 @@ test.describe('paper-trading desk', () => {
     await expect(ledger).toContainText('Net realized today')
 
     // A switched-off subscription that still holds shares is the first thing to see.
-    const alert = page.getByRole('alert').filter({ hasText: seeded.loose })
+    const alert = needsAttention(page).getByRole('alert').filter({ hasText: seeded.loose })
     await expect(alert).toContainText('holding a position nobody is watching')
 
     // An open position with no price shows as unknown, never as zero.
@@ -62,7 +66,7 @@ test.describe('paper-trading desk', () => {
     await login(page, E2E_USERS.admin)
     await page.goto('/paper-trading')
 
-    await page.getByRole('alert').filter({ hasText: seeded.loose }).getByRole('button', { name: 'Close position' }).click()
+    await needsAttention(page).getByRole('alert').filter({ hasText: seeded.loose }).getByRole('button', { name: 'Close position' }).click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toContainText(`Close ${seeded.loose}`)
 
@@ -93,7 +97,9 @@ test.describe('paper-trading desk', () => {
     await closeButton.click()
     await expect(dialog).toBeHidden()
     await expect(page.getByRole('status').filter({ hasText: `Closed ${seeded.loose}` })).toBeVisible()
-    await expect(page.getByRole('alert').filter({ hasText: seeded.loose })).toHaveCount(0)
+    // Only the desk's own list is asserted: the engine's alert for the same position is a separate
+    // panel and closes itself on the engine's next sweep (every minute), not when the position closes.
+    await expect(needsAttention(page).getByRole('alert').filter({ hasText: seeded.loose })).toHaveCount(0)
   })
 
   test('adds a subscription: the symbol is checked as it is typed, and it can be added and switched off', async ({ page }) => {
