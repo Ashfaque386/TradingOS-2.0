@@ -38,15 +38,21 @@ export async function api<T>(token: string, path: string, init: { method?: strin
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T }
 }
 
-/** Switching personas mid-test (e.g. pm requests, admin decides) needs a
- * clean slate first -- the login page immediately bounces an already-
- * authenticated session back to "/" (see app/login/page.tsx's own
- * redirect effect), which detaches the form mid-click if a stale token
- * from the previous persona is still in localStorage. */
+/** Signs in through the sign-in page. Switching personas mid-test (e.g. pm requests, admin decides)
+ * needs a clean slate first: the refresh cookie of the previous persona would restore that session
+ * on page load, and the sign-in page immediately bounces an already-authenticated session back to "/"
+ * (see app/login/page.tsx's own redirect effect), which detaches the form mid-click. So the browser
+ * context's cookies are cleared before the page is opened. */
 export async function login(page: Page, user: { email: string; password: string }) {
+  await page.context().clearCookies()
   await page.goto('/login')
-  await page.evaluate(() => localStorage.clear())
-  await page.reload()
+  await page.evaluate(() => {
+    try {
+      localStorage.clear()
+    } catch {
+      // storage unavailable: nothing to clear
+    }
+  })
   await page.getByLabel('Email address').fill(user.email)
   await page.getByLabel('Password').fill(user.password)
   await page.getByRole('button', { name: /Initialize session/i }).click()

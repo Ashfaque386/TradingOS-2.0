@@ -189,11 +189,12 @@ async def test_revoke_sessions_invalidates_refresh_tokens(client, make_user, db_
     admin_token = await _login(client, "admin9@example.com", "supersecret1")
     assert admin
 
+    # Signing in as the target leaves its refresh token in the client's cookie jar.
     login_resp = await client.post(
         "/api/v1/auth/login",
         json={"email": "target3@example.com", "password": "supersecret1"},
     )
-    refresh_token = login_resp.json()["refresh_token"]
+    assert login_resp.status_code == 200
 
     resp = await client.post(
         f"/api/v1/admin/users/{target.id}/revoke-sessions", headers=_auth(admin_token)
@@ -210,7 +211,7 @@ async def test_revoke_sessions_invalidates_refresh_tokens(client, make_user, db_
         assert all(row.revoked_at is not None for row in rows)
 
     # The now-revoked refresh token can no longer mint a new access token.
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    resp = await client.post("/api/v1/auth/refresh")
     assert resp.status_code == 401
 
 

@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `csp-logic.spec.ts`, `users-logic.spec.ts` -- the Content-Security-Policy builder and the wording of Settings > Users.
+  No browser or backend.
+- `access-control.spec.ts` -- closed registration, accounts made by an administrator, the lock after wrong passwords and
+  its unlock, WebSocket tickets, the API headers and the absent docs. It creates accounts with unique emails.
+- `csp.spec.ts` -- every page loaded under the Content-Security-Policy with a listener for violations.
 - `backups-logic.spec.ts` -- the wording of Settings > System and backups (sizes, ages, the one line per
   kind of backup, what a row holds). No browser or backend.
 - `backups.spec.ts` -- the same section against the real backend: nothing backed up yet, **Back up now** making

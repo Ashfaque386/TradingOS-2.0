@@ -6,12 +6,15 @@ import { AlertCircle, ArrowRight, LockKeyhole, Loader2, Mail, ShieldPlus, Sparkl
 import { useAuth } from '@/components/auth/auth-provider'
 import { ApiError } from '@/lib/api'
 import { refusalMessage } from '@/lib/auth-errors'
+import { useRegistrationStatus } from '@/lib/use-registration-status'
 
 type Status = 'idle' | 'loading' | 'invalid' | 'conflict' | 'network'
 
 export default function RegisterPage() {
   const router = useRouter()
   const { isAuthenticated, isLoading, signUp } = useAuth()
+  const registration = useRegistrationStatus()
+  const closed = registration.kind === 'known' && !registration.status.open
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -65,10 +68,16 @@ export default function RegisterPage() {
               <p className="eyebrow">SECURE ACCESS // NEURAL GATEWAY</p>
               <h1 id="register-title" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-foreground">Provision an account.</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                The very first account on a fresh system becomes a System Administrator automatically. Every account after that starts read-only until an administrator raises its role.
+                This system has no accounts yet. The first account you create becomes its System Administrator; every account after that is created by an administrator.
               </p>
             </div>
-            <form className="flex flex-col gap-5" onSubmit={handleSubmit} noValidate>
+            {closed && (
+              <div className="auth-alert auth-alert-error" role="status">
+                <AlertCircle className="size-4 shrink-0" />
+                <span>{registration.kind === 'known' ? registration.status.detail : ''}</span>
+              </div>
+            )}
+            <form className="flex flex-col gap-5" onSubmit={handleSubmit} noValidate hidden={closed}>
               <label className="auth-field"><span>Email address</span><div className="auth-input-wrap"><Mail className="size-4" /><input aria-label="Email address" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tradingos.ai" autoComplete="email" /></div></label>
               <label className="auth-field"><span>Password</span><div className="auth-input-wrap"><LockKeyhole className="size-4" /><input aria-label="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" autoComplete="new-password" /></div></label>
               <label className="auth-field"><span>Confirm password</span><div className="auth-input-wrap"><LockKeyhole className="size-4" /><input aria-label="Confirm password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Re-enter your password" autoComplete="new-password" /></div></label>
@@ -88,7 +97,7 @@ export default function RegisterPage() {
               )}
               {status === 'conflict' && <div className="auth-alert auth-alert-error" role="alert"><AlertCircle className="size-4 shrink-0" /><span>An account with this email already exists. Sign in instead, or ask an administrator to reset it.</span></div>}
               {status === 'network' && <div className="auth-alert auth-alert-network" role="alert"><WifiOff className="size-4 shrink-0" /><span>Connectivity error. The neural gateway is unreachable. Try again.</span></div>}
-              <button type="submit" disabled={status === 'loading'} className="auth-submit">{status === 'loading' ? <><Loader2 className="size-4 animate-spin" />Provisioning account...</> : <>Create account<ArrowRight className="size-4" /></>}</button>
+              <button type="submit" disabled={status === 'loading' || closed} className="auth-submit">{status === 'loading' ? <><Loader2 className="size-4 animate-spin" />Provisioning account...</> : <>Create account<ArrowRight className="size-4" /></>}</button>
             </form>
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Already have an account?{' '}

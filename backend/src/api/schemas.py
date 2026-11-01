@@ -23,6 +23,10 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: Role
     is_active: bool
+    # Set while the account is locked after too many wrong passwords (src.core.login_lockout); the
+    # administrator's user list shows it, and a lock that has run out is None-equivalent to the
+    # reader.
+    locked_until: datetime_type | None = None
 
 
 class AdminCreateUserRequest(BaseModel):
@@ -120,14 +124,38 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
+class AccessTokenResponse(BaseModel):
+    """What a sign-in or a refresh returns in its body. The refresh token is not here: it is set
+    as an HttpOnly cookie (src.core.web_session), so nothing the page can run reads it."""
 
-
-class TokenPairResponse(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
+    expires_in: int
+
+
+class RegistrationStatusResponse(BaseModel):
+    """Whether `POST /auth/register` will be accepted, so the sign-in page offers it only when it
+    will."""
+
+    open: bool
+    # Why it is closed (or what registering does when it is open), in words for the person at the
+    # screen.
+    detail: str
+
+
+class SignInPolicyResponse(BaseModel):
+    """The numbers behind the sign-in lock, for Settings > Security."""
+
+    max_failed_attempts: int
+    failure_window_minutes: int
+    lockout_minutes: int
+    access_token_minutes: int
+    session_days: int
+
+
+class WsTicketResponse(BaseModel):
+    ticket: str
+    expires_in: int
 
 
 class CreateRunRequest(BaseModel):

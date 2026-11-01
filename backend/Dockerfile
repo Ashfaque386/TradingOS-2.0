@@ -43,6 +43,18 @@ RUN --mount=type=secret,id=extra_ca,required=false \
     && sed -i 's/\r$//' scripts/container-entrypoint.sh scripts/api-entrypoint.sh \
     && chmod +x scripts/container-entrypoint.sh scripts/api-entrypoint.sh
 
+# The API runs as an unprivileged user. Only supervisord (which must start as root to give each program
+# its user) and the entrypoint's one-time ownership fix run as root; Postgres keeps its own `postgres` user.
+# The directories the API writes are created here owned by that user, so a fresh named volume mounted on
+# one inherits it; container-entrypoint.sh hands over a volume an earlier, root-running version filled.
+RUN groupadd --system --gid 10001 tradingos \
+    && useradd --system --uid 10001 --gid tradingos --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin tradingos \
+    && mkdir -p /app/secrets /app/data_lake /app/data_lake_backups /app/audit_archive /app/backups \
+        /app/alertmanager_token \
+    && chown tradingos:tradingos /app/secrets /app/data_lake /app/data_lake_backups \
+        /app/audit_archive /app/backups /app/alertmanager_token
+
 COPY supervisord.conf /etc/supervisor/conf.d/tradingos.conf
 
 RUN mkdir -p /var/log/supervisor "$PGDATA" \

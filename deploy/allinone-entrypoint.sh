@@ -15,6 +15,19 @@ POSTGRES_USER="${POSTGRES_USER:-tradingos}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-tradingos}"
 POSTGRES_DB="${POSTGRES_DB:-tradingos}"
 
+# The API runs as the unprivileged `tradingos` user, but the volumes it writes to may have been filled
+# by an earlier version that ran as root (or be fresh and root-owned): hand each over once. The top
+# directory's owner says whether that has been done, so a restart does not walk a large data lake again.
+for dir in /app/secrets /app/data_lake /app/data_lake_backups /app/audit_archive /app/backups \
+        /app/alertmanager_token /app/config; do
+    mkdir -p "$dir"
+    if [ "$(stat -c %U "$dir")" != "tradingos" ]; then
+        echo "[entrypoint] Giving $dir to the tradingos user"
+        chown -R tradingos:tradingos "$dir" \
+            || echo "[entrypoint] WARNING: could not change the owner of $dir; the API may not be able to write there"
+    fi
+done
+
 mkdir -p "$PGDATA"
 chown -R postgres:postgres "$PGDATA"
 

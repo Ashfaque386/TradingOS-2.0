@@ -19,6 +19,11 @@ Every mutating route in the API must appear in CLASSIFICATION below, in one of:
                          it, and the test must exist.
 - IDEMPOTENT_SKIPS_AUDIT a transition documented to answer 200 on a repeat; its handler
                          must call `skip_audit_entry` so the repeat leaves no row.
+- ROUTINE_SKIPS_AUDIT    a routine, high-frequency action that is not a decision anyone would
+                         audit (a one-time WebSocket ticket, a session's token rotating), whose
+                         handler calls `skip_audit_entry` on purpose: a row per page load or per
+                         connection would bury the permanent trail. The detail says what is
+                         recorded instead.
 
 A new endpoint fails `test_every_mutating_route_is_classified` until you classify it --
 which means deciding, now, what it does on a repeat.
@@ -44,6 +49,7 @@ CATEGORIES = {
     "REQUEST_ACCEPTED",
     "REFUSES_NOOP",
     "IDEMPOTENT_SKIPS_AUDIT",
+    "ROUTINE_SKIPS_AUDIT",
 }
 
 SWEEP = "tests/test_noop_audit_sweep.py"
@@ -53,6 +59,7 @@ S = "SET_VALUE"
 R = "REQUEST_ACCEPTED"
 X = "REFUSES_NOOP"
 I = "IDEMPOTENT_SKIPS_AUDIT"  # noqa: E741 - a short, local table key
+Q = "ROUTINE_SKIPS_AUDIT"
 
 # (method, path) -> (category, detail). For REFUSES_NOOP the detail is "<test file>::<test>".
 CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
@@ -68,6 +75,11 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/admin/users/{user_id}/reactivate"): (
         X,
         f"{SWEEP}::test_admin_changes_that_change_nothing_are_refused_and_not_audited",
+    ),
+    ("POST", "/admin/users/{user_id}/unlock"): (
+        X,
+        "tests/test_account_lockout_api.py::test_unlocking_an_account_that_is_not_locked_is_refused_"
+        "and_not_audited",
     ),
     ("POST", "/admin/users/{user_id}/revoke-sessions"): (
         R,
@@ -89,10 +101,18 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         f"{REFUSALS}::test_deciding_an_approval_twice_is_refused_and_audited_once",
     ),
     ("POST", "/audit/verify"): (N, "compute-only: verifies the chain"),
-    ("POST", "/auth/register"): (N, "creates an account"),
+    ("POST", "/auth/register"): (N, "creates the first account"),
     ("POST", "/auth/login"): (N, "inbound authentication"),
-    ("POST", "/auth/refresh"): (N, "inbound authentication"),
+    ("POST", "/auth/refresh"): (
+        Q,
+        "a session's token rotating on every page load; the sign-in, a reuse of a retired token "
+        "and a lock are what is recorded",
+    ),
     ("POST", "/auth/logout"): (N, "inbound authentication"),
+    ("POST", "/auth/ws-ticket"): (
+        Q,
+        "a one-time ticket per WebSocket connection; the sign-in is what is recorded",
+    ),
     ("POST", "/backtests"): (N, "runs and records a backtest"),
     ("POST", "/backtests/{run_id}/walk-forward"): (N, "compute-only"),
     ("POST", "/backtests/{run_id}/monte-carlo"): (N, "compute-only"),
@@ -362,17 +382,19 @@ def test_every_refusal_names_a_test_that_exists():
     assert not broken, "REFUSES_NOOP routes whose named test does not exist:\n" + "\n".join(broken)
 
 
-def test_idempotent_handlers_call_skip_audit_entry_and_only_they_do():
+def test_handlers_that_skip_the_audit_row_are_declared_as_such_and_only_they_do():
     endpoints = _endpoints()
     declared = {
-        key for key, (category, _) in CLASSIFICATION.items() if category == "IDEMPOTENT_SKIPS_AUDIT"
+        key
+        for key, (category, _) in CLASSIFICATION.items()
+        if category in ("IDEMPOTENT_SKIPS_AUDIT", "ROUTINE_SKIPS_AUDIT")
     }
 
     skips = {key for key, fn in endpoints.items() if "skip_audit_entry(" in inspect.getsource(fn)}
 
     assert (
         declared - skips == set()
-    ), f"declared idempotent, but never skips the audit row: {declared - skips}"
+    ), f"declared as skipping the audit row, but never does: {declared - skips}"
     assert (
         skips - declared == set()
-    ), f"skips the audit row without being declared idempotent: {skips - declared}"
+    ), f"skips the audit row without being declared (IDEMPOTENT or ROUTINE): {skips - declared}"

@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import { connection } from 'next/server'
 import './globals.css'
 import { AuthProvider } from '@/components/auth/auth-provider'
 import { PreferencesProvider } from '@/components/providers/preferences-provider'
@@ -37,11 +38,15 @@ export const viewport: Viewport = {
   userScalable: true,
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  // Render for each request, not once at build: the Content-Security-Policy carries a nonce that is
+  // different for every response (proxy.ts), and Next can only put it on the scripts of a page it renders
+  // per request. The console is behind a sign-in and has nothing to gain from being a static file.
+  await connection()
   return (
     <html lang="en">
       <body className="antialiased">

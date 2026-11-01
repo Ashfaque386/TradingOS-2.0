@@ -2,12 +2,14 @@
 
 // WebSocket hook for the real backend channels (activity-feed, agent-logs,
 // organization-events, sign-off-queue, ticks -- src/api/routes/websockets.py).
-// Auth goes over a `?token=` query param, not a header: browsers cannot set
-// custom headers on a WebSocket upgrade request, so this mirrors the
-// backend's documented exception to its normal Bearer-header convention.
+// Auth goes over a `?ticket=` query param, not a header: browsers cannot set
+// custom headers on a WebSocket upgrade request. The ticket is bought with the
+// access token (POST /auth/ws-ticket), is good for seconds and for one
+// connection, so the access token itself never sits in a URL, a proxy log or
+// the browser's history.
 
 import { useEffect, useRef, useState } from 'react'
-import { getAccessToken, API_BASE_URL } from './api'
+import { API_BASE_URL, getWsTicket } from './api'
 
 // `new URL()` below requires an absolute string (unlike `fetch`, it has no
 // implicit base to resolve a relative one against) -- when API_BASE_URL is
@@ -27,8 +29,8 @@ export type WsStatus = 'connecting' | 'open' | 'closed'
 /**
  * Subscribes to a backend WebSocket channel for the lifetime of the
  * component. Reconnects with exponential backoff (capped at 15s) on any
- * drop, including an auth failure after token refresh -- a fresh token is
- * read from storage on every (re)connect attempt.
+ * drop, including an auth failure after token refresh -- a fresh ticket is
+ * bought on every (re)connect attempt, since a ticket works once.
  */
 export function useWebSocketChannel<T = unknown>(
   path: string,
@@ -47,17 +49,32 @@ export function useWebSocketChannel<T = unknown>(
     let retryDelayMs = 1000
     let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-    function connect() {
+    function scheduleRetry() {
       if (cancelled) return
-      const token = getAccessToken()
+      setStatus('closed')
+      retryTimer = setTimeout(() => void connect(), retryDelayMs)
+      retryDelayMs = Math.min(retryDelayMs * 2, 15000)
+    }
+
+    async function connect() {
+      if (cancelled) return
+      setStatus('connecting')
+      let ticket: string
+      try {
+        ticket = await getWsTicket()
+      } catch {
+        // Not signed in (yet), or the server could not be reached: try again later.
+        scheduleRetry()
+        return
+      }
+      if (cancelled) return
       // WS routes are mounted under the same /api/v1 prefix as every REST
       // route (src/api/router.py includes websockets.router into api_router).
       const url = new URL(`${WS_BASE_URL}/api/v1${path}`)
       const parsedParams = JSON.parse(paramsKey) as Record<string, string>
       Object.entries(parsedParams).forEach(([key, value]) => url.searchParams.set(key, value))
-      if (token) url.searchParams.set('token', token)
+      url.searchParams.set('ticket', ticket)
 
-      setStatus('connecting')
       socket = new WebSocket(url.toString())
 
       socket.onopen = () => {
@@ -74,24 +91,20 @@ export function useWebSocketChannel<T = unknown>(
         }
       }
       socket.onclose = () => {
-        if (cancelled) return
-        setStatus('closed')
-        retryTimer = setTimeout(connect, retryDelayMs)
-        retryDelayMs = Math.min(retryDelayMs * 2, 15000)
+        scheduleRetry()
       }
       socket.onerror = () => {
         socket?.close()
       }
     }
 
-    connect()
+    void connect()
 
     return () => {
       cancelled = true
       if (retryTimer) clearTimeout(retryTimer)
       socket?.close()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, paramsKey])
 
   return status

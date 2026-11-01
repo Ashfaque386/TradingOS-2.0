@@ -121,9 +121,10 @@ async def _stream_audit_log(
 async def activity_feed_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> None:
-    user = await authenticate_websocket(websocket, db)
+    user = await authenticate_websocket(websocket, db, redis)
     if user is None:
         return
     await websocket.accept()
@@ -137,10 +138,11 @@ async def activity_feed_ws(
 async def agent_logs_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> None:
     """Same real source as `/activity-feed` -- see module docstring."""
-    user = await authenticate_websocket(websocket, db)
+    user = await authenticate_websocket(websocket, db, redis)
     if user is None:
         return
     await websocket.accept()
@@ -156,7 +158,7 @@ async def organization_events_ws(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> None:
-    user = await authenticate_websocket(websocket, db)
+    user = await authenticate_websocket(websocket, db, redis)
     if user is None:
         return
     await websocket.accept()
@@ -194,7 +196,7 @@ async def agent_pipeline_events_ws(
     run with `?run_id=`. Same shape and auth as `/organization-events`; that
     channel carries the Phase 2 task-graph engine's events and this one
     carries the agent pipeline's -- two different run systems."""
-    user = await authenticate_websocket(websocket, db)
+    user = await authenticate_websocket(websocket, db, redis)
     if user is None:
         return
     await websocket.accept()
@@ -251,9 +253,10 @@ async def _signoff_snapshot(db: AsyncSession) -> dict[str, Any]:
 async def sign_off_queue_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> None:
-    user = await authenticate_websocket(websocket, db)
+    user = await authenticate_websocket(websocket, db, redis)
     if user is None:
         return
     await websocket.accept()
@@ -273,7 +276,7 @@ async def ticks_ws(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> None:
-    user = await authenticate_websocket(websocket, db)
+    user = await authenticate_websocket(websocket, db, redis)
     if user is None:
         return
 

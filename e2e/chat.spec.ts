@@ -66,7 +66,11 @@ test('opening a conversation that cannot be loaded says so instead of showing it
       route.fulfill({
         status: 500,
         contentType: 'application/json',
-        headers: { 'access-control-allow-origin': route.request().headers()['origin'] ?? '*' },
+        headers: {
+          'access-control-allow-origin': route.request().headers()['origin'] ?? '*',
+          // every console request carries credentials, and a browser refuses a faked answer without this
+          'access-control-allow-credentials': 'true',
+        },
         body: JSON.stringify({ detail: 'the message store is down' }),
       }),
     )

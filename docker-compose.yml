@@ -44,6 +44,24 @@ services:
       POSTGRES_BACKUP_MINUTE_IST: ${POSTGRES_BACKUP_MINUTE_IST:-45}
       POSTGRES_BACKUP_TIMEOUT_SECONDS: ${POSTGRES_BACKUP_TIMEOUT_SECONDS:-1800}
       BACKUP_STALE_AFTER_HOURS: ${BACKUP_STALE_AFTER_HOURS:-36}
+      # Sign-in and sessions (src/api/routes/auth.py). Wrong passwords are counted against the account:
+      # MAX_FAILED_ATTEMPTS within FAILURE_WINDOW_MINUTES lock it for LOCKOUT_MINUTES. RATE_LIMIT is the
+      # separate per-address ceiling on sign-in attempts a minute.
+      LOGIN_MAX_FAILED_ATTEMPTS: ${LOGIN_MAX_FAILED_ATTEMPTS:-5}
+      LOGIN_FAILURE_WINDOW_MINUTES: ${LOGIN_FAILURE_WINDOW_MINUTES:-15}
+      LOGIN_LOCKOUT_MINUTES: ${LOGIN_LOCKOUT_MINUTES:-15}
+      LOGIN_RATE_LIMIT_PER_MINUTE: ${LOGIN_RATE_LIMIT_PER_MINUTE:-20}
+      # The refresh token is an HttpOnly cookie. auto = Secure when the request came over HTTPS.
+      REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-auto}
+      REFRESH_COOKIE_SAMESITE: ${REFRESH_COOKIE_SAMESITE:-strict}
+      WS_TICKET_TTL_SECONDS: ${WS_TICKET_TTL_SECONDS:-30}
+      # Reverse proxies whose X-Forwarded-For / -Proto are believed (addresses or CIDR blocks). Empty
+      # believes none, which is right when the console talks to this port directly.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      # /docs, /redoc and /openapi.json describe every route; off unless asked for.
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
+      # Only when the API is served over HTTPS: a browser then refuses plain HTTP to it for a year.
+      HSTS_ENABLED: ${HSTS_ENABLED:-false}
       # How long a warning must last before the engine-alert watcher messages anyone (a critical
       # one, such as a position nobody is watching, is announced at once).
       ENGINE_ALERT_CONFIRM_SECONDS: ${ENGINE_ALERT_CONFIRM_SECONDS:-120}

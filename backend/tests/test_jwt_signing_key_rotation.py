@@ -83,8 +83,9 @@ async def test_rotation_revokes_every_outstanding_refresh_token(client, make_use
     await make_user("admin4@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
     admin_tokens = await _login(client, "admin4@example.com", "supersecret1")
 
-    other_tokens = await _login(client, "admin4@example.com", "supersecret1")
-    other_refresh = other_tokens["refresh_token"]
+    # The second sign-in leaves its refresh token in the client's cookie jar, which is what the
+    # refresh call below presents.
+    await _login(client, "admin4@example.com", "supersecret1")
 
     resp = await client.post(
         "/api/v1/system/jwt-signing-key/rotate", headers=_auth(admin_tokens["access_token"])
@@ -92,7 +93,7 @@ async def test_rotation_revokes_every_outstanding_refresh_token(client, make_use
     assert resp.status_code == 200
     assert resp.json()["sessions_revoked"] >= 2  # both refresh tokens from the two logins above
 
-    refresh_resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other_refresh})
+    refresh_resp = await client.post("/api/v1/auth/refresh")
     assert refresh_resp.status_code == 401
 
 

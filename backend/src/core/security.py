@@ -3,6 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import lru_cache
 from typing import Any
 
 import jwt
@@ -10,6 +11,7 @@ import structlog
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from src.core.config import get_settings
 from src.models.jwt_signing_key import JwtSigningKey
@@ -42,6 +44,33 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, hashed_password: str) -> bool:
     return _pwd_context.verify(password, hashed_password)
+
+
+# Argon2 is deliberately slow (tens of milliseconds of CPU). Called straight from an async route it
+# holds the event loop for that long, so every other request, WebSocket and scheduled job waits
+# behind each sign-in. The async versions run it on the thread pool instead; the sync ones stay for
+# scripts.
+async def hash_password_async(password: str) -> str:
+    return await run_in_threadpool(hash_password, password)
+
+
+async def verify_password_async(password: str, hashed_password: str) -> bool:
+    return await run_in_threadpool(verify_password, password, hashed_password)
+
+
+@lru_cache(maxsize=1)
+def _decoy_hash() -> str:
+    return hash_password(secrets.token_urlsafe(24))
+
+
+async def burn_password_check_time(password: str) -> None:
+    """Spends the time a real password check takes, for a sign-in naming an email nobody has.
+
+    Without it an unknown address is answered in microseconds and a known one in tens of
+    milliseconds, which tells a caller which addresses have accounts without ever guessing a
+    password. The hash is a throwaway made with the same parameters as a real one; the result is
+    discarded."""
+    await verify_password_async(password, _decoy_hash())
 
 
 # Phase 21 (docs/phase20-old-vs-new-comparison.md item 11): the JWT

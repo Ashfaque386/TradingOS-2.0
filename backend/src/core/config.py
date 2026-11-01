@@ -40,6 +40,46 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
+    # Sign-in (Phase 8). A wrong password is counted against the account, not only the address it
+    # came from: `login_max_failed_attempts` failures within `login_failure_window_minutes` lock
+    # that account for `login_lockout_minutes` (an administrator can unlock it sooner).
+    # `login_rate_limit_per_minute` is the separate, per-address ceiling on sign-in attempts, which
+    # is what slows one address trying many accounts.
+    login_max_failed_attempts: int = 5
+    login_failure_window_minutes: int = 15
+    login_lockout_minutes: int = 15
+    login_rate_limit_per_minute: int = 20
+
+    # The refresh token travels in an HttpOnly cookie only (never in a response body or in storage
+    # the page can read). "auto" marks it Secure when the request arrived over HTTPS (directly, or
+    # via a trusted proxy that said so); "true"/"false" force it. SameSite "strict" suits a console
+    # served from the same site as the API (localhost:3000 and :8000 are one site); a console on
+    # another site needs "none", which browsers only accept together with Secure.
+    refresh_cookie_secure: Literal["auto", "true", "false"] = "auto"
+    refresh_cookie_samesite: Literal["strict", "lax", "none"] = "strict"
+
+    # A WebSocket is opened with a one-time ticket bought with the access token (POST
+    # /auth/ws-ticket), so the access token never sits in a URL, a proxy log or browser history. A
+    # ticket is good for this many seconds and for one connection.
+    ws_ticket_ttl_seconds: int = 30
+
+    # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto are believed: a comma-separated list
+    # of addresses or CIDR blocks. Empty (the default) believes none, so a client cannot choose the
+    # address it is rate-limited under by sending that header itself.
+    trusted_proxies: str = ""
+
+    @property
+    def trusted_proxies_list(self) -> list[str]:
+        return [entry.strip() for entry in self.trusted_proxies.split(",") if entry.strip()]
+
+    # FastAPI's /docs, /redoc and /openapi.json describe every route to anyone who can reach the
+    # port. Off unless asked for.
+    api_docs_enabled: bool = False
+
+    # Adds Strict-Transport-Security to API responses. Only turn it on when the API is served over
+    # HTTPS, because a browser then refuses plain HTTP to it for a year.
+    hsts_enabled: bool = False
+
     # A plain (optionally comma-separated) string, not list[str]:
     # pydantic-settings JSON-decodes env values for collection-typed
     # fields before any validator sees them, which would make a plain

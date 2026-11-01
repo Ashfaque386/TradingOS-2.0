@@ -3,9 +3,10 @@ format, presence of all five documented metrics, and the trading-holiday
 gauge's real (never-fabricated) value against src.data.nse_calendar.
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from src.data.nse_calendar import is_nse_trading_day
+from src.engine.paper_trading.market_hours import IST
 from src.observability.metrics import (
     _update_trading_holiday_gauge,
     render_latest_metrics,
@@ -38,6 +39,8 @@ def test_render_latest_metrics_returns_bytes_and_prometheus_content_type():
 
 def test_trading_holiday_gauge_reflects_the_real_nse_calendar():
     _update_trading_holiday_gauge()
-    today = datetime.now(UTC).date()
+    # The gauge reads the market's calendar day; between 18:30 and midnight UTC that is already
+    # tomorrow's date, so comparing against the UTC date fails every evening.
+    today = datetime.now(IST).date()
     expected = 0.0 if is_nse_trading_day(today) else 1.0
     assert trading_holiday_gauge._value.get() == expected

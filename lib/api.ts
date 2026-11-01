@@ -23,93 +23,82 @@ function retryAfterOf(res: Response): number | undefined {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined
 }
 
-type TokenPair = { accessToken: string; refreshToken: string }
+// ---- Session ----
+// The access token lives in this module's memory and nowhere else: not localStorage, not a cookie a
+// script can read. It is gone when the tab reloads or closes, and the page gets a new one by presenting
+// the refresh token -- which the browser holds as an HttpOnly cookie that no script can read, and sends
+// only to /api/v1/auth (src/core/web_session.py). So a script injected into the page can use the session
+// while the page is open, but cannot carry it away.
+let accessToken: string | null = null
 
-const TOKENS_KEY = 'tradingos.tokens'
-
-function loadTokens(): TokenPair | null {
-  if (typeof window === 'undefined') return null
+// Tokens an earlier version of the console kept in localStorage (the refresh token among them) are
+// removed the first time this module loads, so they do not sit there for a script to find.
+const LEGACY_TOKENS_KEY = 'tradingos.tokens'
+if (typeof window !== 'undefined') {
   try {
-    const raw = window.localStorage.getItem(TOKENS_KEY)
-    return raw ? (JSON.parse(raw) as TokenPair) : null
+    window.localStorage.removeItem(LEGACY_TOKENS_KEY)
   } catch {
-    return null
-  }
-}
-
-function saveTokens(tokens: TokenPair) {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(TOKENS_KEY, JSON.stringify(tokens))
-  } catch {
-    // localStorage unavailable (private mode, blocked storage) -- the
-    // session just won't survive a refresh, which is the same failure
-    // mode as not persisting tokens at all.
-  }
-}
-
-function clearTokens() {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.removeItem(TOKENS_KEY)
-  } catch {
-    // ignore
+    // storage unavailable: nothing could have been kept there either
   }
 }
 
 export function getAccessToken(): string | null {
-  return loadTokens()?.accessToken ?? null
+  return accessToken
 }
 
 export function isAuthenticated(): boolean {
-  return getAccessToken() !== null
+  return accessToken !== null
 }
 
-// Concurrent 401s must not each fire their own refresh (that would race
-// the backend's single-use refresh-token rotation and revoke the whole
-// family) -- every caller in flight shares the one in-progress refresh.
-// A refresh can fail two very different ways, and treating them the same
-// signs an operator out for no reason: the server looked at the refresh
-// token and refused it (the session really is over -- clear it), or the
-// server never got to judge it at all (rate-limited, down, network drop --
-// the stored tokens are still good, so keep them and let the caller retry).
-type RefreshOutcome =
-  | { kind: 'ok'; tokens: TokenPair }
+// Concurrent 401s must not each fire their own refresh (that would race the backend's single-use
+// refresh-token rotation and revoke the whole family) -- every caller in flight shares the one
+// in-progress refresh. A refresh can fail two very different ways, and treating them the same signs an
+// operator out for no reason: the server looked at the refresh token and refused it (the session really
+// is over -- forget it), or the server never got to judge it at all (rate-limited, down, network drop --
+// the session may be fine, so let the caller retry).
+export type RefreshOutcome =
+  | { kind: 'ok' }
   | { kind: 'rejected' }
   | { kind: 'transient'; status: number }
 
 let refreshPromise: Promise<RefreshOutcome> | null = null
 
-async function refreshTokens(): Promise<RefreshOutcome> {
-  const current = loadTokens()
-  if (!current) return { kind: 'rejected' }
+async function postRefresh(): Promise<RefreshOutcome> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (res.status === 429 || res.status >= 500) {
+      return { kind: 'transient', status: res.status }
+    }
+    if (!res.ok) {
+      accessToken = null
+      return { kind: 'rejected' }
+    }
+    const data = (await res.json()) as { access_token: string }
+    accessToken = data.access_token
+    return { kind: 'ok' }
+  } catch {
+    // fetch() itself rejected: no HTTP response at all (network down, or a response the browser
+    // blocked, such as a 429 with no CORS headers).
+    return { kind: 'transient', status: 0 }
+  }
+}
+
+/** Buys a new access token with the refresh cookie. Tabs share one cookie and each refresh retires the
+ * token it presents, so two tabs presenting the same one would look like a stolen token being replayed
+ * and end the session: the Web Locks API makes them take turns, and the second presents the cookie the
+ * first just received. */
+export function refreshSession(): Promise<RefreshOutcome> {
   if (!refreshPromise) {
-    refreshPromise = (async (): Promise<RefreshOutcome> => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: current.refreshToken }),
-        })
-        if (res.status === 429 || res.status >= 500) {
-          return { kind: 'transient', status: res.status }
-        }
-        if (!res.ok) {
-          clearTokens()
-          return { kind: 'rejected' }
-        }
-        const data = (await res.json()) as { access_token: string; refresh_token: string }
-        const next: TokenPair = { accessToken: data.access_token, refreshToken: data.refresh_token }
-        saveTokens(next)
-        return { kind: 'ok', tokens: next }
-      } catch {
-        // fetch() itself rejected: no HTTP response at all (network down, or
-        // a response the browser blocked, such as a 429 with no CORS headers).
-        return { kind: 'transient', status: 0 }
-      } finally {
-        refreshPromise = null
-      }
-    })()
+    const run =
+      typeof navigator !== 'undefined' && navigator.locks
+        ? () => navigator.locks.request('tradingos-session-refresh', postRefresh)
+        : postRefresh
+    refreshPromise = run().finally(() => {
+      refreshPromise = null
+    })
   }
   return refreshPromise
 }
@@ -132,10 +121,10 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
   }
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+  const res = await fetch(`${API_BASE_URL}${path}`, { ...init, headers, credentials: 'include' })
 
   if (res.status === 401 && allowRefresh && token) {
-    const refreshed = await refreshTokens()
+    const refreshed = await refreshSession()
     if (refreshed.kind === 'ok') return request<T>(path, init, false)
     // The token expired but the refresh couldn't even be judged: surface
     // that as the transient failure it is, not as the original 401 (which
@@ -186,23 +175,20 @@ function toCurrentUser(data: { id: string; email: string; role: Role; is_active:
 }
 
 export async function login(email: string, password: string): Promise<CurrentUser> {
-  const data = await request<{ access_token: string; refresh_token: string }>(
+  const data = await request<{ access_token: string }>(
     '/api/v1/auth/login',
     { method: 'POST', body: JSON.stringify({ email, password }) },
     false,
   )
-  saveTokens({ accessToken: data.access_token, refreshToken: data.refresh_token })
+  accessToken = data.access_token
   return getMe()
 }
 
-// The very first user ever registered on a fresh system automatically
-// becomes SystemAdministrator (src/api/routes/auth.py); every user after
-// that is capped at ReadOnlyAuditor, since granting higher roles is an
-// admin action, not self-service. /auth/register returns the created
-// user only (no tokens), so this logs in right after to hand back an
-// authenticated session in one step -- the password never touches disk,
-// here or on the backend: it's hashed immediately and only the hash is
-// persisted.
+// Only the very first account on a fresh system can be registered (it becomes the SystemAdministrator,
+// src/api/routes/auth.py); after that an administrator creates accounts (Settings > Users), and this is
+// refused with a 403. /auth/register returns the created user only (no tokens), so this signs in right
+// after to hand back an authenticated session in one step -- the password never touches disk, here or
+// on the backend: it's hashed immediately and only the hash is persisted.
 export async function register(email: string, password: string): Promise<CurrentUser> {
   await request<{ id: string; email: string; role: Role; is_active: boolean }>(
     '/api/v1/auth/register',
@@ -210,6 +196,29 @@ export async function register(email: string, password: string): Promise<Current
     false,
   )
   return login(email, password)
+}
+
+export type RegistrationStatus = { open: boolean; detail: string }
+
+/** Whether registering is possible at all, so the sign-in page offers it only when it is. Public. */
+export const getRegistrationStatus = () =>
+  request<RegistrationStatus>('/api/v1/auth/registration-status', { method: 'GET' }, false)
+
+export type SignInPolicy = {
+  max_failed_attempts: number
+  failure_window_minutes: number
+  lockout_minutes: number
+  access_token_minutes: number
+  session_days: number
+}
+
+export const getSignInPolicy = () => apiGet<SignInPolicy>('/api/v1/auth/sign-in-policy')
+
+/** A one-time ticket to open a WebSocket with (src/core/ws_ticket.py): bought with the access token,
+ * good for seconds and for one connection, so the token itself never travels in a URL. */
+export async function getWsTicket(): Promise<string> {
+  const res = await apiPost<{ ticket: string; expires_in: number }>('/api/v1/auth/ws-ticket')
+  return res.ticket
 }
 
 export async function getMe(): Promise<CurrentUser> {
@@ -220,19 +229,41 @@ export async function getMe(): Promise<CurrentUser> {
 }
 
 export async function logout(): Promise<void> {
-  const tokens = loadTokens()
-  clearTokens()
-  if (!tokens) return
+  accessToken = null
   try {
-    await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: tokens.refreshToken }),
-    })
+    // The server revokes the refresh token and tells the browser to drop the cookie.
+    await fetch(`${API_BASE_URL}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' })
   } catch {
-    // best-effort revoke -- tokens are already cleared client-side either way
+    // best-effort: the token in memory is already gone either way
   }
 }
+
+// ---- Users (SystemAdministrator only; src/api/routes/admin.py) ----
+export type AdminUser = {
+  id: string
+  email: string
+  role: Role
+  is_active: boolean
+  /** Set while the account is locked after too many wrong passwords; a time in the past means the
+   * lock has run out. */
+  locked_until: string | null
+}
+
+export const listAdminUsers = () => apiGet<AdminUser[]>('/api/v1/admin/users')
+export const createAdminUser = (email: string, password: string, role: Role) =>
+  apiPost<AdminUser>('/api/v1/admin/users', { email, password, role })
+export const changeAdminUserRole = (userId: string, role: Role) =>
+  apiPatch<AdminUser>(`/api/v1/admin/users/${userId}/role`, { role })
+export const deactivateAdminUser = (userId: string) =>
+  apiPost<AdminUser>(`/api/v1/admin/users/${userId}/deactivate`)
+export const reactivateAdminUser = (userId: string) =>
+  apiPost<AdminUser>(`/api/v1/admin/users/${userId}/reactivate`)
+export const unlockAdminUser = (userId: string) =>
+  apiPost<AdminUser>(`/api/v1/admin/users/${userId}/unlock`)
+export const revokeAdminUserSessions = (userId: string) =>
+  apiPost<{ user_id: string; revoked_count: number }>(
+    `/api/v1/admin/users/${userId}/revoke-sessions`,
+  )
 
 // ---- Agents (src/gateway/roster.py's fixed 24-agent roster) ----
 export type AgentSummary = {
@@ -1329,6 +1360,7 @@ export async function downloadAuthenticated(path: string, fallbackFilename: stri
   const token = getAccessToken()
   const res = await fetch(`${API_BASE_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    credentials: 'include',
   })
   if (!res.ok) {
     let detail = 'Download failed'
@@ -2081,10 +2113,11 @@ export async function streamChatMessage(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ content }),
+    credentials: 'include',
   })
 
   if (res.status === 401 && !_isRetry && token) {
-    const refreshed = await refreshTokens()
+    const refreshed = await refreshSession()
     if (refreshed.kind === 'ok') return streamChatMessage(sessionId, content, onChunk, true)
     if (refreshed.kind === 'transient') {
       throw new ApiError(refreshed.status, 'Session refresh is temporarily unavailable')

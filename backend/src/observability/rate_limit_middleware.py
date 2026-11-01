@@ -35,6 +35,7 @@ import structlog
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from src.core.client_ip import scope_client_ip
 from src.core.config import get_settings
 from src.core.rate_limit import fixed_window_increment
 from src.core.redis_client import get_redis
@@ -52,16 +53,10 @@ def _request_origin(scope: Scope) -> str | None:
 
 
 def _client_ip(scope: Scope) -> str:
-    # Trust X-Forwarded-For only if this deployment is actually behind a
-    # proxy that sets it (Build Spec's loopback-by-default posture means
-    # it usually isn't) -- fall back to the raw ASGI client tuple either
-    # way, never trusting an unset/spoofable value silently.
-    headers: dict[bytes, bytes] = dict(scope.get("headers") or [])
-    forwarded = headers.get(b"x-forwarded-for")
-    if forwarded:
-        return forwarded.decode("latin-1").split(",")[0].strip()
-    client = scope.get("client")
-    return client[0] if client else "unknown"
+    # X-Forwarded-For is believed only when the peer is one of the proxies named in TRUSTED_PROXIES
+    # (see src.core.client_ip); until Phase 8 the first entry was taken from any client, so sending
+    # the header with a new value each time was a way never to be limited.
+    return scope_client_ip(scope)
 
 
 class RateLimitMiddleware:

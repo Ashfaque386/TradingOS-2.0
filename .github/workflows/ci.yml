@@ -433,6 +433,9 @@ jobs:
           # and every later spec fails. tests/conftest.py disables the same
           # limiter for the pytest suite for the same reason.
           API_RATE_LIMIT_PER_MINUTE: 100000
+          # The same for the per-address ceiling on sign-in attempts (default 20 a minute): every spec
+          # signs in through the page, from this one address.
+          LOGIN_RATE_LIMIT_PER_MINUTE: 100000
           # The specs drive paper/live signals for demo symbols (live-autonomy.spec.ts
           # posts /live-trading/daily-signal-run). Real paper trading refuses to invent
           # price history, so this test backend opts in to the generated demo data. The

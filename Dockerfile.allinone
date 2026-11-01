@@ -104,6 +104,22 @@ COPY --from=frontend-build /fe/.next/standalone ./
 COPY --from=frontend-build /fe/.next/static ./.next/static
 WORKDIR /app
 
+# The API and the frontend's Node server run as an unprivileged user. Only supervisord and nginx's master
+# process (which must start as root to bind its port and to give each program its user) and the entrypoint's
+# one-time ownership fix run as root; Postgres and Redis keep their own users.
+# The directories the API writes are created here owned by that user, so a fresh named volume mounted on
+# one inherits it; container-entrypoint.sh hands over a volume an earlier, root-running version filled.
+RUN groupadd --system --gid 10001 tradingos \
+    && useradd --system --uid 10001 --gid tradingos --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin tradingos \
+    && mkdir -p /app/secrets /app/data_lake /app/data_lake_backups /app/audit_archive /app/backups \
+        /app/alertmanager_token \
+    && chown tradingos:tradingos /app/secrets /app/data_lake /app/data_lake_backups \
+        /app/audit_archive /app/backups /app/alertmanager_token
+
+# The Gateway config is rewritten by the API (Settings > Agent Gateway Config).
+RUN chown -R tradingos:tradingos /app/config
+
 # ---- Process supervision, reverse proxy, entrypoint ----
 COPY deploy/allinone-supervisord.conf /etc/supervisor/conf.d/tradingos.conf
 COPY deploy/nginx.conf.template /etc/nginx/conf.d/tradingos.conf.template

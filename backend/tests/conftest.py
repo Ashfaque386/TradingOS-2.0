@@ -135,8 +135,12 @@ def _disable_ambient_rate_limit():
     value back down to exercise the real 429 path.
     """
     app.state.rate_limit_per_minute = 10**9
+    # The same for the per-address ceiling on sign-in attempts (src.api.routes.auth), which the
+    # suite's many logins from that one address would otherwise reach.
+    app.state.login_rate_limit_per_minute = 10**9
     yield
     del app.state.rate_limit_per_minute
+    del app.state.login_rate_limit_per_minute
 
 
 @pytest_asyncio.fixture

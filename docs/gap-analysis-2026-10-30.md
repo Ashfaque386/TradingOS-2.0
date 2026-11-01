@@ -93,6 +93,18 @@ this is where it stands.
 
 **Still open from this phase:** a drill on the live database's real data (the live stack has no backups until it is rebuilt); no WAL archiving, so up to a day of changes can be lost; the backups sit on the same machine as the database (copy the newest dump elsewhere); Qdrant, Redis and the monitoring volumes have no backup; `SECRETS_ENCRYPTION_KEY` custody is the operator's.
 
+**Closed in phase 8 (access control and browser security):**
+
+| Gap | What changed |
+|---|---|
+| G6 | Registration is for the first account only (an advisory lock keeps two first-run requests from both becoming administrator) and is refused in the same words whatever the email; accounts are made by an administrator in Settings > Users. Wrong passwords are counted against the account: 5 in 15 minutes lock it for 15 (423 with `Retry-After`, an audit entry, an administrator can unlock). |
+| G7 | The access token is held in memory only and the refresh token is an HttpOnly, `SameSite=Strict` cookie scoped to `/api/v1/auth`, never in a body or in storage (Origin-checked, rotated, reuse audited); a WebSocket opens with a one-time 30-second ticket instead of the token in the URL; the API sends nosniff, no-framing, no-referrer, a deny-all CSP and, when asked, HSTS; the console sends a per-response nonce CSP (`script-src 'self' 'nonce-...' 'strict-dynamic'`) and the plain headers; the API and the all-in-one image's frontend run as an unprivileged user and the frontend image as `node`. |
+| G20 | `X-Forwarded-For` is believed only from `TRUSTED_PROXIES`, read from the right; an unknown email pays for a decoy argon2 check; argon2 runs on the thread pool; there is a per-address ceiling on sign-in attempts. |
+| G21 | `/docs`, `/redoc` and `/openapi.json` exist only with `API_DOCS_ENABLED`. |
+| G29 | Settings > Users: create, change role, deactivate and reactivate (typed confirm), sign out everywhere, unlock; the six admin routes are off the wiring allowlist. |
+
+**Still open from this phase:** TLS and HSTS (put a proxy in front before exposing the stack, then set `TRUSTED_PROXIES`/`HSTS_ENABLED`); an XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock); the live stack has not been rebuilt, and rebuilding signs everyone out once.
+
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
 - The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.

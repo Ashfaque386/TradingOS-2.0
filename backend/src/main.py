@@ -32,6 +32,7 @@ from src.observability.metrics import trading_holiday_gauge_updater
 from src.observability.rate_limit_middleware import RateLimitMiddleware
 from src.observability.scheduled_job_history import attach_run_history_listener
 from src.observability.scheduler_registry import register_scheduler, unregister_all
+from src.observability.security_headers import SecurityHeadersMiddleware
 from src.orchestration.audit_scheduler import start_audit_scheduler
 from src.orchestration.backup_scheduler import backup_gauge_updater, start_backup_scheduler
 from src.orchestration.engine_alert_watcher import start_engine_alert_watcher
@@ -279,7 +280,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     watcher.stop()
 
 
-app = FastAPI(title="TradingOS 2.0 API", version="0.1.0", lifespan=lifespan)
+# /docs, /redoc and /openapi.json describe every route to anyone who can reach the port, so they
+# exist only when API_DOCS_ENABLED is set. (`app.openapi()`, which the test suite and the wiring
+# guard use, still works.)
+app = FastAPI(
+    title="TradingOS 2.0 API",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
+)
 
 # Read by src.observability.audit_middleware.AuditLoggingMiddleware, which
 # runs as pure ASGI middleware outside FastAPI's dependency-injection graph
@@ -308,6 +319,9 @@ app.add_middleware(
 app.add_middleware(AuditLoggingMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
+# Outermost, so even a response built by a middleware inside it (the rate limiter's 429) carries
+# them.
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(health_router)
 app.include_router(api_router)

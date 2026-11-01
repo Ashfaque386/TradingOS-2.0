@@ -76,12 +76,6 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ): "the subscriptions list carries the same row",
     ("GET", "/api/v1/paper-trading/subscriptions/{}/position"): "the positions endpoint covers it",
     # ---- no screen yet: the phase of the gap analysis that adds it ----
-    ("GET", "/api/v1/admin/users"): "Phase 8: admin users screen",
-    ("POST", "/api/v1/admin/users"): "Phase 8: admin users screen",
-    ("PATCH", "/api/v1/admin/users/{}/role"): "Phase 8: admin users screen",
-    ("POST", "/api/v1/admin/users/{}/deactivate"): "Phase 8: admin users screen",
-    ("POST", "/api/v1/admin/users/{}/reactivate"): "Phase 8: admin users screen",
-    ("POST", "/api/v1/admin/users/{}/revoke-sessions"): "Phase 8: admin users screen",
     ("GET", "/api/v1/audit/actors/{}/summary"): "Phase 9: Audit drill-downs",
     ("GET", "/api/v1/audit/trades/{}/trace"): "Phase 9: Audit drill-downs",
     (

@@ -535,6 +535,9 @@
   "POST /api/v1/admin/users/{user_id}/revoke-sessions": [
     "SystemAdministrator"
   ],
+  "POST /api/v1/admin/users/{user_id}/unlock": [
+    "SystemAdministrator"
+  ],
   "POST /api/v1/agents/pipeline/run": [
     "PortfolioManager",
     "SystemAdministrator"
@@ -554,6 +557,12 @@
     "SystemAdministrator"
   ],
   "POST /api/v1/audit/verify": [
+    "SystemAdministrator"
+  ],
+  "POST /api/v1/auth/ws-ticket": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
     "SystemAdministrator"
   ],
   "POST /api/v1/backtests": [

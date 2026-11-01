@@ -192,6 +192,14 @@ critical_files = [
   "src/orchestration/engine_alerts.py",
   "src/orchestration/risk_gate.py",
   "src/orchestration/risk_limits.py",
+  # ... who may sign in, how long wrong passwords are tolerated, where a request came from and what
+  # a browser is told to trust ...
+  "src/core/login_lockout.py",
+  "src/core/client_ip.py",
+  "src/core/web_session.py",
+  "src/core/ws_ticket.py",
+  "src/api/ws_auth.py",
+  "src/observability/security_headers.py",
   # ... the gates a strategy or an order must pass through ...
   "src/orchestration/approvals.py",
   "src/orchestration/transitions.py",
@@ -300,6 +308,24 @@ max_survivors = 5
 path = "src/orchestration/live_intent_expiry.py"
 tests = ["tests/test_orchestration_live_intent_expiry.py"]
 max_survivors = 0
+
+[[tool.tradingos.mutation.module]]
+path = "src/core/login_lockout.py"
+tests = ["tests/test_login_lockout.py"]
+# 4 survivors, none able to change what the module does: `<=` to `<` in `seconds_until_unlocked` (a lock
+# ending exactly now gives ceil(0) = 0 either way); and three that make the module fail to import (the
+# two `|` to `&` in the `datetime | None` annotations, and the dataclass decorator of `LockoutPolicy`
+# removed), which pytest reports as a collection error and the gate counts as unkilled -- every test in
+# the repo that touches sign-in would fail on any of them.
+max_survivors = 4
+
+[[tool.tradingos.mutation.module]]
+path = "src/core/client_ip.py"
+tests = ["tests/test_client_ip.py"]
+# 6 survivors, none able to change what the module does: the two type aliases (`|` to `&`, or to None:
+# used only in annotations), `list[Network] = []` to `= None` (the next line then fails at import time
+# in every test), and a default of the `scheme` key to another string that is not "https" either.
+max_survivors = 6
 
 [[tool.tradingos.mutation.module]]
 path = "src/engine/paper_trading/quote_guard.py"

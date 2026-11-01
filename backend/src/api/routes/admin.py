@@ -18,6 +18,7 @@ just as easily lock the whole system out).
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,8 +32,9 @@ from src.api.schemas import (
     UserResponse,
 )
 from src.core.db import get_db
+from src.core.login_lockout import SignInState, is_locked
 from src.core.rbac import Role, register_policy, require_role
-from src.core.security import hash_password
+from src.core.security import hash_password_async
 from src.models.refresh_token import RefreshToken
 from src.models.user import User
 
@@ -47,6 +49,7 @@ register_policy("PATCH", "/api/v1/admin/users/{user_id}/role", roles=_ADMIN_ONLY
 register_policy("POST", "/api/v1/admin/users/{user_id}/deactivate", roles=_ADMIN_ONLY)
 register_policy("POST", "/api/v1/admin/users/{user_id}/reactivate", roles=_ADMIN_ONLY)
 register_policy("POST", "/api/v1/admin/users/{user_id}/revoke-sessions", roles=_ADMIN_ONLY)
+register_policy("POST", "/api/v1/admin/users/{user_id}/unlock", roles=_ADMIN_ONLY)
 
 
 @router.get("/ping")
@@ -95,7 +98,9 @@ async def create_user_endpoint(
     if existing is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A user with this email already exists")
 
-    user = User(email=body.email, hashed_password=hash_password(body.password), role=body.role)
+    user = User(
+        email=body.email, hashed_password=await hash_password_async(body.password), role=body.role
+    )
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -160,6 +165,28 @@ async def reactivate_user_endpoint(
     if user.is_active:
         raise HTTPException(status.HTTP_409_CONFLICT, "This user is already active")
     user.is_active = True
+    await db.commit()
+    await db.refresh(user)
+    return UserResponse.model_validate(user)
+
+
+@router.post("/users/{user_id}/unlock")
+async def unlock_user_endpoint(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> UserResponse:
+    """Ends an account's sign-in lock early (src.core.login_lockout), for the person who has been
+    locked out and cannot wait out the rest of it. Refused when the account is not locked: there is
+    nothing to undo, and a request that changed nothing leaves no row in the audit trail."""
+    user = await _get_user_or_404(db, user_id)
+    state = SignInState(user.failed_login_attempts, user.last_failed_login_at, user.locked_until)
+    if not is_locked(state, datetime.now(UTC)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This account is not locked")
+
+    user.failed_login_attempts = 0
+    user.last_failed_login_at = None
+    user.locked_until = None
     await db.commit()
     await db.refresh(user)
     return UserResponse.model_validate(user)

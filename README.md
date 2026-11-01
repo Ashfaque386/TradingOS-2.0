@@ -36,7 +36,7 @@ docker compose up --build -d
 Ports (all bound to `127.0.0.1` unless you set `BIND_HOST`): frontend **3000**, API **8000**,
 Prometheus **9090**, Grafana **3001** (Alertmanager has no host port: Prometheus and the backend reach
 it over the stack's network). Open <http://localhost:3000> and register: **the first user to
-register becomes the SystemAdministrator**, so do that before exposing the port to anyone else.
+register becomes the SystemAdministrator**, so do that before exposing the port to anyone else. Registration is closed from then on; the administrator makes other accounts under Settings > Users.
 
 **First-time setup — Settings UI (Broker Config, LLM Providers, Notification Channels):** these three
 panels share one encrypted store and fail with a 503 until you set `SECRETS_ENCRYPTION_KEY` in `.env`:
@@ -103,6 +103,8 @@ for d in data_lake data_lake_backups audit_archive; do docker cp TradingOS-2.0-B
 docker compose down && docker compose up --build -d
 for d in data_lake data_lake_backups audit_archive; do docker cp ./$d.keep/. TradingOS-2.0-Backend:/app/$d; done
 ```
+
+**Sign-in and sessions.** Only the first account can register; an administrator creates the others (Settings > Users). Five wrong passwords within 15 minutes lock that account for 15 (an administrator can unlock it; `LOGIN_MAX_FAILED_ATTEMPTS`, `LOGIN_FAILURE_WINDOW_MINUTES`, `LOGIN_LOCKOUT_MINUTES`). The console keeps its access token in memory and the refresh token in an HttpOnly cookie, so reloading a page restores the session and nothing a script can read is stored; a curl client needs a cookie jar (`-c`/`-b`) for `/auth/refresh`. WebSockets open with a one-time ticket from `POST /auth/ws-ticket`. The API's `/docs` is off unless `API_DOCS_ENABLED=true`. The stack serves plain HTTP on loopback: **put a TLS-terminating proxy in front before exposing it**, then set `TRUSTED_PROXIES` to that proxy's address (so rate limits see real client addresses and the cookie is marked Secure), `HSTS_ENABLED=true`, and send HSTS from the proxy for the console. The API and the all-in-one image's frontend run as an unprivileged user; the first start after upgrading hands the data volumes to it, which can take a moment for a large data lake. Rebuilding signs everyone out once.
 
 **Backups.** The database is dumped every night at 22:45 IST to the `tradingos-2.0_backups` volume (the newest 7, and any younger than 14 days, are kept), each with a manifest and a checksum, and Settings > System and backups shows them and can take one now. A failed night raises an alert. `python -m scripts.restore_postgres list|verify|restore` (run with `docker exec TradingOS-2.0-Backend`) puts one back and checks the result against its manifest. A backup does **not** contain `SECRETS_ENCRYPTION_KEY` (without it the saved broker, LLM and notification credentials cannot be read, so keep it somewhere other than this machine), and the dump holds the login signing keys in plain text. It is on the same machine as the database: copy the newest one elsewhere. See [docs/runbooks/postgres-restore.md](docs/runbooks/postgres-restore.md).
 

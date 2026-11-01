@@ -6,10 +6,12 @@ import { AlertCircle, ArrowRight, LockKeyhole, Loader2, Mail, Shield, Sparkles, 
 import { useAuth } from '@/components/auth/auth-provider'
 import { refusalMessage } from '@/lib/auth-errors'
 import { ApiError } from '@/lib/api'
+import { useRegistrationStatus } from '@/lib/use-registration-status'
 
 export default function LoginPage() {
   const router = useRouter()
   const { isAuthenticated, isLoading, signIn } = useAuth()
+  const registration = useRegistrationStatus()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'invalid' | 'network' | 'refused'>('idle')
@@ -65,10 +67,18 @@ export default function LoginPage() {
               {status === 'network' && <div className="auth-alert auth-alert-network" role="alert"><WifiOff className="size-4 shrink-0" /><span>Connectivity error. The neural gateway is unreachable. Try again.</span></div>}
               <button type="submit" disabled={status === 'loading'} className="auth-submit">{status === 'loading' ? <><Loader2 className="size-4 animate-spin" />Authenticating signal...</> : <>Initialize session<ArrowRight className="size-4" /></>}</button>
             </form>
-            <p className="mt-6 text-center text-sm text-muted-foreground">
-              No account yet?{' '}
-              <a href="/register" className="text-cyan-300 hover:text-cyan-200">Create one</a>
-            </p>
+            {registration.kind === 'known' && (
+              <p className="mt-6 text-center text-sm text-muted-foreground">
+                {registration.status.open ? (
+                  <>
+                    No account yet?{' '}
+                    <a href="/register" className="text-cyan-300 hover:text-cyan-200">Create the first account</a>
+                  </>
+                ) : (
+                  'Accounts are created by an administrator.'
+                )}
+              </p>
+            )}
           </div>
         </section>
         <p className="mt-5 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/50">Encrypted session · No MFA configured · NSE / BSE intelligence fabric</p>

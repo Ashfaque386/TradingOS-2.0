@@ -117,8 +117,10 @@ function answer(route: Route, status: number, body: unknown, headers: Record<str
   const origin = route.request().headers()['origin'] ?? '*'
   const cors = {
     'access-control-allow-origin': origin,
-    'access-control-allow-headers': '*',
-    'access-control-allow-methods': '*',
+    // every console request carries credentials, and then a wildcard in the next two is read literally
+    'access-control-allow-credentials': 'true',
+    'access-control-allow-headers': route.request().headers()['access-control-request-headers'] ?? 'content-type',
+    'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'access-control-expose-headers': 'retry-after',
   }
   // The browser sends a preflight first for a JSON POST: let it through, answer the real call.

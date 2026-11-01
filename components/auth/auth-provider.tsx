@@ -2,13 +2,15 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import {
+  ApiError,
   type CurrentUser,
   type Role,
   getMe,
-  isAuthenticated as hasStoredToken,
+  isAuthenticated as hasAccessToken,
   isTransientError,
   login as apiLogin,
   logout as apiLogout,
+  refreshSession,
   register as apiRegister,
 } from '@/lib/api'
 
@@ -19,10 +21,10 @@ const FALLBACK_ROLE: Role = 'ReadOnlyAuditor'
 type AuthContextValue = {
   isAuthenticated: boolean
   isLoading: boolean
-  // True when stored tokens exist but the server couldn't be reached to
-  // confirm them (rate-limited, erroring, offline) even after retries. The
-  // session is NOT over -- the shell shows a "can't reach the server"
-  // screen instead of bouncing the operator to /login.
+  // True when the server couldn't be reached to restore the session
+  // (rate-limited, erroring, offline) even after retries. The session is
+  // NOT over -- the shell shows a "can't reach the server" screen instead of
+  // bouncing the operator to /login.
   isUnreachable: boolean
   user: CurrentUser | null
   role: Role
@@ -47,18 +49,28 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null)
   // Starts 'loading' so a page wrapped in ShellLayout doesn't flash its
-  // protected content (or bounce to /login) before a stored refresh token
-  // has had a chance to resolve into a real session.
+  // protected content (or bounce to /login) before the refresh cookie has
+  // had a chance to resolve into a real session.
   const [sessionState, setSessionState] = useState<SessionState>('loading')
 
   const rehydrate = useCallback(async (isCancelled: () => boolean) => {
-    if (!hasStoredToken()) {
-      setSessionState('unauthenticated')
-      return
-    }
     setSessionState('loading')
     for (let attempt = 0; ; attempt++) {
       try {
+        // A page load has no access token (it is kept in memory only): buy one
+        // with the refresh cookie. No cookie, or a dead one, is a real answer --
+        // there is no session; a server that did not answer is not.
+        if (!hasAccessToken()) {
+          const outcome = await refreshSession()
+          if (isCancelled()) return
+          if (outcome.kind === 'rejected') {
+            setSessionState('unauthenticated')
+            return
+          }
+          if (outcome.kind === 'transient') {
+            throw new ApiError(outcome.status, 'Session refresh is temporarily unavailable')
+          }
+        }
         const me = await getMe()
         if (isCancelled()) return
         setUser(me)

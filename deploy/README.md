@@ -37,6 +37,8 @@ single-service deployment instead.
      boot. Unset by default; without it, register the first user through
      the app's own `/register` page instead (the first registered user on
      a fresh system automatically becomes `SystemAdministrator`).
+     Registration closes once that first account exists; the administrator creates the rest under
+     Settings > Users.
    - `SECRETS_ENCRYPTION_KEY` — needed only for the broker-credentials
      feature (live trading). Generate with
      `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
@@ -77,3 +79,7 @@ nginx -g 'daemon off;' &
 
 curl http://127.0.0.1:8091/health
 ```
+
+## Who runs as whom
+
+`supervisord` and nginx's master process run as root (they must, to give each program its user and to bind the port); Postgres and Redis run as their own users; the API and the frontend's Node server run as `tradingos` (uid 10001). The entrypoint hands the data directories to that user on the first start after an upgrade. nginx is the only peer the API ever sees, so the image sets `TRUSTED_PROXIES=127.0.0.1`; behind a platform that terminates TLS nginx passes the platform's `X-Forwarded-Proto` on, and the session cookie is marked Secure from it.

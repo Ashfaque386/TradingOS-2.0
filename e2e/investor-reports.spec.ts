@@ -39,7 +39,11 @@ test('a report list that cannot be loaded says so', async ({ page }) => {
       ? route.fulfill({
           status: 500,
           contentType: 'application/json',
-          headers: { 'access-control-allow-origin': route.request().headers()['origin'] ?? '*' },
+          headers: {
+            'access-control-allow-origin': route.request().headers()['origin'] ?? '*',
+            // every console request carries credentials, and a browser refuses a faked answer without this
+            'access-control-allow-credentials': 'true',
+          },
           body: JSON.stringify({ detail: 'the report store is down' }),
         })
       : route.fallback(),

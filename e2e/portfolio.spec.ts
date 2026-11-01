@@ -33,7 +33,11 @@ test('a rollup that cannot be loaded says so, with a way to try again', async ({
     route.fulfill({
       status: 500,
       contentType: 'application/json',
-      headers: { 'access-control-allow-origin': route.request().headers()['origin'] ?? '*' },
+      headers: {
+        'access-control-allow-origin': route.request().headers()['origin'] ?? '*',
+        // every console request carries credentials, and a browser refuses a faked answer without this
+        'access-control-allow-credentials': 'true',
+      },
       body: JSON.stringify({ detail: 'the ledger is down' }),
     }),
   )

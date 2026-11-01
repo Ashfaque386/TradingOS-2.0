@@ -14,6 +14,7 @@ import {
   Copy,
   Cpu,
   DatabaseBackup,
+  Users,
   ExternalLink,
   GripVertical,
   History,
@@ -39,6 +40,8 @@ import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { AlertmanagerStatus } from '@/components/settings/alertmanager-status'
 import { BackupsSection } from '@/components/settings/backups-section'
+import { SignInPolicyCard } from '@/components/settings/sign-in-policy'
+import { UsersSection } from '@/components/settings/users-section'
 import { describeQuoteRefusals } from '@/lib/broker-quotes'
 import { InboundSettings } from '@/components/settings/inbound-settings'
 import { RiskLimitsSection } from '@/components/settings/risk-limits-section'
@@ -86,7 +89,7 @@ import {
 } from '@/lib/api'
 import { can } from '@/lib/permissions'
 
-type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'security' | 'backups'
+type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'users' | 'security' | 'backups'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: string }[] = [
   { id: 'gateway', label: 'Agent Gateway Config', icon: Braces, desc: 'Infra & agent defaults' },
@@ -95,7 +98,8 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: strin
   { id: 'notifications', label: 'Notification Channels', icon: Bell, desc: 'Telegram / Discord / Slack' },
   { id: 'skills', label: 'Skill Marketplace', icon: Sparkles, desc: 'Grant tools to agents' },
   { id: 'risk', label: 'Risk Limits', icon: SlidersHorizontal, desc: 'Dual-control thresholds' },
-  { id: 'security', label: 'Security', icon: Lock, desc: 'Login signing key' },
+  { id: 'users', label: 'Users', icon: Users, desc: 'Accounts, roles, locks' },
+  { id: 'security', label: 'Security', icon: Lock, desc: 'Sign-in rules, signing key' },
   { id: 'backups', label: 'System and backups', icon: DatabaseBackup, desc: 'Database and data lake backups' },
 ]
 
@@ -1225,7 +1229,13 @@ export default function SettingsPage() {
             {section === 'notifications' && <NotificationsSection onStatusChanged={bumpStatus} />}
             {section === 'skills' && <SkillsSection />}
             {section === 'risk' && <RiskLimitsSection />}
-            {section === 'security' && <SigningKeyCard />}
+            {section === 'users' && <UsersSection />}
+            {section === 'security' && (
+              <>
+                <SignInPolicyCard />
+                <SigningKeyCard />
+              </>
+            )}
             {section === 'backups' && <BackupsSection />}
           </section>
         </div>
