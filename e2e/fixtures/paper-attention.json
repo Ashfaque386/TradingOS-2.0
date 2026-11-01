@@ -128,6 +128,25 @@
         {"id": "w1:halted", "severity": "warning", "title": "ZED is not trading", "detail": "no broker is connected", "action": null},
         {"id": "i1:history", "severity": "info", "title": "AAA is waiting for price history", "detail": "It needs more real price history before it can signal.", "action": null}
       ]
+    },
+    {
+      "name": "a refused quote is a warning that says why, and explains a stale price instead of adding to it",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "r1", "symbol": "TCS", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 500}, "quote_refusal": {"broker": "zerodha", "reason": "the exchange stamp (2026-10-30 15:29 IST) is from a previous day"}}
+      ],
+      "expected": [
+        {"id": "r1:refused", "severity": "warning", "title": "TCS has no usable price", "detail": "Its latest zerodha quote was refused: the exchange stamp (2026-10-30 15:29 IST) is from a previous day. Nothing trades on it until a current quote arrives.", "action": null}
+      ]
+    },
+    {
+      "name": "a refusal on a switched-off subscription, or no refusal at all, is not flagged",
+      "market_open": true,
+      "subscriptions": [
+        {"id": "r2", "symbol": "INFY", "instrument_kind": "equity", "option_strategy": null, "is_active": false, "managed": true, "state": "inactive", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": null, "quote_refusal": {"broker": "zerodha", "reason": "the exchange stamp is old"}},
+        {"id": "r3", "symbol": "SBIN", "instrument_kind": "equity", "option_strategy": null, "is_active": true, "managed": true, "state": "active", "state_reason": null, "open_legs": 0, "unrealized_pnl": null, "last_tick": {"age_seconds": 3}, "quote_refusal": null}
+      ],
+      "expected": []
     }
   ]
 }

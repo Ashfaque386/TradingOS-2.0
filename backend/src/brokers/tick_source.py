@@ -44,14 +44,19 @@ import structlog
 
 from src.brokers import feed_health
 from src.brokers.base import BrokerAdapter, BrokerAuthError, BrokerCredentials, BrokerQuote
-from src.brokers.factory import KNOWN_BROKERS
+from src.brokers.factory import configured_broker_fingerprint
 from src.core.config import get_settings
 from src.data.market_data_factory import connected_adapters
 from src.engine.paper_trading.depth import DepthSnapshot
 from src.engine.paper_trading.order_book import OrderBookLevel
+from src.engine.paper_trading.quote_guard import (
+    EXCHANGE_CLOCK_SKEW_SECONDS,
+    exchange_stamp_problem,
+)
 from src.engine.paper_trading.tick_feed import (
     MockTickSource,
     NoQuoteError,
+    QuoteRefusedError,
     Tick,
     TickOutcome,
     TickSource,
@@ -63,6 +68,7 @@ from src.observability.metrics import (
     paper_quote_exchange_lag_seconds,
     paper_quote_exchange_lag_unusable_total,
     paper_quote_fetch_seconds,
+    paper_quotes_refused_exchange_stale_total,
 )
 from src.security.secrets_store import SecretsStoreError, get_secrets_store
 
@@ -77,8 +83,9 @@ logger = structlog.get_logger(__name__)
 # 3 seconds.
 AUTH_REJECTED_RETRY_SECONDS = 600.0
 
-# A quote stamped slightly ahead of this machine's clock is clock skew, not a future quote.
-EXCHANGE_CLOCK_SKEW_SECONDS = 2.0
+# A refusal is logged the first time for a symbol and then at most this often: it repeats every
+# cycle for as long as the exchange stamp stays old.
+REFUSAL_LOG_INTERVAL_SECONDS = 300.0
 
 
 @dataclass
@@ -88,19 +95,49 @@ class BrokerQuoteTickSource:
     clock: Callable[[], float] = time.monotonic
     _suspended_until: float | None = field(default=None, init=False, repr=False)
     _rejection: str = field(default="", init=False, repr=False)
+    _refusal_logged_at: dict[str, float] = field(default_factory=dict, init=False, repr=False)
 
     async def next_tick(self, symbol: str) -> Tick:
         quote = await self._guarded(lambda: self.adapter.get_quote(symbol))
         self._record_exchange_lag(quote)
-        return _tick_from_quote(quote)
+        outcome = self._tick_or_refusal(quote)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
-    async def next_ticks(self, symbols: Sequence[str]) -> dict[str, Tick]:
+    async def next_ticks(self, symbols: Sequence[str]) -> dict[str, TickOutcome]:
         """One batched quote call for all `symbols`. A symbol the broker has no price for is
-        simply absent from the result."""
+        simply absent from the result; one whose exchange stamp is too old to act on is there as a
+        `QuoteRefusedError` (so a caller does not mistake it for a missing quote and ask another
+        broker, whose answer would be no fresher)."""
         quotes = await self._guarded(lambda: self.adapter.get_quotes(symbols))
         for quote in quotes.values():
             self._record_exchange_lag(quote)
-        return {symbol: _tick_from_quote(quote) for symbol, quote in quotes.items()}
+        return {symbol: self._tick_or_refusal(quote) for symbol, quote in quotes.items()}
+
+    def _tick_or_refusal(self, quote: BrokerQuote) -> TickOutcome:
+        """The tick for this quote, or the reason it must not be acted on (see
+        `src.engine.paper_trading.quote_guard`)."""
+        problem = exchange_stamp_problem(
+            quote.exchange_time,
+            now=datetime.now(UTC),
+            max_age_seconds=get_settings().paper_quote_max_exchange_age_seconds,
+        )
+        if problem is None:
+            return _tick_from_quote(quote)
+        broker = self.adapter.broker_name
+        paper_quotes_refused_exchange_stale_total.labels(broker=broker).inc()
+        feed_health.record_quote_refusal(broker, symbol=quote.symbol, reason=problem)
+        now = self.clock()
+        last = self._refusal_logged_at.get(quote.symbol)
+        if last is None or now - last >= REFUSAL_LOG_INTERVAL_SECONDS:
+            self._refusal_logged_at[quote.symbol] = now
+            logger.warning(
+                "tick_source.quote_refused", broker=broker, symbol=quote.symbol, reason=problem
+            )
+        return QuoteRefusedError(
+            symbol=quote.symbol, broker=broker, reason=problem, exchange_time=quote.exchange_time
+        )
 
     def _record_exchange_lag(self, quote: BrokerQuote) -> None:
         """How old the exchange's own stamp on this quote was when it reached us. Recorded only
@@ -181,6 +218,11 @@ def _tick_from_quote(quote: BrokerQuote) -> Tick:
         timestamp_ms=now_ms,
         source=DataSource.REAL,  # a live quote from a real broker
         depth=depth,
+        exchange_time_ms=(
+            int(quote.exchange_time.timestamp() * 1000) if quote.exchange_time is not None else None
+        ),
+        lower_circuit=quote.lower_circuit,
+        upper_circuit=quote.upper_circuit,
     )
 
 
@@ -226,7 +268,7 @@ class FallbackTickSource:
                     error=f"{type(exc).__name__}: {str(exc)[:120]}",
                 )
                 continue
-            if ticks:
+            if any(isinstance(outcome, Tick) for outcome in ticks.values()):
                 served_by = served_by or source.adapter.broker_name
             outcomes.update(ticks)
             remaining = [symbol for symbol in remaining if symbol not in ticks]
@@ -258,20 +300,7 @@ def build_tick_source() -> TickSource:
     return FallbackTickSource([BrokerQuoteTickSource(adapter) for adapter in adapters])
 
 
-def _configured_broker_fingerprint() -> tuple[tuple[str, BrokerCredentials], ...] | None:
-    """Every broker with stored credentials, in preference order, with the credentials
-    themselves (frozen, structurally-`==`-able dataclasses) so re-saving the *same* broker's
-    key/token, or connecting a second broker, is detected as a real change."""
-    try:
-        store = get_secrets_store()
-    except SecretsStoreError:
-        return None
-    configured = tuple(
-        (broker, credentials)
-        for broker in KNOWN_BROKERS
-        if (credentials := store.get_credentials(broker)) is not None
-    )
-    return configured or None
+_configured_broker_fingerprint = configured_broker_fingerprint
 
 
 class _RefreshingTickSource:

@@ -37,6 +37,7 @@ import {
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { AlertmanagerStatus } from '@/components/settings/alertmanager-status'
+import { describeQuoteRefusals } from '@/lib/broker-quotes'
 import { InboundSettings } from '@/components/settings/inbound-settings'
 import { RiskLimitsSection } from '@/components/settings/risk-limits-section'
 import { SigningKeyCard } from '@/components/settings/signing-key-card'
@@ -790,6 +791,12 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
           <span>
             {status.broker} refused the stored token (HTTP {status.feed_rejection_status}) at {formatIstTime(status.feed_rejected_at)}, so live quotes are not flowing. The expiry shown elsewhere is only an estimate. Reconnect to fix it.
           </span>
+        </div>
+      )}
+      {describeQuoteRefusals(status) && (
+        <div className="set-reminder" data-testid={`quote-refusals-${status.broker}`}>
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span>{describeQuoteRefusals(status)}</span>
         </div>
       )}
       {error && <p className="text-xs text-rose-300">{error}</p>}

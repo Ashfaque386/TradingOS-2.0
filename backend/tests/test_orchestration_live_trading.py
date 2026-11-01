@@ -416,6 +416,7 @@ async def test_standing_cap_blocks_a_runaway_signal_loop(db_session_factory):
     async with db_session_factory() as db:
         sub_row = await db.get(LiveTradingSubscription, subscription.id)
         sub_row.last_signal_type = "BUY"
+        sub_row.last_signal_reference_price = 106.0  # yesterday's close, near the quote
         await db.commit()
 
     adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="RUNAWAY_OID"))
@@ -775,6 +776,7 @@ async def test_no_second_order_is_decided_while_the_first_is_unconfirmed(db_sess
     async with db_session_factory() as db:
         sub_row = await db.get(LiveTradingSubscription, subscription.id)
         sub_row.last_signal_type = "BUY"
+        sub_row.last_signal_reference_price = 106.0  # yesterday's close, near the quote
         await db.commit()
     adapter = _mock_adapter(_quote_and_order_handler(106.5, order_id="ONCE"))
 

@@ -1,7 +1,14 @@
-"""Compliance Checker (Build Spec §8): SEBI-style position limits and an
-NSE-style circuit-filter band, both deterministic and independent of any
+"""Compliance Checker (Build Spec §8): a house single-position limit and a
+circuit-filter band, both deterministic and independent of any
 LLM output -- nothing here ever asks a model anything; every verdict is
 arithmetic against a regulatory data source.
+
+**Two different kinds of limit, said as such.** The position limit is a concentration rule of this
+system (no single position above a share of the portfolio); it is not an exchange or SEBI limit, and
+its reason says so. The circuit band is the exchange's: when the quote that priced the order carried
+the exchange's own lower and upper circuit limits for the day (`ExchangeCircuitLimits`), those are
+what is checked. Only without them does the check fall back to the reference table's percentage
+band against a reference price, and its reason says that it did.
 
 **Swappable regulatory data source**: `RegulatoryDataProvider` is a
 `Protocol` (the same swap-later posture as
@@ -25,6 +32,15 @@ from typing import Protocol
 
 DEFAULT_POSITION_LIMIT_PCT = 10.0
 DEFAULT_CIRCUIT_BAND_PCT = 20.0
+
+
+@dataclass(frozen=True, slots=True)
+class ExchangeCircuitLimits:
+    """The exchange's price band for the day, as the broker's quote carried it: no order is accepted
+    at or beyond either end."""
+
+    lower: float
+    upper: float
 
 
 class RegulatoryDataProvider(Protocol):
@@ -64,7 +80,7 @@ def check_position_limit(
     portfolio_value: float,
     provider: RegulatoryDataProvider,
 ) -> ComplianceCheckResult:
-    """SEBI-style single-position concentration limit: a proposed position
+    """House single-position concentration limit: a proposed position
     may not exceed `provider.position_limit_pct(symbol)` percent of total
     portfolio value."""
     if portfolio_value <= 0:
@@ -77,7 +93,8 @@ def check_position_limit(
             blocked=True,
             reasons=[
                 f"{symbol}: proposed position {proposed_pct:.2f}% of portfolio exceeds "
-                f"SEBI-style position limit {limit_pct:.2f}%"
+                f"the house single-position limit {limit_pct:.2f}% (a concentration rule of this "
+                "system, not an exchange or SEBI limit)"
             ],
         )
     return ComplianceCheckResult(blocked=False)
@@ -89,13 +106,36 @@ def check_circuit_filter_band(
     proposed_price: float,
     reference_price: float,
     provider: RegulatoryDataProvider,
+    exchange_limits: ExchangeCircuitLimits | None = None,
 ) -> ComplianceCheckResult:
-    """NSE-style circuit filter: if the proposed price is already at or
-    beyond the exchange's price band relative to the reference (previous
-    close) price, the exchange itself would halt trading in that
-    direction -- reject the order intent rather than let it be attempted."""
+    """Circuit filter: if the proposed price is already at or beyond the band, the exchange itself
+    would accept no order there -- reject the order intent rather than let it be attempted.
+
+    With `exchange_limits` (the exchange's own lower and upper limits for the day, from the quote)
+    the price is checked against those. Without them the fallback is the reference table's band
+    (`provider`) measured from `reference_price` (the previous close), and the reason says that the
+    quote carried no exchange limits."""
     if reference_price <= 0:
         raise ValueError("reference_price must be positive")
+
+    if exchange_limits is not None:
+        if proposed_price >= exchange_limits.upper:
+            return ComplianceCheckResult(
+                blocked=True,
+                reasons=[
+                    f"{symbol}: proposed price {proposed_price:.2f} is at/above the exchange's "
+                    f"upper circuit limit {exchange_limits.upper:.2f} (from the broker's quote)"
+                ],
+            )
+        if proposed_price <= exchange_limits.lower:
+            return ComplianceCheckResult(
+                blocked=True,
+                reasons=[
+                    f"{symbol}: proposed price {proposed_price:.2f} is at/below the exchange's "
+                    f"lower circuit limit {exchange_limits.lower:.2f} (from the broker's quote)"
+                ],
+            )
+        return ComplianceCheckResult(blocked=False)
 
     band_pct = provider.circuit_filter_band_pct(symbol)
     move_pct = abs(proposed_price - reference_price) / reference_price * 100.0
@@ -103,8 +143,9 @@ def check_circuit_filter_band(
         return ComplianceCheckResult(
             blocked=True,
             reasons=[
-                f"{symbol}: proposed price move {move_pct:.2f}% is at/beyond the "
-                f"NSE-style circuit filter band {band_pct:.2f}%"
+                f"{symbol}: proposed price move {move_pct:.2f}% from the reference price is "
+                f"at/beyond the reference table's circuit band {band_pct:.2f}% (the quote carried "
+                "no exchange circuit limits)"
             ],
         )
     return ComplianceCheckResult(blocked=False)
@@ -118,10 +159,17 @@ def run_compliance_checks(
     proposed_price: float,
     reference_price: float,
     provider: RegulatoryDataProvider,
+    exchange_limits: ExchangeCircuitLimits | None = None,
+    check_circuit_band: bool = True,
 ) -> ComplianceCheckResult:
     """Combines both checks into one verdict -- the shape
     `src.orchestration.risk_gate` composes with the naked-options scan and
-    correlation constraint."""
+    correlation constraint.
+
+    `check_circuit_band=False` leaves the circuit band out, for one case only: an order that closes
+    a position because its stop-loss was hit. A price that gapped past the band is exactly when the
+    stop matters, and refusing the exit would leave the position unprotected; the position limit
+    still applies."""
     results = [
         check_position_limit(
             symbol=symbol,
@@ -129,12 +177,16 @@ def run_compliance_checks(
             portfolio_value=portfolio_value,
             provider=provider,
         ),
-        check_circuit_filter_band(
-            symbol=symbol,
-            proposed_price=proposed_price,
-            reference_price=reference_price,
-            provider=provider,
-        ),
     ]
+    if check_circuit_band:
+        results.append(
+            check_circuit_filter_band(
+                symbol=symbol,
+                proposed_price=proposed_price,
+                reference_price=reference_price,
+                provider=provider,
+                exchange_limits=exchange_limits,
+            )
+        )
     reasons = [reason for result in results for reason in result.reasons]
     return ComplianceCheckResult(blocked=bool(reasons), reasons=reasons)

@@ -209,3 +209,58 @@ async def test_an_approved_intent_cannot_be_altered_after_the_gate_approved_it(
         intent.quantity = 10_000_000  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         intent.price = 1.0  # type: ignore[misc]
+
+
+# ---- the exchange's circuit limits, and the stop-loss exit ----
+
+
+async def test_the_exchanges_limits_from_the_quote_are_what_the_band_is_checked_against(
+    db_session_factory,
+):
+    from src.engine.risk.compliance import ExchangeCircuitLimits
+
+    limits = ExchangeCircuitLimits(lower=1_800.0, upper=2_200.0)
+    async with db_session_factory() as db:
+        inside = await create_order_intent(
+            db, **_kwargs(proposed_price=2_150, exchange_limits=limits)
+        )
+        with pytest.raises(OrderIntentRejectedError) as raised:
+            await create_order_intent(db, **_kwargs(proposed_price=2_200, exchange_limits=limits))
+
+    assert inside.circuit_band_checked is True
+    assert raised.value.reasons == [
+        "RELIANCE: proposed price 2200.00 is at/above the exchange's upper circuit limit "
+        "2200.00 (from the broker's quote)"
+    ]
+
+
+async def test_a_stop_loss_exit_is_not_held_to_the_circuit_band(db_session_factory):
+    gapped = dict(side="sell", proposed_price=1_400, reference_price=2_000)  # 30% down
+
+    async with db_session_factory() as db:
+        with pytest.raises(OrderIntentRejectedError, match="circuit band"):
+            await create_order_intent(db, **_kwargs(**gapped))
+        exit_intent = await create_order_intent(db, **_kwargs(**gapped, stop_loss_exit=True))
+
+    assert (
+        exit_intent.circuit_band_checked is False
+    )  # recorded: the band was not part of this verdict
+
+
+async def test_a_stop_loss_exit_still_answers_to_the_position_limit(db_session_factory):
+    async with db_session_factory() as db:
+        with pytest.raises(OrderIntentRejectedError, match="house single-position limit"):
+            await create_order_intent(
+                db, **_kwargs(proposed_position_value=150_000, stop_loss_exit=True)
+            )
+
+
+async def test_a_stop_loss_exit_is_stopped_by_a_tripped_kill_switch_like_any_order(
+    db_session_factory,
+):
+    async with db_session_factory() as db:
+        await check_drawdown(db, "live", current_equity=50_000, peak_equity=100_000)
+
+    async with db_session_factory() as db:
+        with pytest.raises(KillSwitchTrippedError):
+            await create_order_intent(db, **_kwargs(mode="live", stop_loss_exit=True))

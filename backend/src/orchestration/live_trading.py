@@ -101,14 +101,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.audit.service import write_audit_entry
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderSide, OrderType
+from src.core.config import get_settings
 from src.engine.backtest.engine import run_vectorized_backtest
 from src.engine.backtest.friction import compute_leg_costs
 from src.engine.backtest.signals import BuiltinStrategy, generate_builtin_signals
 from src.engine.paper_trading.daily_signal import detect_todays_signal
 from src.engine.paper_trading.position_ledger import Position, apply_fill
 from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
+from src.engine.paper_trading.quote_guard import exchange_stamp_problem
 from src.engine.paper_trading.stop_loss import check_universal_stop_loss
-from src.engine.risk.compliance import RegulatoryDataProvider
+from src.engine.risk.compliance import ExchangeCircuitLimits, RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.data_source import DataSource
 from src.models.live_order_intent import LiveOrderIntent
@@ -117,6 +119,8 @@ from src.models.live_trading_subscription import LiveTradingSubscription
 from src.models.order import Order
 from src.models.strategy import Strategy, StrategyStatus
 from src.models.trade import Trade
+from src.observability.metrics import paper_quotes_refused_exchange_stale_total
+from src.orchestration.engine_alerts import AlertCandidate, record_event_safely
 from src.orchestration.kill_switch import assert_not_tripped
 from src.orchestration.live_intent_expiry import expire_stale_intents
 from src.orchestration.paper_trading import friction_model
@@ -605,7 +609,23 @@ async def _fail_intent(
         entity_id=str(intent.id),
         details={"reason": reason},
     )
-    await db.commit()
+    # A real order that was decided and not sent is something a person should hear about; a
+    # stop-loss exit that could not be sent leaves a position unprotected, which is critical.
+    # (This commits.)
+    is_stop = intent.intent_type == "stop"
+    await record_event_safely(
+        db,
+        AlertCandidate(
+            key=f"live_intent_failed:{intent.id}",
+            kind="live_intent_failed",
+            severity="critical" if is_stop else "warning",
+            title=(
+                f"Live {intent.side} of {intent.symbol} was not sent"
+                + (" (a stop-loss exit)" if is_stop else "")
+            ),
+            detail=reason[:2000],
+        ),
+    )
     await db.refresh(intent)
     return intent
 
@@ -634,10 +654,41 @@ async def _submit_intent_to_broker(
     except Exception as exc:  # noqa: BLE001 - any quote failure is an honest submission failure
         return await _fail_intent(db, intent, reason=f"quote lookup failed: {exc}")
 
-    reference_price = quote.last_price
+    # A quote the exchange stamped on an earlier day (or, if configured, too long ago) is not a
+    # price to put a real order against.
+    stale = exchange_stamp_problem(
+        quote.exchange_time,
+        now=datetime.now(UTC),
+        max_age_seconds=get_settings().paper_quote_max_exchange_age_seconds,
+    )
+    if stale is not None:
+        paper_quotes_refused_exchange_stale_total.labels(broker=adapter.broker_name).inc()
+        return await _fail_intent(db, intent, reason=f"quote refused: {stale}")
+
+    quote_price = quote.last_price
     subscription = await _get_live_subscription(
         db, strategy_id=intent.strategy_id, symbol=intent.symbol
     )
+
+    # The circuit band is judged against the exchange's own limits from this quote or, without them,
+    # against the previous close (the last daily bar's close, as of the morning's signal run). It
+    # used to be judged against the quote's own price, which can never be outside its own band.
+    exchange_limits = (
+        ExchangeCircuitLimits(lower=quote.lower_circuit, upper=quote.upper_circuit)
+        if quote.lower_circuit is not None and quote.upper_circuit is not None
+        else None
+    )
+    stop_loss_exit = intent.intent_type == "stop"
+    previous_close = subscription.last_signal_reference_price
+    if exchange_limits is None and previous_close is None and not stop_loss_exit:
+        return await _fail_intent(
+            db,
+            intent,
+            reason=(
+                "the circuit band cannot be judged: the quote carried no exchange circuit limits "
+                "and there is no previous close to measure the reference table's band from"
+            ),
+        )
 
     try:
         await create_order_intent(
@@ -646,11 +697,13 @@ async def _submit_intent_to_broker(
             symbol=intent.symbol,
             side=intent.side,
             quantity=intent.quantity,
-            proposed_price=reference_price,
-            reference_price=reference_price,
-            proposed_position_value=intent.quantity * reference_price,
+            proposed_price=quote_price,
+            reference_price=previous_close if previous_close is not None else quote_price,
+            proposed_position_value=intent.quantity * quote_price,
             portfolio_value=subscription.initial_capital,
             regulatory_provider=regulatory_provider,
+            exchange_limits=exchange_limits,
+            stop_loss_exit=stop_loss_exit,
         )
     except KillSwitchTrippedError as exc:
         logger.warning(
@@ -693,7 +746,7 @@ async def _submit_intent_to_broker(
             symbol=intent.symbol,
             side=intent.side,
             quantity=intent.quantity,
-            price=reference_price,
+            price=quote_price,
             status="pending_confirmation",
             data_source=DataSource.REAL,  # a broker's own quote, via a real adapter
         )
@@ -716,7 +769,14 @@ async def _submit_intent_to_broker(
             "quantity": intent.quantity,
             "broker_name": adapter.broker_name,
             "broker_order_id": result.broker_order_id,
-            "reference_price": reference_price,
+            "reference_price": quote_price,
+            "circuit_band": (
+                "skipped (stop-loss exit)"
+                if stop_loss_exit
+                else "exchange limits"
+                if exchange_limits is not None
+                else "previous close"
+            ),
         },
     )
 

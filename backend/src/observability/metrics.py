@@ -52,6 +52,12 @@ paper_quote_exchange_lag_unusable_total = Counter(
     "Quotes whose exchange timestamp was missing, unreadable, or in the future",
     labelnames=("broker", "reason"),
 )
+paper_quotes_refused_exchange_stale_total = Counter(
+    "tradingos_paper_quotes_refused_exchange_stale_total",
+    "Quotes refused because the exchange's own stamp on them was from a previous day, or older "
+    "than PAPER_QUOTE_MAX_EXCHANGE_AGE_SECONDS",
+    labelnames=("broker",),
+)
 paper_tick_age_seconds = Histogram(
     "tradingos_paper_tick_age_seconds",
     "Age of a tick (time since it was fetched) when the drain job reached it",

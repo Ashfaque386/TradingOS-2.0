@@ -47,7 +47,13 @@ from src.engine.paper_trading.order_book import (
     simulate_fill,
 )
 from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
-from src.engine.paper_trading.tick_feed import Tick, get_latest_tick, get_latest_tick_id
+from src.engine.paper_trading.tick_feed import (
+    QuoteRefusal,
+    Tick,
+    get_latest_tick,
+    get_latest_tick_id,
+    get_quote_refusal,
+)
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.data_source import DataSource, combine
@@ -120,6 +126,9 @@ class SubscriptionView:
     last_tick: Tick | None = None
     last_tick_age_seconds: float | None = None
     unrealized_pnl: float | None = None
+    # Set while this symbol's quotes are being refused (exchange stamp from a previous day or too
+    # old).
+    quote_refusal: QuoteRefusal | None = None
 
     @property
     def managed(self) -> bool:
@@ -244,6 +253,7 @@ async def list_subscription_views(
                 last_tick=tick,
                 last_tick_age_seconds=age,
                 unrealized_pnl=unrealized,
+                quote_refusal=await get_quote_refusal(redis, subscription.trading_symbol),
             )
         )
     return views

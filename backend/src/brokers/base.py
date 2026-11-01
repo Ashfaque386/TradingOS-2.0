@@ -256,6 +256,11 @@ class BrokerQuote:
     # `timestamp`, "the exchange timestamp of the quote packet"). `timestamp` above is when we
     # received it. `None` for a broker whose equivalent is not verified: never guessed.
     exchange_time: datetime | None = None
+    # The exchange's own price band for the day (Kite and Upstox both send `lower_circuit_limit` and
+    # `upper_circuit_limit`): the prices beyond which the exchange accepts no order. Both or
+    # neither, only when positive and in order; `None` when the broker sent none -- never guessed.
+    lower_circuit: float | None = None
+    upper_circuit: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +313,19 @@ def _exchange_time(row: dict[str, Any], broker: str) -> datetime | None:
         return None
 
 
+def _circuit_limits(row: dict[str, Any]) -> tuple[float | None, float | None]:
+    """The day's lower and upper circuit limits, or neither: a band is only a band when both ends
+    are present, positive and in order (a broker sends 0 for an instrument with no band)."""
+    try:
+        lower = float(row.get("lower_circuit_limit") or 0.0)
+        upper = float(row.get("upper_circuit_limit") or 0.0)
+    except (TypeError, ValueError):
+        return None, None
+    if lower > 0 and upper > lower:
+        return lower, upper
+    return None, None
+
+
 def _depth_levels(raw: Any) -> tuple[DepthLevel, ...]:
     """Levels with a real price and a positive quantity, in the order sent. Both brokers send
     empty padding levels (price 0, quantity 0) outside market hours; those are dropped."""
@@ -333,6 +351,7 @@ def quote_from_row(symbol: str, row: dict[str, Any], *, broker: str) -> BrokerQu
     bids = _depth_levels(depth.get("buy"))
     asks = _depth_levels(depth.get("sell"))
     open_interest = row.get("oi")
+    lower_circuit, upper_circuit = _circuit_limits(row)
     return BrokerQuote(
         symbol=symbol,
         last_price=last_price,
@@ -343,6 +362,8 @@ def quote_from_row(symbol: str, row: dict[str, Any], *, broker: str) -> BrokerQu
         depth_asks=asks,
         open_interest=float(open_interest) if open_interest else None,
         exchange_time=_exchange_time(row, broker),
+        lower_circuit=lower_circuit,
+        upper_circuit=upper_circuit,
     )
 
 

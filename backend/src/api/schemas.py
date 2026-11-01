@@ -881,6 +881,24 @@ class PaperLastTick(BaseModel):
     price: float
     age_seconds: float
     source: str
+    # When the exchange stamped this price and how old that stamp is now: null where the broker
+    # sends none (Upstox's is not yet verified), which is "not known", not "fresh".
+    exchange_time: datetime_type | None = None
+    exchange_age_seconds: float | None = None
+    # The exchange's circuit limits for the day from the same quote; null when it carried none.
+    lower_circuit: float | None = None
+    upper_circuit: float | None = None
+
+
+class PaperQuoteRefusal(BaseModel):
+    """The newest quote for this subscription was not acted on, and why (its exchange stamp was
+    from a previous day, or older than PAPER_QUOTE_MAX_EXCHANGE_AGE_SECONDS). Present only while
+    the refusals are continuing."""
+
+    broker: str
+    reason: str
+    exchange_time: datetime_type | None = None
+    at: datetime_type
 
 
 class PaperSubscriptionDetailResponse(BaseModel):
@@ -924,6 +942,10 @@ class PaperSubscriptionDetailResponse(BaseModel):
     managed: bool
     last_tick: PaperLastTick | None
     unrealized_pnl: float | None
+    quote_refusal: PaperQuoteRefusal | None = None
+    # The band, as a percentage of the previous close, the risk gate falls back to when a quote
+    # carries no exchange circuit limits (the reference table's: not an exchange figure).
+    circuit_fallback_band_pct: float | None = None
 
 
 class PaperHistoryBackfillResponse(BaseModel):
@@ -1096,6 +1118,12 @@ class BrokerCredentialStatusResponse(BaseModel):
     feed_rejection_status: int | None = None
     feed_rejection_detail: str | None = None
     feed_rejected_at: str | None = None
+    # Quotes this broker answered that were not acted on because the exchange's own stamp on them
+    # was from a previous day (or too old), since the credentials last changed.
+    quotes_refused_count: int = 0
+    quotes_refused_last_symbol: str | None = None
+    quotes_refused_last_reason: str | None = None
+    quotes_refused_last_at: str | None = None
 
 
 class BrokerCircuitBreakerStatusResponse(BaseModel):

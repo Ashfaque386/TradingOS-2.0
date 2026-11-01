@@ -123,6 +123,7 @@ async def list_broker_credential_status_endpoint(
     for broker in KNOWN_BROKERS:
         creds = store.get_credentials(broker)
         rejection = feed_health.get_rejection(broker) if creds is not None else None
+        refusals = feed_health.get_quote_refusals(broker) if creds is not None else None
         responses.append(
             BrokerCredentialStatusResponse(
                 broker=broker,
@@ -136,6 +137,10 @@ async def list_broker_credential_status_endpoint(
                 feed_rejection_status=rejection.status_code if rejection else None,
                 feed_rejection_detail=rejection.detail if rejection else None,
                 feed_rejected_at=rejection.at.isoformat() if rejection else None,
+                quotes_refused_count=refusals.count if refusals else 0,
+                quotes_refused_last_symbol=refusals.last_symbol if refusals else None,
+                quotes_refused_last_reason=refusals.last_reason if refusals else None,
+                quotes_refused_last_at=refusals.last_at.isoformat() if refusals else None,
             )
         )
     return responses

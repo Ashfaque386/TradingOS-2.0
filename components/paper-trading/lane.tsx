@@ -28,6 +28,7 @@ import {
   underlyingSpot,
 } from '@/lib/paper-trading'
 import { PayoffChart } from './payoff-chart'
+import { PriceFreshness } from './price-freshness'
 
 type Tab = 'legs' | 'payoff' | 'costs' | 'settings'
 
@@ -140,6 +141,7 @@ export function Lane({
           {sub.state_reason && sub.state !== 'active' && sub.is_active && (
             <p className="pt-muted" style={{ marginBottom: '.75rem', fontSize: '.68rem' }}>{sub.state_reason}</p>
           )}
+          <PriceFreshness sub={sub} />
           <div className="pt-tabs" role="tablist" aria-label={`${subscriptionName(sub)} details`}>
             {tabs.map((t) => (
               <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>

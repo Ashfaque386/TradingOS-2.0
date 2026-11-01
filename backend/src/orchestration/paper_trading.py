@@ -59,7 +59,7 @@ from src.engine.paper_trading.order_book import (
 from src.engine.paper_trading.position_ledger import Position, apply_fill
 from src.engine.paper_trading.price_data import InsufficientHistoryError, PriceDataProvider
 from src.engine.paper_trading.stop_loss import check_universal_stop_loss
-from src.engine.risk.compliance import RegulatoryDataProvider
+from src.engine.risk.compliance import ExchangeCircuitLimits, RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.daily_signal import DailySignal
 from src.models.data_source import DataSource, combine
@@ -368,6 +368,7 @@ async def process_tick(
     order_book_provider: OrderBookProvider,
     regulatory_provider: RegulatoryDataProvider,
     tick_source: str = DataSource.UNKNOWN,
+    exchange_limits: ExchangeCircuitLimits | None = None,
 ) -> PaperFill | None:
     """Returns the `PaperFill` this tick produced, or `None` if the tick
     triggered no action. Raises nothing on its own for a risk-gate
@@ -477,6 +478,8 @@ async def process_tick(
             proposed_position_value=proposed_position_value,
             portfolio_value=subscription.initial_capital,
             regulatory_provider=regulatory_provider,
+            exchange_limits=exchange_limits,
+            stop_loss_exit=stop.triggered,
         )
     except KillSwitchTrippedError as exc:
         # The load-bearing Phase 6 guarantee: a tripped switch blocks this

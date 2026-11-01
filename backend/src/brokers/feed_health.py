@@ -13,7 +13,7 @@ the next market-hours firing re-establishes, not a record, and a restart showing
 nothing is honest ("not known yet") rather than stale.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 
@@ -24,7 +24,19 @@ class FeedRejection:
     at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class QuoteRefusals:
+    """Quotes a broker answered that were not acted on (their exchange stamp was from a previous
+    day, or too old): how many since the credentials last changed, and the latest."""
+
+    count: int
+    last_symbol: str
+    last_reason: str
+    last_at: datetime
+
+
 _rejections: dict[str, FeedRejection] = {}
+_refusals: dict[str, QuoteRefusals] = {}
 
 
 def record_rejection(broker: str, *, status_code: int, detail: str) -> None:
@@ -35,12 +47,33 @@ def clear(broker: str | None = None) -> None:
     """Forget the rejection for one broker, or every broker."""
     if broker is None:
         _rejections.clear()
+        _refusals.clear()
     else:
         _rejections.pop(broker, None)
+        _refusals.pop(broker, None)
 
 
 def get_rejection(broker: str) -> FeedRejection | None:
     return _rejections.get(broker)
+
+
+def record_quote_refusal(broker: str, *, symbol: str, reason: str) -> None:
+    previous = _refusals.get(broker)
+    now = datetime.now(UTC)
+    if previous is None:
+        _refusals[broker] = QuoteRefusals(1, symbol, reason[:200], now)
+    else:
+        _refusals[broker] = replace(
+            previous,
+            count=previous.count + 1,
+            last_symbol=symbol,
+            last_reason=reason[:200],
+            last_at=now,
+        )
+
+
+def get_quote_refusals(broker: str) -> QuoteRefusals | None:
+    return _refusals.get(broker)
 
 
 def all_rejections() -> dict[str, FeedRejection]:

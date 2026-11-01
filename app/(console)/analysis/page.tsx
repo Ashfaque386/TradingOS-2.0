@@ -7,6 +7,7 @@ import { Activity, AlertTriangle, Cable, CheckCircle2, Clock3, Database, Globe2,
 import { ChartContainer } from '@/components/ui/chart'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
+import { describeQuoteRefusals } from '@/lib/broker-quotes'
 import { messageOf } from '@/lib/errors'
 import {
   ApiError,
@@ -363,6 +364,7 @@ function ProvidersTab() {
                 <div className="min-w-0 flex-1">
                   <strong className="capitalize">{b.broker}</strong>
                   <small>{rejected ? `${b.broker} refused the stored token${b.feed_rejection_status ? ` (HTTP ${b.feed_rejection_status})` : ''}, so live quotes are not flowing — reconnect in Settings` : b.token_status === 'valid' ? 'token valid (by the clock)' : b.token_status === 'expired' ? 'token expired — reconnect in Settings' : 'not connected'}</small>
+                  {describeQuoteRefusals(b) && <small data-testid={`quote-refusals-${b.broker}`}>{describeQuoteRefusals(b)}</small>}
                   <small>
                     {tripped
                       ? `circuit OPEN — ${breaker.consecutive_failures} consecutive failures${breaker.cooldown_remaining_seconds != null ? `, retry in ${Math.ceil(breaker.cooldown_remaining_seconds)}s` : ''}`

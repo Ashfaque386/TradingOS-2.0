@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet
 
 from src.brokers import breaker_registry
 from src.brokers.base import BrokerCredentials
-from src.brokers.factory import build_configured_adapter
+from src.brokers.factory import RefreshingConfiguredAdapter, build_configured_adapter
 from src.core.config import get_settings
 from src.security.secrets_store import SecretsStore, get_secrets_store
 
@@ -76,3 +76,87 @@ def test_different_brokers_get_independent_breaker_instances(tmp_path, monkeypat
         breaker_registry._BREAKERS.pop("zerodha", None)
         breaker_registry._BREAKERS.pop("upstox", None)
         _reset_caches()
+
+
+# ---- an adapter that follows the stored credentials ----
+
+
+def _store_with(tmp_path, monkeypatch, **credentials_by_broker):
+    key = Fernet.generate_key().decode()
+    store_path = tmp_path / "secrets.enc"
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(store_path))
+    _reset_caches()
+    store = SecretsStore(store_path, key)
+    for broker, creds in credentials_by_broker.items():
+        store.set_credentials(broker, creds)
+    get_secrets_store.cache_clear()
+    return store
+
+
+def test_the_refreshing_adapter_builds_once_and_reuses_it_while_nothing_changes(
+    tmp_path, monkeypatch
+):
+    _store_with(tmp_path, monkeypatch, zerodha=BrokerCredentials(api_key="k", access_token="t"))
+    try:
+        source = RefreshingConfiguredAdapter()
+
+        first, second, third = source(), source(), source()
+
+        assert first is not None
+        assert first is second is third
+    finally:
+        breaker_registry._BREAKERS.pop("zerodha", None)
+        _reset_caches()
+
+
+def test_the_refreshing_adapter_is_rebuilt_when_the_token_is_replaced(tmp_path, monkeypatch):
+    store = _store_with(
+        tmp_path, monkeypatch, zerodha=BrokerCredentials(api_key="k", access_token="t1")
+    )
+    try:
+        source = RefreshingConfiguredAdapter()
+        before = source()
+
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t2"))
+        after = source()
+
+        assert after is not before  # the morning's re-authentication takes effect on the next call
+        assert after.breaker is before.breaker  # without losing the broker's breaker state
+        assert source() is after
+    finally:
+        breaker_registry._BREAKERS.pop("zerodha", None)
+        _reset_caches()
+
+
+def test_the_refreshing_adapter_notices_a_broker_being_connected_and_removed(tmp_path, monkeypatch):
+    store = _store_with(tmp_path, monkeypatch)
+    try:
+        source = RefreshingConfiguredAdapter()
+        assert source() is None  # nothing configured yet: remembered, not rebuilt every call
+
+        store.set_credentials("upstox", BrokerCredentials(api_key="k", access_token="t"))
+        connected = source()
+        assert connected is not None and connected.broker_name == "upstox"
+
+        store.delete_credentials("upstox")
+        assert source() is None
+    finally:
+        breaker_registry._BREAKERS.pop("upstox", None)
+        _reset_caches()
+
+
+def test_a_missing_secrets_key_means_no_adapter_not_a_crash(monkeypatch):
+    monkeypatch.delenv("SECRETS_ENCRYPTION_KEY", raising=False)
+    _reset_caches()
+    try:
+        assert RefreshingConfiguredAdapter()() is None
+    finally:
+        _reset_caches()
+
+
+def test_the_live_jobs_use_a_production_adapter_source():
+    from src.brokers.factory import get_live_adapter
+
+    assert isinstance(get_live_adapter, RefreshingConfiguredAdapter)
+    assert get_live_adapter._sandbox is False

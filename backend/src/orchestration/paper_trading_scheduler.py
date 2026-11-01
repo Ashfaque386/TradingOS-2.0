@@ -60,6 +60,7 @@ from src.engine.paper_trading.tick_feed import (
     TickSource,
     publish_ticks_once,
     read_new_ticks,
+    tick_circuit_limits,
 )
 from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.latency_guard import WebSocketLatencyGuard
@@ -285,6 +286,7 @@ async def run_tick_drain_job(
                             tick_source=tick.source,
                             order_book_provider=order_book_provider,
                             regulatory_provider=regulatory_provider,
+                            exchange_limits=tick_circuit_limits(tick),
                         )
                 except Exception:  # noqa: BLE001 - one bad tick must never kill the drain job
                     logger.exception(

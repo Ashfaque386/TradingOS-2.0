@@ -73,7 +73,17 @@ this is where it stands.
 | G4 | A fifth alert level, `engine`, and a watcher that tells the subscribed channels once when a position is left unwatched, a feed stops, a position has no price or a price goes stale, and once when it clears; events for a stop-loss exit, a roll or square-off that could not be done, a position closed after its expiry and a broker refusing its credentials; every alert is kept as an episode and listed on the Paper Desk and counted in the top bar. Prometheus's rules reach the same channels through an Alertmanager service that posts to a token-protected webhook, and a rule watches the watcher itself. |
 | (attention rules) | The Paper Desk's "needs attention" logic now exists on the server too, and the two are pinned to one shared set of cases. The stale-price limit is one setting instead of two constants. |
 
-**Still open from this phase:** an alert about the backend being down cannot be delivered by the backend (it is visible in Prometheus and Grafana); the live trading path raises no engine alerts yet.
+**Still open from this phase:** an alert about the backend being down cannot be delivered by the backend (it is visible in Prometheus and Grafana).
+
+**Closed in phase 6 (exchange timestamps, circuit limits, the live path):**
+
+| Gap | What changed |
+|---|---|
+| G3b | A quote whose exchange stamp is from an earlier IST date (or, if configured, older than a limit) is refused where every consumer reads from, counted, remembered for the desk, and not handed to another broker; no stamp or a future stamp is let through. |
+| G9 | The order price is checked against the exchange's own circuit limits from the quote; the reference table is only a labelled fallback. The position limit is called what it is, a house rule. A stop-loss exit is not refused for a gap beyond the band (it used to be: the band was measured from the position's own cost). |
+| G22 (rest) | The live re-quote is checked for a stale stamp; the live circuit band is judged against the exchange limits or the previous close, not the quote's own price; the live adapter is looked up on every firing; ticks older than the limit are not acted on; an order that could not be sent is an engine alert. |
+
+**Still open from this phase:** Upstox's exchange stamp, and the circuit-limit fields of a recorded live response, need a first real session (operator); the age limit stays off until that session's lag panel says what is normal.
 
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.

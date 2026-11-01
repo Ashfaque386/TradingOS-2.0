@@ -23,7 +23,7 @@ from typing import Literal
 from src.orchestration.paper_subscription_controls import SubscriptionView
 
 Severity = Literal["critical", "warning", "info"]
-Kind = Literal["unmanaged", "halted", "history", "unpriced", "stale"]
+Kind = Literal["unmanaged", "halted", "history", "unpriced", "refused", "stale"]
 Action = Literal["close"]
 
 SEVERITY_ORDER: dict[str, int] = {"critical": 0, "warning": 1, "info": 2}
@@ -47,6 +47,10 @@ class AttentionSubject:
     unrealized_pnl: float | None
     # Seconds since the newest price arrived; None when none ever has.
     last_tick_age_seconds: float | None
+    # Set while this subscription's quotes are being refused (their exchange stamp is from a
+    # previous day, or too old): which broker said it and why.
+    refusal_broker: str | None = None
+    refusal_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +78,8 @@ def subject_from_view(view: SubscriptionView) -> AttentionSubject:
         open_legs=view.open_legs,
         unrealized_pnl=view.unrealized_pnl,
         last_tick_age_seconds=view.last_tick_age_seconds if view.last_tick is not None else None,
+        refusal_broker=view.quote_refusal.broker if view.quote_refusal is not None else None,
+        refusal_reason=view.quote_refusal.reason if view.quote_refusal is not None else None,
     )
 
 
@@ -163,7 +169,15 @@ def attention_items(
                 "At least one open leg has never been priced, so its value and stop-loss are "
                 "unknown.",
             )
-        if (
+        if sub.is_active and sub.state == "active" and sub.refusal_reason is not None:
+            add(
+                "refused",
+                "warning",
+                f"{name} has no usable price",
+                f"Its latest {sub.refusal_broker} quote was refused: {sub.refusal_reason}. "
+                "Nothing trades on it until a current quote arrives.",
+            )
+        elif (
             market_open
             and sub.is_active
             and sub.state == "active"

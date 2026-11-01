@@ -1,5 +1,6 @@
-"""Compliance Checker tests (Build Spec §8): SEBI-style position limits and
-an NSE-style circuit-filter band, both hand-calculable.
+"""Compliance Checker tests (Build Spec §8): a house single-position limit and a circuit-filter
+band (the exchange's own limits when the quote carried them, the reference table's otherwise),
+both hand-calculable.
 """
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from src.engine.risk.compliance import (
     DEFAULT_CIRCUIT_BAND_PCT,
     DEFAULT_POSITION_LIMIT_PCT,
+    ExchangeCircuitLimits,
     ReferenceTableRegulatoryDataProvider,
     check_circuit_filter_band,
     check_position_limit,
@@ -170,3 +172,140 @@ def test_the_index_symbols_keep_their_own_circuit_band_while_others_get_the_defa
     assert provider.circuit_filter_band_pct("BANKNIFTY") == 10.0
     assert provider.circuit_filter_band_pct("banknifty") == 10.0  # symbols are case-insensitive
     assert provider.circuit_filter_band_pct("RELIANCE") == DEFAULT_CIRCUIT_BAND_PCT
+
+
+# ---- the exchange's own circuit limits, and what the reasons say ----
+
+LIMITS = ExchangeCircuitLimits(lower=90.0, upper=110.0)
+
+
+def band(price, *, reference=100.0, limits=LIMITS, symbol="RELIANCE"):
+    return check_circuit_filter_band(
+        symbol=symbol,
+        proposed_price=price,
+        reference_price=reference,
+        provider=ReferenceTableRegulatoryDataProvider(),
+        exchange_limits=limits,
+    )
+
+
+def test_a_price_inside_the_exchanges_limits_is_not_blocked():
+    for price in (90.01, 100.0, 109.99):
+        assert band(price).blocked is False, price
+
+
+def test_a_price_at_or_above_the_upper_limit_is_blocked_and_the_reason_names_the_exchange():
+    for price in (110.0, 110.01, 150.0):
+        result = band(price)
+        assert result.blocked is True, price
+        assert result.reasons == [
+            f"RELIANCE: proposed price {price:.2f} is at/above the exchange's upper circuit "
+            "limit 110.00 (from the broker's quote)"
+        ]
+
+
+def test_a_price_at_or_below_the_lower_limit_is_blocked_and_the_reason_names_the_exchange():
+    for price in (90.0, 89.99, 50.0):
+        result = band(price)
+        assert result.blocked is True, price
+        assert result.reasons == [
+            f"RELIANCE: proposed price {price:.2f} is at/below the exchange's lower circuit "
+            "limit 90.00 (from the broker's quote)"
+        ]
+
+
+def test_the_exchanges_limits_replace_the_reference_tables_band_not_add_to_it():
+    # 8% from the reference, well inside a 10% band and inside the exchange's limits: fine.
+    assert band(108.0, symbol="NIFTY").blocked is False
+    # 40% from the reference is far beyond the table's 20% default band, but the exchange itself
+    # allows it (a stock re-listed with a wide band): the exchange's word is the one that counts.
+    wide = ExchangeCircuitLimits(lower=50.0, upper=150.0)
+    assert band(140.0, limits=wide).blocked is False
+    # And the other way: inside the table's band, beyond the exchange's tighter one.
+    assert band(105.0, limits=ExchangeCircuitLimits(lower=96.0, upper=104.0)).blocked is True
+
+
+def test_a_reference_price_that_is_not_positive_is_still_a_caller_bug_with_limits():
+    with pytest.raises(ValueError, match="reference_price must be positive"):
+        band(100.0, reference=0.0)
+    with pytest.raises(ValueError, match="reference_price must be positive"):
+        band(100.0, reference=-1.0)
+
+
+def test_without_exchange_limits_the_reason_says_the_reference_table_decided():
+    provider = ReferenceTableRegulatoryDataProvider()  # a 20% default band
+
+    result = check_circuit_filter_band(
+        symbol="RELIANCE", proposed_price=125.0, reference_price=100.0, provider=provider
+    )
+
+    assert result.blocked is True
+    assert result.reasons == [
+        "RELIANCE: proposed price move 25.00% from the reference price is at/beyond the "
+        "reference table's circuit band 20.00% (the quote carried no exchange circuit limits)"
+    ]
+
+
+def test_the_position_limit_reason_says_it_is_a_house_rule_not_an_exchange_or_sebi_limit():
+    provider = ReferenceTableRegulatoryDataProvider(default_position_limit_pct=10.0)
+
+    result = check_position_limit(
+        symbol="RELIANCE",
+        proposed_position_value=150_000,
+        portfolio_value=1_000_000,
+        provider=provider,
+    )
+
+    assert result.reasons == [
+        "RELIANCE: proposed position 15.00% of portfolio exceeds the house single-position "
+        "limit 10.00% (a concentration rule of this system, not an exchange or SEBI limit)"
+    ]
+
+
+def compliance(**overrides):
+    inputs = dict(
+        symbol="RELIANCE",
+        proposed_position_value=50_000,
+        portfolio_value=1_000_000,
+        proposed_price=100.0,
+        reference_price=100.0,
+        provider=ReferenceTableRegulatoryDataProvider(),
+    )
+    inputs.update(overrides)
+    return run_compliance_checks(**inputs)
+
+
+def test_the_combined_check_hands_the_exchange_limits_to_the_band():
+    assert compliance(proposed_price=112.0).blocked is False  # 12% from the reference, no limits
+    result = compliance(proposed_price=112.0, exchange_limits=LIMITS)
+    assert result.blocked is True
+    assert "upper circuit limit 110.00" in result.reasons[0]
+
+
+def test_a_stop_loss_exit_can_leave_the_circuit_band_out_and_only_that():
+    gapped = dict(proposed_price=70.0)  # 30% below the reference: beyond the 20% table band
+
+    assert compliance(**gapped).blocked is True
+    assert compliance(**gapped, check_circuit_band=False).blocked is False
+    # Exchange limits do not bring it back: the band is not being checked at all.
+    assert compliance(**gapped, exchange_limits=LIMITS, check_circuit_band=False).blocked is False
+    # The position limit still applies to the same order.
+    too_big = compliance(**gapped, proposed_position_value=150_000, check_circuit_band=False)
+    assert too_big.blocked is True
+    assert len(too_big.reasons) == 1 and "house single-position limit" in too_big.reasons[0]
+
+
+def test_the_circuit_band_is_checked_unless_asked_not_to():
+    result = compliance(proposed_price=70.0, proposed_position_value=150_000)
+
+    assert result.blocked is True
+    assert len(result.reasons) == 2  # the position limit and the band
+
+
+def test_exchange_limits_are_a_plain_value_that_cannot_be_changed():
+    from dataclasses import FrozenInstanceError
+
+    assert (LIMITS.lower, LIMITS.upper) == (90.0, 110.0)
+    with pytest.raises(FrozenInstanceError):
+        LIMITS.lower = 1.0  # type: ignore[misc]
+    assert not hasattr(LIMITS, "__dict__")

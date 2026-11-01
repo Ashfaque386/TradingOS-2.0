@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.agents.scheduler import start_heartbeat_loop
 from src.api.router import api_router
 from src.api.routes.health import router as health_router
-from src.brokers.factory import build_configured_adapter
+from src.brokers.factory import get_live_adapter
 from src.brokers.tick_source import get_tick_source
 from src.core.config import get_settings
 from src.core.db import AsyncSessionLocal
@@ -164,7 +164,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # sweep are useful (and safe) with no broker at all, and every real
     # gate (master switch, Kill Switch, standing caps) is enforced inside
     # `generate_live_order_intent` itself before submission is ever
-    # attempted. `build_configured_adapter(sandbox=False)` is the same
+    # attempted. `get_live_adapter` (`build_configured_adapter(sandbox=False)`, rebuilt when the
+    # stored credentials change) is the same
     # credential-lookup path build_tick_source() uses, always pointed at
     # production -- live trading must never share a code path with Shadow
     # Mode's dedicated sandbox-pointed adapter.
@@ -173,7 +174,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         redis=redis,
         price_provider=data_lake_price_provider,
         regulatory_provider=ReferenceTableRegulatoryDataProvider(),
-        adapter=build_configured_adapter(sandbox=False),
+        adapter_factory=get_live_adapter,
     )
 
     # Audit archive + chain-divergence verification (Build Spec §19).

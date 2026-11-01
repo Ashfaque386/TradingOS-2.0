@@ -397,7 +397,22 @@ export type PaperInstrumentKind = 'equity' | 'future' | 'option'
 export type PaperState = 'active' | 'awaiting_history' | 'halted_no_data' | 'inactive'
 export type PaperOptionStrategy = 'long_option' | 'vertical_spread'
 
-export type PaperLastTick = { price: number; age_seconds: number; source: string }
+export type PaperLastTick = {
+  price: number
+  age_seconds: number
+  source: string
+  // When the exchange stamped this price and how old that stamp is now; null where the broker sends
+  // none (Upstox's is not yet verified): "not known", not "fresh".
+  exchange_time?: string | null
+  exchange_age_seconds?: number | null
+  // The exchange's circuit limits for the day from the same quote; null when it carried none.
+  lower_circuit?: number | null
+  upper_circuit?: number | null
+}
+
+// The newest quote for a subscription was not acted on (its exchange stamp is from a previous day, or
+// too old). Present only while the refusals continue.
+export type PaperQuoteRefusal = { broker: string; reason: string; exchange_time: string | null; at: string }
 
 export type PaperSubscription = {
   id: string
@@ -435,6 +450,10 @@ export type PaperSubscription = {
   managed: boolean
   last_tick: PaperLastTick | null
   unrealized_pnl: number | null
+  quote_refusal?: PaperQuoteRefusal | null
+  // The band (percent of the previous close) the risk gate falls back to when a quote carries no
+  // exchange circuit limits: the reference table's, not an exchange figure.
+  circuit_fallback_band_pct?: number | null
 }
 
 export type PaperPosition = {
@@ -1505,6 +1524,12 @@ export type BrokerCredentialStatus = {
   feed_rejection_status?: number | null
   feed_rejection_detail?: string | null
   feed_rejected_at?: string | null
+  // Quotes this broker answered that were not acted on because the exchange's own stamp on them was
+  // from a previous day (or too old), since the credentials last changed.
+  quotes_refused_count?: number
+  quotes_refused_last_symbol?: string | null
+  quotes_refused_last_reason?: string | null
+  quotes_refused_last_at?: string | null
 }
 export const KNOWN_BROKERS = ['zerodha', 'upstox'] as const
 export const listBrokerCredentialStatus = () => apiGet<BrokerCredentialStatus[]>('/api/v1/broker-credentials')

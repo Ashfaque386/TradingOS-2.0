@@ -32,6 +32,7 @@ from src.api.schemas import (
     PaperLastTick,
     PaperPositionClosedResponse,
     PaperPositionResponse,
+    PaperQuoteRefusal,
     PaperSettingChange,
     PaperSubscriptionDetailResponse,
     PaperSymbolHitResponse,
@@ -59,7 +60,7 @@ from src.engine.paper_trading.margin import check_futures_margin
 from src.engine.paper_trading.market_hours import IST
 from src.engine.paper_trading.option_strategies import pick_expiry
 from src.engine.paper_trading.order_book import MockOrderBookProvider
-from src.engine.paper_trading.tick_feed import get_latest_tick
+from src.engine.paper_trading.tick_feed import Tick, get_latest_tick
 from src.engine.risk.compliance import ReferenceTableRegulatoryDataProvider
 from src.models.daily_signal import DailySignal
 from src.models.data_source import DataSource
@@ -483,15 +484,41 @@ def _detail_response(view: SubscriptionView) -> PaperSubscriptionDetailResponse:
         net_realized_pnl=view.realized_pnl - view.costs_total,
         managed=view.managed,
         last_tick=(
-            PaperLastTick(
-                price=view.last_tick.price,
-                age_seconds=view.last_tick_age_seconds or 0.0,
-                source=view.last_tick.source,
-            )
+            _last_tick_response(view.last_tick, view.last_tick_age_seconds)
             if view.last_tick is not None
             else None
         ),
         unrealized_pnl=view.unrealized_pnl,
+        quote_refusal=(
+            PaperQuoteRefusal(
+                broker=view.quote_refusal.broker,
+                reason=view.quote_refusal.reason,
+                exchange_time=view.quote_refusal.exchange_time,
+                at=view.quote_refusal.at,
+            )
+            if view.quote_refusal is not None
+            else None
+        ),
+        circuit_fallback_band_pct=_REGULATORY_PROVIDER.circuit_filter_band_pct(sub.symbol),
+    )
+
+
+def _last_tick_response(tick: Tick, age_seconds: float | None) -> PaperLastTick:
+    exchange_time = (
+        datetime.fromtimestamp(tick.exchange_time_ms / 1000.0, tz=UTC)
+        if tick.exchange_time_ms is not None
+        else None
+    )
+    return PaperLastTick(
+        price=tick.price,
+        age_seconds=age_seconds or 0.0,
+        source=tick.source,
+        exchange_time=exchange_time,
+        exchange_age_seconds=(
+            max(0.0, (datetime.now(UTC) - exchange_time).total_seconds()) if exchange_time else None
+        ),
+        lower_circuit=tick.lower_circuit,
+        upper_circuit=tick.upper_circuit,
     )
 
 

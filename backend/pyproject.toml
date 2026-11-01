@@ -181,6 +181,8 @@ critical_files = [
   "src/engine/risk/latency_guard.py",
   "src/engine/risk/position_sizing.py",
   "src/engine/options_grounding.py",
+  # ... and whether a quote may be acted on at all.
+  "src/engine/paper_trading/quote_guard.py",
   "src/orchestration/kill_switch.py",
   "src/orchestration/drawdown_monitor.py",
   "src/orchestration/go_live_evidence.py",
@@ -241,7 +243,7 @@ max_survivors = 4
 [[tool.tradingos.mutation.module]]
 path = "src/engine/risk/compliance.py"
 tests = ["tests/test_engine_compliance.py"]
-max_survivors = 10
+max_survivors = 7
 
 [[tool.tradingos.mutation.module]]
 path = "src/engine/risk/correlation_constraint.py"
@@ -294,6 +296,13 @@ max_survivors = 5
 path = "src/orchestration/live_intent_expiry.py"
 tests = ["tests/test_orchestration_live_intent_expiry.py"]
 max_survivors = 0
+
+[[tool.tradingos.mutation.module]]
+path = "src/engine/paper_trading/quote_guard.py"
+tests = ["tests/test_engine_quote_guard.py"]
+# One survivor, equivalent: `age < -skew` to `age <= -skew`. A stamp exactly on the skew limit is
+# let through either way, because a stamp in the future is never from an earlier day.
+max_survivors = 1
 
 [[tool.tradingos.mutation.module]]
 path = "src/orchestration/paper_attention.py"

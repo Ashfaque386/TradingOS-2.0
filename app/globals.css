@@ -653,6 +653,12 @@
   .pt-alert-critical svg { color: #fb7185; } .pt-alert-warning svg { color: #f59e0b; } .pt-alert-info svg { color: #22d3ee; }
   .pt-alert h3 { color: #f1f5f9; font-size: .74rem; font-weight: 600; }
   .pt-alert p { margin-top: .15rem; color: #94a3b8; font-size: .66rem; max-width: 70ch; }
+  .pt-price { display: grid; gap: .25rem; margin-bottom: .8rem; font-size: .68rem; color: #94a3b8; }
+  .pt-price p { max-width: 80ch; }
+  .pt-price .pt-price-now { color: #e2e8f0; font-weight: 600; }
+  .pt-price .pt-price-fresh { color: #6ee7b7; }
+  .pt-price .pt-price-quiet { color: #fcd34d; }
+  .pt-price .pt-price-refused { color: #fdba74; }
   .pt-engine-alerts { display: grid; gap: .55rem; scroll-margin-top: 5rem; }
   .pt-engine-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .2rem 1rem; }
   .pt-engine-head h2 { color: #f1f5f9; font-size: .8rem; font-weight: 600; }

@@ -25,17 +25,20 @@ own body does no I/O and stays `async` only to satisfy the same Protocol
 shape.
 """
 
+import json
 import time
 import zlib
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from datetime import UTC, datetime
+from typing import Any, Protocol, cast
 
 import numpy as np
 import structlog
 from redis.asyncio import Redis
 
 from src.engine.paper_trading.depth import DepthSnapshot, publish_depth
+from src.engine.risk.compliance import ExchangeCircuitLimits
 from src.models.data_source import DataSource
 
 logger = structlog.get_logger(__name__)
@@ -56,6 +59,45 @@ class Tick:
     # The broker's order book at the moment of this tick, when the source had one. It is not part
     # of the stream entry: `publish_tick` stores it as the symbol's latest depth snapshot.
     depth: DepthSnapshot | None = field(default=None, compare=False)
+    # When the exchange stamped the price (epoch milliseconds), and the exchange's circuit limits
+    # for the day, where the broker sent them. `None` is "not known", never a guess.
+    exchange_time_ms: int | None = None
+    lower_circuit: float | None = None
+    upper_circuit: float | None = None
+
+
+def tick_circuit_limits(tick: Tick) -> ExchangeCircuitLimits | None:
+    """The exchange's circuit limits carried on this tick, or `None` if it carried none."""
+    if tick.lower_circuit is None or tick.upper_circuit is None:
+        return None
+    return ExchangeCircuitLimits(lower=tick.lower_circuit, upper=tick.upper_circuit)
+
+
+def _stream_fields(tick: Tick) -> dict[Any, Any]:
+    entry = {
+        "price": repr(tick.price),
+        "timestamp_ms": str(tick.timestamp_ms),
+        "source": tick.source,
+    }
+    if tick.exchange_time_ms is not None:
+        entry["exchange_ms"] = str(tick.exchange_time_ms)
+    if tick.lower_circuit is not None and tick.upper_circuit is not None:
+        entry["lower_circuit"] = repr(tick.lower_circuit)
+        entry["upper_circuit"] = repr(tick.upper_circuit)
+    return entry
+
+
+def _tick_from_fields(symbol: str, fields: Mapping[str, str]) -> Tick:
+    # Entries written before a field existed carry none of it.
+    return Tick(
+        symbol=symbol,
+        price=float(fields["price"]),
+        timestamp_ms=int(fields["timestamp_ms"]),
+        source=fields.get("source", "unknown"),
+        exchange_time_ms=int(fields["exchange_ms"]) if "exchange_ms" in fields else None,
+        lower_circuit=float(fields["lower_circuit"]) if "lower_circuit" in fields else None,
+        upper_circuit=float(fields["upper_circuit"]) if "upper_circuit" in fields else None,
+    )
 
 
 async def publish_tick(
@@ -74,11 +116,7 @@ async def publish_tick(
         str,
         await redis.xadd(
             tick_stream_key(tick.symbol),
-            {
-                "price": repr(tick.price),
-                "timestamp_ms": str(tick.timestamp_ms),
-                "source": tick.source,
-            },
+            _stream_fields(tick),
             maxlen=maxlen,
             approximate=True,
         ),
@@ -101,15 +139,7 @@ async def read_new_ticks(
     ticks: list[Tick] = []
     cursor = last_id
     for entry_id, fields in entries:
-        ticks.append(
-            Tick(
-                symbol=symbol,
-                price=float(fields["price"]),
-                timestamp_ms=int(fields["timestamp_ms"]),
-                # Entries written before this field existed carry no source.
-                source=fields.get("source", "unknown"),
-            )
-        )
+        ticks.append(_tick_from_fields(symbol, fields))
         cursor = entry_id
     return ticks, cursor
 
@@ -123,12 +153,7 @@ async def get_latest_tick(redis: Redis, symbol: str) -> Tick | None:
     if not entries:
         return None
     _entry_id, fields = entries[0]
-    return Tick(
-        symbol=symbol,
-        price=float(fields["price"]),
-        timestamp_ms=int(fields["timestamp_ms"]),
-        source=fields.get("source", "unknown"),
-    )
+    return _tick_from_fields(symbol, fields)
 
 
 async def get_latest_tick_id(redis: Redis, symbol: str) -> str | None:
@@ -159,6 +184,68 @@ class BatchTickSource(TickSource, Protocol):
 
 class NoQuoteError(Exception):
     """The source answered but had no tick for this symbol."""
+
+
+class QuoteRefusedError(Exception):
+    """The broker answered, and what it answered is not a price to act on (its exchange stamp is
+    from a previous day, or older than the limit). Distinct from a failure: nothing is wrong with
+    the broker or the symbol, so it is not backed off (the next cycle asks again, and the day the
+    exchange trades the quote is accepted at once) and it does not fall through to another broker,
+    whose answer would be no fresher."""
+
+    def __init__(
+        self, *, symbol: str, broker: str, reason: str, exchange_time: datetime | None = None
+    ) -> None:
+        self.symbol = symbol
+        self.broker = broker
+        self.reason = reason
+        self.exchange_time = exchange_time
+        super().__init__(f"{broker} quote for {symbol} refused: {reason}")
+
+
+# How long a refusal is remembered for the desk to show. Refused again every cycle while it lasts,
+# so it disappears half a minute after the quotes become acceptable.
+QUOTE_REFUSAL_TTL_SECONDS = 30
+
+
+def quote_refusal_key(symbol: str) -> str:
+    return f"paper:quote_refusal:{symbol}"
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteRefusal:
+    broker: str
+    reason: str
+    exchange_time: datetime | None
+    at: datetime
+
+
+async def note_quote_refusal(redis: Redis, error: QuoteRefusedError) -> None:
+    """Remembers, for `QUOTE_REFUSAL_TTL_SECONDS`, that this symbol's quote was refused and why."""
+    payload = {
+        "broker": error.broker,
+        "reason": error.reason,
+        "exchange_time": error.exchange_time.isoformat() if error.exchange_time else None,
+        "at": datetime.now(UTC).isoformat(),
+    }
+    await redis.set(
+        quote_refusal_key(error.symbol), json.dumps(payload), ex=QUOTE_REFUSAL_TTL_SECONDS
+    )
+
+
+async def get_quote_refusal(redis: Redis, symbol: str) -> QuoteRefusal | None:
+    """Why this symbol's newest quote was refused, or `None` if it was not (recently)."""
+    raw = await redis.get(quote_refusal_key(symbol))
+    if not raw:
+        return None
+    data: dict[str, Any] = json.loads(raw)
+    stamp = data.get("exchange_time")
+    return QuoteRefusal(
+        broker=data["broker"],
+        reason=data["reason"],
+        exchange_time=datetime.fromisoformat(stamp) if stamp else None,
+        at=datetime.fromisoformat(data["at"]),
+    )
 
 
 @dataclass
@@ -384,6 +471,11 @@ async def publish_ticks_once(
             if isinstance(outcome, Exception):
                 raise outcome
             await publish_tick(redis, outcome, maxlen=maxlen, depth_ttl_seconds=depth_ttl_seconds)
+        except QuoteRefusedError as refused:
+            # Not a failure to back off from: ask again next cycle (see the error's docstring).
+            failures[symbol] = refused
+            await note_quote_refusal(redis, refused)
+            continue
         except Exception as exc:  # noqa: BLE001 - isolating one symbol's failure from the rest
             failures[symbol] = exc
             if backoff is not None:

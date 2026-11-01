@@ -50,6 +50,22 @@ def build_broker_adapter(
     raise UnknownBrokerError(broker)
 
 
+def configured_broker_fingerprint() -> tuple[tuple[str, BrokerCredentials], ...] | None:
+    """Every broker with stored credentials, in preference order, with the credentials
+    themselves (frozen, structurally-`==`-able dataclasses) so re-saving the *same* broker's
+    key/token, or connecting a second broker, is detected as a real change."""
+    try:
+        store = get_secrets_store()
+    except SecretsStoreError:
+        return None
+    configured = tuple(
+        (broker, credentials)
+        for broker in KNOWN_BROKERS
+        if (credentials := store.get_credentials(broker)) is not None
+    )
+    return configured or None
+
+
 def build_configured_adapter(*, sandbox: bool = False) -> ResilientBrokerAdapter | None:
     """Looks up whichever broker has credentials configured in the
     secrets store (first match in `KNOWN_BROKERS` order) and returns a
@@ -79,3 +95,31 @@ def build_configured_adapter(*, sandbox: bool = False) -> ResilientBrokerAdapter
         return ResilientBrokerAdapter(adapter, breaker=get_broker_circuit_breaker(broker))
 
     return None
+
+
+class RefreshingConfiguredAdapter:
+    """`build_configured_adapter()`, built again only when the stored credentials change.
+
+    A scheduled job that needs "the broker that is configured right now" can ask on every firing
+    without building (and logging) an adapter every few seconds, and without the stale-forever
+    behaviour of resolving it once at startup: a broker connected, re-authenticated or removed in
+    Settings takes effect on the job's next firing. The adapter it hands back shares the broker's
+    circuit breaker (`breaker_registry`), so replacing it loses no breaker state."""
+
+    def __init__(self, *, sandbox: bool = False) -> None:
+        self._sandbox = sandbox
+        self._fingerprint: tuple[tuple[str, BrokerCredentials], ...] | None = None
+        self._adapter: ResilientBrokerAdapter | None = None
+        self._built = False
+
+    def __call__(self) -> ResilientBrokerAdapter | None:
+        fingerprint = configured_broker_fingerprint()
+        if not self._built or fingerprint != self._fingerprint:
+            self._adapter = build_configured_adapter(sandbox=self._sandbox)
+            self._fingerprint = fingerprint
+            self._built = True
+        return self._adapter
+
+
+# What the live trading jobs use: production, never the sandbox.
+get_live_adapter = RefreshingConfiguredAdapter(sandbox=False)

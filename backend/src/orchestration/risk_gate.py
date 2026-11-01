@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.engine.options_grounding import GroundedLeg, naked_options_scan
 from src.engine.risk.compliance import (
     ComplianceCheckResult,
+    ExchangeCircuitLimits,
     RegulatoryDataProvider,
     run_compliance_checks,
 )
@@ -63,6 +64,8 @@ class OrderIntent:
     created_at: datetime
     compliance: ComplianceCheckResult
     correlation: CorrelationCheckResult | None
+    # False only for a stop-loss exit, which is not held to the circuit band (see `stop_loss_exit`).
+    circuit_band_checked: bool = True
 
 
 async def create_order_intent(
@@ -81,7 +84,13 @@ async def create_order_intent(
     recent_returns: pd.Series[Any] | None = None,
     benchmark_provider: NiftyBenchmarkProvider | None = None,
     correlation_threshold: float = DEFAULT_CORRELATION_THRESHOLD,
+    exchange_limits: ExchangeCircuitLimits | None = None,
+    stop_loss_exit: bool = False,
 ) -> OrderIntent:
+    """`exchange_limits`: the exchange's own circuit limits from the quote that priced this order,
+    checked in place of the reference table's band when present. `stop_loss_exit`: the order closes
+    a position because its stop-loss was hit; it is not held to the circuit band (a gap past the
+    band is when the stop matters), but every other check, the kill switch first, applies."""
     # 1. Kill switch -- checked first, ahead of everything below. Raises
     #    KillSwitchTrippedError and returns without evaluating anything
     #    else once the switch for this mode is tripped.
@@ -89,7 +98,8 @@ async def create_order_intent(
 
     reasons: list[str] = []
 
-    # 2. Compliance: SEBI-style position limits + NSE-style circuit band.
+    # 2. Compliance: the house single-position limit + the circuit band (the exchange's own limits
+    #    when the quote carried them, else the reference table's).
     compliance = run_compliance_checks(
         symbol=symbol,
         proposed_position_value=proposed_position_value,
@@ -97,6 +107,8 @@ async def create_order_intent(
         proposed_price=proposed_price,
         reference_price=reference_price,
         provider=regulatory_provider,
+        exchange_limits=exchange_limits,
+        check_circuit_band=not stop_loss_exit,
     )
     reasons.extend(compliance.reasons)
 
@@ -135,4 +147,5 @@ async def create_order_intent(
         created_at=datetime.now(UTC),
         compliance=compliance,
         correlation=correlation,
+        circuit_band_checked=not stop_loss_exit,
     )

@@ -7,6 +7,7 @@ import type {
   PaperCostBreakdown,
   PaperFill,
   PaperInstrumentKind,
+  PaperLastTick,
   PaperOptionStrategy,
   PaperPosition,
   PaperSubscription,
@@ -366,7 +367,16 @@ export function attentionItems(subs: PaperSubscription[], marketOpen: boolean): 
         action: null,
       })
     }
-    if (
+    if (sub.is_active && sub.state === 'active' && sub.quote_refusal) {
+      items.push({
+        id: `${sub.id}:refused`,
+        severity: 'warning',
+        title: `${name} has no usable price`,
+        detail: `Its latest ${sub.quote_refusal.broker} quote was refused: ${sub.quote_refusal.reason}. Nothing trades on it until a current quote arrives.`,
+        subscriptionId: sub.id,
+        action: null,
+      })
+    } else if (
       marketOpen &&
       sub.is_active &&
       sub.state === 'active' &&
@@ -384,6 +394,69 @@ export function attentionItems(subs: PaperSubscription[], marketOpen: boolean): 
     }
   }
   return items.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.title.localeCompare(b.title))
+}
+
+// ---- How fresh a price is by the exchange's own clock, and the band it may trade in ----
+
+const IST_CLOCK = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
+
+/** `2026-11-02T04:01:02Z` -> `09:31:02 IST`: the exchange's clock, whatever the browser's zone. */
+export function formatIstClock(iso: string): string {
+  return `${IST_CLOCK.format(new Date(iso))} IST`
+}
+
+/** A price whose exchange stamp is this fresh (seconds) is "live"; an older one is a quiet instrument
+ * or a feed that has stopped, and the desk says it cannot tell which. */
+export const EXCHANGE_FRESH_SECONDS = 60
+
+export type ExchangeFreshness = { tone: 'fresh' | 'quiet' | 'unknown'; text: string }
+
+/** What the exchange's stamp on the latest price says about it. A stamp is the time of the last
+ * *trade*, so an old one is not by itself a fault; no stamp at all is "not known", never "fresh". */
+export function exchangeFreshness(
+  tick: Pick<PaperLastTick, 'exchange_time' | 'exchange_age_seconds'> | null,
+): ExchangeFreshness {
+  if (tick === null) return { tone: 'unknown', text: 'No price has arrived yet.' }
+  if (!tick.exchange_time) {
+    return {
+      tone: 'unknown',
+      text: 'This broker sends no exchange timestamp we can read, so the price cannot be dated by the exchange.',
+    }
+  }
+  const age = tick.exchange_age_seconds ?? 0
+  const traded = `Last traded at ${formatIstClock(tick.exchange_time)}, ${formatAge(age)}.`
+  return age <= EXCHANGE_FRESH_SECONDS
+    ? { tone: 'fresh', text: traded }
+    : { tone: 'quiet', text: `${traded} A quiet instrument, or a feed that has stopped.` }
+}
+
+export type CircuitLine = { source: 'exchange' | 'reference_table' | 'none'; text: string }
+
+/** Which band the risk gate will judge an order against: the exchange's own limits from the quote,
+ * or, failing those, the reference table's percentage of the previous close (said to be exactly that). */
+export function circuitLine(
+  tick: Pick<PaperLastTick, 'lower_circuit' | 'upper_circuit'> | null,
+  fallbackPct: number | null | undefined,
+): CircuitLine {
+  if (tick && tick.lower_circuit != null && tick.upper_circuit != null) {
+    return {
+      source: 'exchange',
+      text: `Exchange circuit limits ${formatInr(tick.lower_circuit, { decimals: 2 })} to ${formatInr(tick.upper_circuit, { decimals: 2 })}.`,
+    }
+  }
+  if (fallbackPct != null) {
+    return {
+      source: 'reference_table',
+      text: `The quote carried no exchange circuit limits, so the risk gate uses the reference table's ${fallbackPct}% band from the previous close (not an exchange figure).`,
+    }
+  }
+  return { source: 'none', text: 'No circuit band is known for this price.' }
 }
 
 // ---- Grouping ----

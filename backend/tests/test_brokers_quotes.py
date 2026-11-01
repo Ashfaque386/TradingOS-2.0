@@ -319,3 +319,62 @@ async def test_zerodha_batch_tolerates_a_row_keyed_by_the_bare_symbol():
     quotes = await _zerodha(handler).get_quotes(["INFY"])
 
     assert quotes["INFY"].last_price == 1503.25
+
+
+# ---- the exchange's circuit limits ----
+
+
+def test_a_quote_carries_the_exchanges_circuit_limits_when_the_broker_sends_them():
+    for broker in ("zerodha", "upstox"):
+        quote = quote_from_row(
+            "INFY",
+            {"last_price": 1500.0, "lower_circuit_limit": 1350.0, "upper_circuit_limit": 1650.0},
+            broker=broker,
+        )
+
+        assert (quote.lower_circuit, quote.upper_circuit) == (1350.0, 1650.0)
+
+
+def test_limits_sent_as_text_are_read_as_numbers():
+    quote = quote_from_row(
+        "INFY",
+        {"last_price": 1500.0, "lower_circuit_limit": "1350.05", "upper_circuit_limit": "1650.5"},
+        broker="zerodha",
+    )
+
+    assert (quote.lower_circuit, quote.upper_circuit) == (1350.05, 1650.5)
+
+
+def test_a_quote_without_limits_has_none_never_a_guess():
+    quote = quote_from_row("INFY", {"last_price": 1500.0}, broker="zerodha")
+
+    assert (quote.lower_circuit, quote.upper_circuit) == (None, None)
+
+
+def test_a_band_is_only_a_band_when_both_ends_are_present_positive_and_in_order():
+    def limits(**fields):
+        quote = quote_from_row("INFY", {"last_price": 1500.0, **fields}, broker="zerodha")
+        return quote.lower_circuit, quote.upper_circuit
+
+    assert limits(lower_circuit_limit=1350.0) == (None, None)  # one end only
+    assert limits(upper_circuit_limit=1650.0) == (None, None)
+    assert limits(lower_circuit_limit=0, upper_circuit_limit=0) == (None, None)  # no band
+    assert limits(lower_circuit_limit=0, upper_circuit_limit=1650.0) == (None, None)
+    assert limits(lower_circuit_limit=-5.0, upper_circuit_limit=1650.0) == (None, None)
+    assert limits(lower_circuit_limit=1650.0, upper_circuit_limit=1350.0) == (
+        None,
+        None,
+    )  # inverted
+    assert limits(lower_circuit_limit=1500.0, upper_circuit_limit=1500.0) == (None, None)  # empty
+    assert limits(lower_circuit_limit=None, upper_circuit_limit=None) == (None, None)
+
+
+def test_limits_that_are_not_numbers_are_ignored_rather_than_breaking_the_quote():
+    quote = quote_from_row(
+        "INFY",
+        {"last_price": 1500.0, "lower_circuit_limit": "n/a", "upper_circuit_limit": "1650"},
+        broker="zerodha",
+    )
+
+    assert quote.last_price == 1500.0
+    assert (quote.lower_circuit, quote.upper_circuit) == (None, None)

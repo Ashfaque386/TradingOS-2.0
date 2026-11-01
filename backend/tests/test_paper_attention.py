@@ -43,6 +43,8 @@ def _subject(raw: dict) -> AttentionSubject:
         open_legs=raw["open_legs"],
         unrealized_pnl=raw["unrealized_pnl"],
         last_tick_age_seconds=tick["age_seconds"] if tick else None,
+        refusal_broker=(raw.get("quote_refusal") or {}).get("broker"),
+        refusal_reason=(raw.get("quote_refusal") or {}).get("reason"),
     )
 
 
@@ -201,3 +203,45 @@ def test_subjects_and_items_are_immutable_values():
         with pytest.raises(FrozenInstanceError):
             setattr(value, attribute, "other")
         assert not hasattr(value, "__dict__")  # slotted, so no stray attributes either
+
+
+def test_a_view_with_a_refused_quote_hands_on_who_refused_it_and_why():
+    from datetime import UTC, datetime
+
+    from src.engine.paper_trading.tick_feed import QuoteRefusal
+
+    subscription = PaperTradingSubscription(
+        id=uuid.uuid4(),
+        symbol="TCS",
+        instrument_kind="equity",
+        option_strategy=None,
+        is_active=True,
+    )
+    view = SubscriptionView(
+        subscription=subscription,
+        state="active",
+        state_reason=None,
+        quantity=0,
+        avg_cost=0.0,
+        realized_pnl=0.0,
+        costs_total=0.0,
+        quote_refusal=QuoteRefusal(
+            broker="upstox", reason="too old", exchange_time=None, at=datetime.now(UTC)
+        ),
+    )
+    plain = SubscriptionView(
+        subscription=subscription,
+        state="active",
+        state_reason=None,
+        quantity=0,
+        avg_cost=0.0,
+        realized_pnl=0.0,
+        costs_total=0.0,
+    )
+
+    subject = subject_from_view(view)
+    assert (subject.refusal_broker, subject.refusal_reason) == ("upstox", "too old")
+    assert (subject_from_view(plain).refusal_broker, subject_from_view(plain).refusal_reason) == (
+        None,
+        None,
+    )

@@ -210,6 +210,11 @@ class Settings(BaseSettings):
     # the alert says is stale cannot differ (the console mirrors the default in
     # lib/paper-trading.ts, pinned by a shared test fixture).
     paper_stale_price_seconds: float = 120.0
+    # A quote carries the exchange's own stamp for its price. One stamped on an earlier IST date is
+    # always refused (nothing traded today); this also refuses one older than that many seconds.
+    # 0 (the default) switches the age limit off: a quiet instrument legitimately has an old stamp,
+    # so the limit is set from the measured lag (the "exchange lag" panel) after a real session.
+    paper_quote_max_exchange_age_seconds: float = 0.0
     # The newest ticks kept per symbol stream (approximate trim). At one tick per 3 seconds over a
     # 6.25-hour session this is ~7,500 a day, so the default keeps about a day; a consumer that
     # falls further behind than that loses the oldest ticks, not the newest.

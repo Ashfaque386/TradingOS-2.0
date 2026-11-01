@@ -201,3 +201,85 @@ async def test_saving_or_deleting_credentials_clears_the_rejection(client, make_
         assert feed_health.get_rejection("upstox") is None
     finally:
         app.dependency_overrides.pop(get_broker_credentials_store, None)
+
+
+# ---- quotes the broker answered that were not acted on ----
+
+
+def test_refusals_are_counted_per_broker_with_the_latest_remembered():
+    feed_health.record_quote_refusal("zerodha", symbol="INFY", reason="first")
+    feed_health.record_quote_refusal("zerodha", symbol="TCS", reason="second")
+
+    summary = feed_health.get_quote_refusals("zerodha")
+    assert (summary.count, summary.last_symbol, summary.last_reason) == (2, "TCS", "second")
+    assert datetime.now(UTC) - summary.last_at < timedelta(seconds=5)
+    assert feed_health.get_quote_refusals("upstox") is None
+
+
+def test_a_long_refusal_reason_is_cut_short():
+    feed_health.record_quote_refusal("zerodha", symbol="INFY", reason="r" * 500)
+
+    assert len(feed_health.get_quote_refusals("zerodha").last_reason) == 200
+
+
+def test_clearing_a_broker_forgets_its_refusals_and_only_its_own():
+    feed_health.record_quote_refusal("zerodha", symbol="INFY", reason="x")
+    feed_health.record_quote_refusal("upstox", symbol="INFY", reason="x")
+
+    feed_health.clear("zerodha")
+
+    assert feed_health.get_quote_refusals("zerodha") is None
+    assert feed_health.get_quote_refusals("upstox") is not None
+    feed_health.clear()
+    assert feed_health.get_quote_refusals("upstox") is None
+
+
+async def test_the_status_endpoint_reports_how_many_quotes_were_refused_and_the_latest(
+    client, make_user, tmp_path
+):
+    store = _store(tmp_path)
+    try:
+        headers = await _admin(client, make_user, "admin-fh4@example.com")
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
+        before = await _status(client, headers, "zerodha")
+        assert before["quotes_refused_count"] == 0
+        assert before["quotes_refused_last_symbol"] is None
+        assert (
+            before["quotes_refused_last_reason"] is None
+            and before["quotes_refused_last_at"] is None
+        )
+
+        feed_health.record_quote_refusal("zerodha", symbol="INFY", reason="old stamp")
+        feed_health.record_quote_refusal("zerodha", symbol="TCS", reason="older stamp")
+        after = await _status(client, headers, "zerodha")
+
+        assert after["quotes_refused_count"] == 2
+        assert after["quotes_refused_last_symbol"] == "TCS"
+        assert after["quotes_refused_last_reason"] == "older stamp"
+        assert after["quotes_refused_last_at"] is not None
+        assert after["feed_rejection_status"] is None  # a refusal is not a credentials rejection
+        assert (await _status(client, headers, "upstox"))["quotes_refused_count"] == 0
+    finally:
+        app.dependency_overrides.pop(get_broker_credentials_store, None)
+
+
+async def test_refusals_without_credentials_are_hidden_and_new_credentials_reset_them(
+    client, make_user, tmp_path
+):
+    store = _store(tmp_path)
+    try:
+        headers = await _admin(client, make_user, "admin-fh5@example.com")
+        feed_health.record_quote_refusal("zerodha", symbol="INFY", reason="x")
+        assert (await _status(client, headers, "zerodha"))["quotes_refused_count"] == 0
+
+        store.set_credentials("zerodha", BrokerCredentials(api_key="k", access_token="t"))
+        assert (await _status(client, headers, "zerodha"))["quotes_refused_count"] == 1
+        await client.post(
+            "/api/v1/broker-credentials/zerodha",
+            json={"api_key": "k2", "access_token": "fresh"},
+            headers=headers,
+        )
+
+        assert (await _status(client, headers, "zerodha"))["quotes_refused_count"] == 0
+    finally:
+        app.dependency_overrides.pop(get_broker_credentials_store, None)

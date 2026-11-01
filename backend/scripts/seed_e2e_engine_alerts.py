@@ -5,7 +5,9 @@ engine (a stop-loss exit) and by Prometheus through Alertmanager. None of that c
 happen on cue in a browser test, so this writes the episodes those paths would have left, the way
 `src.orchestration.engine_alerts` records them:
 
-- a paper subscription, so an alert can point at something on the desk;
+- a paper subscription that is switched off and still holds shares, so an alert can point at
+  something on the desk and the real watcher, which runs in the backend under test, agrees with the
+  alert below instead of clearing it a minute later;
 - an open critical alert from the watcher about that subscription (a position nobody is watching),
   already announced;
 - an open warning that came through Alertmanager (PaperTicksStale), not tied to a subscription;
@@ -25,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from src.core.db import get_session_factory
 from src.engine.sandbox.process_runtime import RestrictedProcessSandboxRuntime
 from src.models.engine_alert_event import EngineAlertEvent
+from src.models.paper_position import PaperPosition
 from src.models.paper_trading_subscription import PaperTradingSubscription
 from src.orchestration.strategies import run_strategy_pipeline
 
@@ -47,9 +50,15 @@ async def seed() -> None:
             symbol=symbol,
             initial_capital=100_000.0,
             created_by="e2e-seed-script",
+            is_active=False,
         )
         db.add(subscription)
         await db.flush()
+        db.add(
+            PaperPosition(
+                subscription_id=subscription.id, symbol=symbol, quantity=10, avg_cost=100.0
+            )
+        )
         db.add_all(
             [
                 EngineAlertEvent(

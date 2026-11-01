@@ -54,6 +54,11 @@ flows named in that pass and has grown since:
   than ignored.
 - `paper-trading-logic.spec.ts` -- the paper desk's pure logic (cost waterfall,
   option payoff, expiry in IST, what needs attention). No browser or backend.
+- `broker-quotes-logic.spec.ts` -- the wording of a lane's price section (the exchange stamp, which
+  circuit band applies) and of a broker's refused-quote line. No browser or backend.
+- `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
+  and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
+  ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
 - `engine-alerts-logic.spec.ts` -- the wording of the engine-alert panel, the top-bar
   count and Settings' Alertmanager line. No browser or backend.
 - `engine-alerts.spec.ts` -- what the trading engine needed a person for: the

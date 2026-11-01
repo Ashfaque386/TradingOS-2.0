@@ -19,7 +19,15 @@ The intent-generation job reads from the *same* Redis tick stream Phase
 (`src.engine.paper_trading.tick_feed`) -- a symbol's live quote is the
 same value regardless of paper or live mode, so there is no separate
 live-specific tick-publishing job here; this scheduler only drains.
+
+Like the paper drain it acts only on a tick younger than `PAPER_TICK_MAX_AGE_SECONDS`: a price that
+old (a stalled feed, a backlog) is not one to place a real order on. And the broker is looked up on
+every firing (`adapter_factory`), not once at startup, so a broker connected, re-authenticated or
+removed in Settings takes effect on the next firing instead of after a restart.
 """
+
+import time
+from collections.abc import Callable
 
 import pandas as pd
 import structlog
@@ -30,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.brokers.base import BrokerAdapter
+from src.core.config import get_settings
 from src.engine.paper_trading.market_hours import IST, is_market_open_ist
 from src.engine.paper_trading.price_data import PriceDataProvider
 from src.engine.paper_trading.tick_feed import read_new_ticks
@@ -37,6 +46,7 @@ from src.engine.risk.compliance import RegulatoryDataProvider
 from src.engine.risk.kill_switch import KillSwitchTrippedError
 from src.models.live_trading_subscription import LiveTradingSubscription
 from src.observability.correlation import with_job_correlation_id
+from src.observability.metrics import paper_ticks_skipped_stale_total
 from src.orchestration.live_trading import (
     expire_stale_intents,
     generate_live_order_intent,
@@ -74,12 +84,14 @@ async def run_intent_generation_job(
     session_factory: async_sessionmaker[AsyncSession],
     redis: Redis,
     *,
-    adapter: BrokerAdapter | None,
+    adapter_factory: Callable[[], BrokerAdapter | None],
     regulatory_provider: RegulatoryDataProvider,
 ) -> None:
     if not is_market_open_ist():
         return
 
+    adapter = adapter_factory()
+    max_tick_age_ms = get_settings().paper_tick_max_age_seconds * 1000.0
     async with session_factory() as db:
         result = await db.execute(
             select(LiveTradingSubscription).where(LiveTradingSubscription.is_active.is_(True))
@@ -91,6 +103,16 @@ async def run_intent_generation_job(
             redis, subscription.symbol, last_id=subscription.tick_cursor
         )
         for tick in ticks:
+            age_ms = max(0.0, time.time() * 1000 - tick.timestamp_ms)
+            if age_ms > max_tick_age_ms:
+                paper_ticks_skipped_stale_total.inc()
+                logger.warning(
+                    "live_trading.tick_skipped_stale",
+                    subscription_id=str(subscription.id),
+                    age_ms=age_ms,
+                    max_age_ms=max_tick_age_ms,
+                )
+                continue
             async with session_factory() as db:
                 try:
                     await generate_live_order_intent(
@@ -132,8 +154,11 @@ async def run_expiry_sweep_job(session_factory: async_sessionmaker[AsyncSession]
 
 
 async def run_reconciliation_job(
-    session_factory: async_sessionmaker[AsyncSession], *, adapter: BrokerAdapter | None
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    adapter_factory: Callable[[], BrokerAdapter | None],
 ) -> None:
+    adapter = adapter_factory()
     if adapter is None:
         return
     async with session_factory() as db:
@@ -152,7 +177,7 @@ def start_live_trading_scheduler(
     redis: Redis,
     price_provider: PriceDataProvider,
     regulatory_provider: RegulatoryDataProvider,
-    adapter: BrokerAdapter | None,
+    adapter_factory: Callable[[], BrokerAdapter | None],
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST)
 
@@ -168,7 +193,7 @@ def start_live_trading_scheduler(
         "interval",
         seconds=INTENT_GENERATION_INTERVAL_SECONDS,
         args=[session_factory, redis],
-        kwargs={"adapter": adapter, "regulatory_provider": regulatory_provider},
+        kwargs={"adapter_factory": adapter_factory, "regulatory_provider": regulatory_provider},
         id=INTENT_GENERATION_JOB_ID,
         replace_existing=True,
     )
@@ -185,7 +210,7 @@ def start_live_trading_scheduler(
         "interval",
         seconds=RECONCILIATION_INTERVAL_SECONDS,
         args=[session_factory],
-        kwargs={"adapter": adapter},
+        kwargs={"adapter_factory": adapter_factory},
         id=RECONCILIATION_JOB_ID,
         replace_existing=True,
     )

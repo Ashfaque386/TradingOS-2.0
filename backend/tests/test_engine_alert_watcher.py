@@ -352,3 +352,31 @@ async def test_the_watcher_is_one_job_a_minute_that_never_overlaps_itself(db_ses
         assert job.coalesce is True  # and a backlog of missed looks is one look
     finally:
         scheduler.shutdown(wait=False)
+
+
+async def test_a_refused_quote_is_an_alert_once_it_has_lasted_and_explains_the_stale_price(
+    db_session_factory, monkeypatch, sent
+):
+    from src.engine.paper_trading.tick_feed import QuoteRefusal
+
+    quoted = await _subscription(db_session_factory)
+    refusal = QuoteRefusal(
+        broker="zerodha",
+        reason="the exchange stamp (2026-10-30 15:29 IST) is from a previous day",
+        exchange_time=None,
+        at=OPEN,
+    )
+    # The price is also long out of date, which the refusal explains: one alert, not two.
+    _serve(monkeypatch, [_view(quoted, quote_refusal=refusal, **_tick(900.0))])
+
+    await _watch(db_session_factory, OPEN)
+    await _watch(db_session_factory, OPEN + timedelta(minutes=3))
+
+    [row] = await _rows(db_session_factory)
+    assert (row.kind, row.severity) == ("refused", "warning")
+    assert row.key == f"{quoted.id}:refused"
+    assert [c[1] for c in sent] == ["RELIANCE has no usable price"]
+    assert sent[0][2] == (
+        "Its latest zerodha quote was refused: the exchange stamp (2026-10-30 15:29 IST) is from "
+        "a previous day. Nothing trades on it until a current quote arrives."
+    )

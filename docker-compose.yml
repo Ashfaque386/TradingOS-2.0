@@ -32,6 +32,9 @@ services:
       # How old the newest price may be before the Paper Desk, the engine alerts and a manual close
       # call it stale (one setting for all three).
       PAPER_STALE_PRICE_SECONDS: ${PAPER_STALE_PRICE_SECONDS:-120}
+      # A quote stamped (by the exchange) on an earlier day is always refused; this also refuses one
+      # older than that many seconds. 0 = off, until a real session's lag panel says what is normal.
+      PAPER_QUOTE_MAX_EXCHANGE_AGE_SECONDS: ${PAPER_QUOTE_MAX_EXCHANGE_AGE_SECONDS:-0}
       # How long a warning must last before the engine-alert watcher messages anyone (a critical
       # one, such as a position nobody is watching, is announced at once).
       ENGINE_ALERT_CONFIRM_SECONDS: ${ENGINE_ALERT_CONFIRM_SECONDS:-120}

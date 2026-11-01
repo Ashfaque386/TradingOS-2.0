@@ -88,7 +88,11 @@ def test_the_backend_is_told_where_alertmanager_is_and_the_new_tunables_reach_it
     env = COMPOSE["services"]["backend"]["environment"]
 
     assert env["ALERTMANAGER_URL"].startswith("${ALERTMANAGER_URL:-http://alertmanager:9093}")
-    for name in ("PAPER_STALE_PRICE_SECONDS", "ENGINE_ALERT_CONFIRM_SECONDS"):
+    for name in (
+        "PAPER_STALE_PRICE_SECONDS",
+        "ENGINE_ALERT_CONFIRM_SECONDS",
+        "PAPER_QUOTE_MAX_EXCHANGE_AGE_SECONDS",
+    ):
         assert name in env, f"{name} is a setting but is not forwarded to the container"
 
 
