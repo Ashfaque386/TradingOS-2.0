@@ -1,20 +1,20 @@
-# Keeps the GitHub Actions in .github/workflows/ci.yml current.
+# Keeps what the build installs current: the GitHub Actions in .github/workflows/ci.yml, the Python
+# packages (backend/pyproject.toml and the lock beside it, backend/requirements.txt), the frontend
+# packages (package.json and pnpm-lock.yaml), and the Docker base images (the Dockerfiles and
+# docker-compose.yml).
 #
-# Why this exists: an action's declared runtime (Node 16, then 20) is deprecated
-# on GitHub's schedule, and until now that arrived only as a warning in each run's
-# annotations that nobody acted on -- the Node 20 -> 24 move (2026-10-13) was the
-# first time anyone did, and it touched ten actions by hand. A pull request per
-# week is the cheaper version of that.
+# Why this exists: an action's declared runtime (Node 16, then 20) is deprecated on GitHub's
+# schedule, and until Dependabot did it that arrived only as a warning in each run's annotations that
+# nobody acted on. Advisories against packages arrive the same way (pip-audit and `pnpm audit` in
+# CI say so; this proposes the fix).
 #
-# Scope: Actions only. Python (pip), the frontend (pnpm) and the Docker base
-# images are deliberately not here -- those are version decisions with real
-# regression risk (pytest, langgraph and the lockfiles have each needed their own
-# reviewed change), and a stream of automatic bump PRs for them would be noise.
+# How it stays quiet: every ecosystem opens at most ONE pull request a week for its minor and patch
+# updates (a group), so CI runs once per ecosystem and a failing bump names the package. A MAJOR
+# version is never proposed automatically -- those are decisions with real regression risk
+# (pytest, langgraph, Next and React have each needed their own reviewed change), taken by hand when
+# wanted. Security updates are separate and not limited by any of this.
 #
-# All of a week's updates arrive as ONE pull request, so CI runs once; if a bump
-# breaks the build, the failing job names the action. Dependabot opens it against
-# main, where CI runs on pull_request. The first one will move the actions from
-# the lowest Node-24 major each is pinned to up to the newest.
+# Things held back on purpose are listed under `ignore` with the reason.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -29,3 +29,85 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(backend)"
+    groups:
+      python:
+        update-types: [minor, patch]
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(frontend)"
+    groups:
+      frontend:
+        update-types: [minor, patch]
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /backend
+    schedule:
+      interval: weekly
+      day: thursday
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(images)"
+    groups:
+      base-images:
+        patterns:
+          - "*"
+    ignore:
+      # The backend is written for 3.12 (requires-python >=3.12,<3.13); a new Python is a port.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Postgres keeps its data in a volume: a new major cannot read the old one's files.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: thursday
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(images)"
+    groups:
+      stack-images:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      # Qdrant and Temporal store data on disk and version their formats: moved by hand, after a
+      # backup, not by a bot.
+      - dependency-name: "qdrant/qdrant"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "temporalio/temporal"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

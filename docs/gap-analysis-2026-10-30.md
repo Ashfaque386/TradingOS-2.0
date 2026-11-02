@@ -121,6 +121,7 @@ this is where it stands.
 | Chat | A chat is renamed in place, pinned to a provider (marking the ones with no key), deleted only after a confirmation that names it, and exported as Markdown or JSON; a list that cannot be loaded says so; the conversation is announced to a screen reader; the server refuses a blank title and a provider it does not know. |
 | Settings and scheduled jobs (W19) | A schedule chosen in Mission Control is kept across restarts and can be restored to the code's own; the open Settings section is in the address; disconnecting a channel and removing a broker's credentials ask first. |
 | W20 (the heavy lists) | Runs, strategies and the instrument master are read a page at a time with the total; the runs' tasks and the strategies' versions are read in one query for the page, not one per row; Mission Control always shows the open runs, whatever page of history is open; a strategy in the list carries a summary of its versions, not their code; the instruments are searched on the server and an underlying's contracts shown 100 at a time. |
+| G13 and G27 (supply chain) | Dependabot watches pip, npm, the Dockerfiles and the compose file (grouped, weekly, no majors); `pnpm audit --prod` and a Trivy scan of each image (a fixable CRITICAL fails the job) run in CI, and published images carry an SBOM and provenance; the Prometheus, Grafana and Temporal images are named by version; `backend/requirements.txt` pins all 141 Python packages for CI and both images. The first audit and scan found, and this phase fixed, three critical advisories in Next 16.3.3 and eight in `temporalio` 1.7's Rust crates. |
 
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
@@ -137,7 +138,6 @@ this is where it stands.
 - **G22** live path: `LivePosition` keeps the phantom quantity of rejected/cancelled orders; the live adapter is chosen once at boot; live intents have no staleness guard; the live circuit-band check compares a price with itself; one position row per strategy, not per symbol.
 - **G23** the kill-switch threshold ignores the dual-control limit (`get_effective_risk_limit` has no caller), `POST /check` can overwrite it, and an automatic trip would write no audit row.
 - **G24** the "clean shadow-mode streak" the Go-Live gate asks for is undefined and cannot be derived (`shadow_mode_runs` has no strategy or outcome).
-- **G27** `prom/prometheus`, `grafana/grafana` and `temporalio/temporal` are `:latest`; Python has no lock or constraints file.
 - **G28** fundamentals, valuation and macro agents have no data source. (Per-agent narration and the `"cli"` audit actor were closed in phase 9, slice 7a.)
 - **G29** `/admin/users*` has no UI.
 

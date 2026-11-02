@@ -55,7 +55,9 @@ dependencies = [
     # >=1.5: 1.4.2 has PYSEC-2024-110 (a real CVE, closed in Phase 26's
     # dependency-CVE pass, docs/phase20-old-vs-new-comparison.md item 28).
     "scikit-learn>=1.5,<1.6",
-    "temporalio>=1.7,<1.8",
+    # >=1.35: the Rust core compiled into 1.7 carried crates with published advisories (zip, quinn-proto,
+    # rustls-webpki, pyo3: Trivy reports them from the wheel's Cargo.lock); 1.35 ships fixed ones.
+    "temporalio>=1.35,<1.36",
     # Phase 7 (Build Spec §11): autonomous daily-cron + intraday-interval
     # scheduling for the paper trading engine.
     "apscheduler>=3.10,<3.11",

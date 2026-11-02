@@ -62,6 +62,9 @@ flows named in that pass and has grown since:
 - `paged-lists.spec.ts` -- the runs on Mission Control, the strategies and the instrument master read a page at a time with the
   total (120 runs, 130 equities and 120 option contracts written by `scripts/seed_e2e_runs.py` and `seed_e2e_instruments.py`;
   the runs are dated in the past and removed again, so they never push another spec's runs off Mission Control's first page).
+- `register.spec.ts` -- the page that makes the first account, against stubbed answers (the real database always has accounts): a
+  bad entry is named before anything is sent, the account is created then signed in, a refusal or a taken address or too many
+  attempts or a server fault or an unreachable server each say what happened.
 - `chat-settings-logic.spec.ts` -- a chat title's rule, the provider choices and their marks, the export file name, the Settings
   address. No browser or backend.
 - `settings-sections.spec.ts` -- the Settings section in the address, and removing a broker's credentials or an LLM key asking

@@ -6,3 +6,12 @@ minimumReleaseAgeExclude:
 
 allowBuilds:
   unrs-resolver: false
+
+# Next ships its own copies of these (inside postcss and styled-jsx), each with a published advisory
+# whose fix is a patch release; pnpm audit fails the build on a high one, so they are raised here
+# until a Next release carries them. Remove an entry once `pnpm audit --prod` is clean without it.
+overrides:
+  'nanoid@<3.3.18': '>=3.3.18'
+  'source-map-js@<1.2.2': '>=1.2.2'
+  'browserslist@<4.28.7': '>=4.28.7'
+  'baseline-browser-mapping@<2.11.0': '>=2.11.0'

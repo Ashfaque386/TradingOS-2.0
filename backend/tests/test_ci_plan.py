@@ -217,3 +217,90 @@ def test_the_repositorys_real_pyproject_loads_through_the_planner():
     # Every gated module plans to its own job: the matrix cannot silently omit one.
     for m in modules:
         assert cp.plan([f"backend/{m.path}"], modules).mutation_modules == [m.path]
+
+
+# ---- a dependency bump is not a change to the mutation baselines -------------------------------
+
+BASE_TOML = """
+[project]
+dependencies = ["fastapi>=0.141,<0.142"]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+[tool.tradingos.mutation]
+timeout = 600
+[[tool.tradingos.mutation.module]]
+path = "src/a.py"
+tests = ["tests/test_a.py"]
+max_survivors = 3
+[tool.mutmut]
+paths_to_mutate = "src/"
+[tool.ruff]
+line-length = 100
+"""
+
+
+def test_a_dependency_bump_in_pyproject_does_not_remeasure_the_modules():
+    bumped = BASE_TOML.replace("<0.142", "<0.143")
+
+    assert cp.mutation_config_moved(BASE_TOML, bumped) is False
+    plan = cp.plan(
+        ["backend/pyproject.toml", "backend/requirements.txt"],
+        MODULES,
+        mutation_config_changed=False,
+    )
+    assert plan.mutation_modules == []
+    assert _jobs(plan) == {"backend", "e2e", "images"}  # the suite still runs on the new versions
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ("max_survivors = 3", "max_survivors = 4"),  # a baseline moved
+        ('path = "src/a.py"', 'path = "src/b.py"'),  # a module added or renamed
+        ('paths_to_mutate = "src/"', 'paths_to_mutate = "src/x/"'),
+        ('asyncio_mode = "auto"', 'asyncio_mode = "strict"'),  # how the tests run
+    ],
+)
+def test_a_change_to_a_baseline_or_to_how_tests_run_remeasures_every_module(old, new):
+    assert cp.mutation_config_moved(BASE_TOML, BASE_TOML.replace(old, new)) is True
+    plan = cp.plan(["backend/pyproject.toml"], MODULES, mutation_config_changed=True)
+    assert plan.mutation_modules == ALL
+
+
+@pytest.mark.parametrize(
+    "old, new", [(None, BASE_TOML), (BASE_TOML, None), (BASE_TOML, "[[broken")]
+)
+def test_a_pyproject_that_cannot_be_compared_is_taken_as_changed(old, new):
+    assert cp.mutation_config_moved(old, new) is True
+
+
+def test_the_gate_script_remeasures_every_module_whatever_pyproject_did():
+    plan = cp.plan(["backend/scripts/mutation_gate.py"], MODULES, mutation_config_changed=False)
+
+    assert plan.mutation_modules == ALL
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_a_pushed_dependency_bump_is_read_from_the_two_versions_of_pyproject(tmp_path):
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "pyproject.toml").write_text(BASE_TOML)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "one")
+    before = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    def push(text):
+        (tmp_path / "backend" / "pyproject.toml").write_text(text)
+        _git(tmp_path, "commit", "-qam", "two")
+        return cp.decide(
+            {"EVENT_NAME": "push", "BASE_SHA": before, "HEAD_SHA": "HEAD"}, MODULES, cwd=tmp_path
+        )
+
+    bumped = push(BASE_TOML.replace("<0.142", "<0.143"))
+    assert bumped.mutation_modules == [] and "backend" in _jobs(bumped)
+
+    # and a baseline change in the same file, from the same starting point, measures everything
+    (tmp_path / "backend" / "pyproject.toml").write_text(BASE_TOML)
+    _git(tmp_path, "commit", "-qam", "back")
+    moved = push(BASE_TOML.replace("max_survivors = 3", "max_survivors = 9"))
+    assert moved.mutation_modules == ALL

@@ -24,7 +24,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY pyproject.toml requirements.txt ./
 COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./
@@ -38,7 +38,7 @@ RUN --mount=type=secret,id=extra_ca,required=false \
             > /tmp/ca-bundle.pem \
         && export PIP_CERT=/tmp/ca-bundle.pem; \
     fi \
-    && pip install . \
+    && pip install -c requirements.txt . \
     && rm -f /tmp/ca-bundle.pem \
     && sed -i 's/\r$//' scripts/container-entrypoint.sh scripts/api-entrypoint.sh \
     && chmod +x scripts/container-entrypoint.sh scripts/api-entrypoint.sh

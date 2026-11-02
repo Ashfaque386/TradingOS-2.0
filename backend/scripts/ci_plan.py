@@ -51,8 +51,13 @@ BACKEND_CONTRACT_FILES = frozenset({"lib/api.ts", "lib/permissions.generated.jso
 # Not part of any Docker image (so a change here needs no image build).
 NOT_IN_IMAGES_PREFIXES = ("backend/tests/", "e2e/", ".github/")
 
-# A change to these re-measures every mutation module: the baselines or the gate itself moved.
-MUTATION_CONFIG = frozenset({"backend/pyproject.toml", "backend/scripts/mutation_gate.py"})
+# A change to the gate re-measures every mutation module; so does a change to the parts of
+# pyproject.toml that decide the baselines and how the tests run (below). A change to its
+# *dependencies* (a bump, a new package) does not: it touches no gated module, and the weekly run
+# measures them all against whatever the dependencies have become.
+MUTATION_GATE = frozenset({"backend/scripts/mutation_gate.py"})
+PYPROJECT = "backend/pyproject.toml"
+MUTATION_TABLES = (("tool", "tradingos", "mutation"), ("tool", "mutmut"), ("tool", "pytest"))
 
 
 @dataclass(frozen=True)
@@ -95,8 +100,33 @@ def everything(modules: list[MutationModule], why: str) -> Plan:
     )
 
 
-def plan(changed: list[str], modules: list[MutationModule]) -> Plan:
-    """The jobs needed for a successfully read diff (`changed`: repo-relative, forward slashes)."""
+def mutation_config_moved(old: str | None, new: str | None) -> bool:
+    """Whether pyproject.toml changed in a way that moves a mutation baseline or the test run: its
+    mutation tables, the mutmut table or pytest's options. Unreadable on either side counts as
+    moved, so the answer errs towards measuring."""
+    if old is None or new is None:
+        return True
+    try:
+        before, after = tomllib.loads(old), tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return True
+
+    def pick(data: dict, path: tuple[str, ...]) -> object:
+        for key in path:
+            if not isinstance(data, dict) or key not in data:
+                return None
+            data = data[key]
+        return data
+
+    return any(pick(before, p) != pick(after, p) for p in MUTATION_TABLES)
+
+
+def plan(
+    changed: list[str], modules: list[MutationModule], *, mutation_config_changed: bool = True
+) -> Plan:
+    """The jobs needed for a successfully read diff (`changed`: repo-relative, forward slashes).
+    `mutation_config_changed` says whether a change to pyproject.toml touched the parts that matter
+    to the mutation jobs; unknown (the default) is yes."""
     relevant = [f for f in changed if not is_docs_only(f)]
     if not relevant:
         reason = "only documentation changed" if changed else "no files changed"
@@ -122,7 +152,7 @@ def plan(changed: list[str], modules: list[MutationModule]) -> Plan:
     plan_.e2e = plan_.backend or plan_.frontend
     plan_.images = any(not f.startswith(NOT_IN_IMAGES_PREFIXES) for f in relevant)
 
-    if MUTATION_CONFIG.intersection(relevant):
+    if MUTATION_GATE.intersection(relevant) or (PYPROJECT in relevant and mutation_config_changed):
         plan_.mutation_modules = [m.path for m in modules]
         mutation_why = "mutation baselines or the gate changed"
     else:
@@ -176,6 +206,42 @@ def changed_files(
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def pyproject_at(revision: str, *, cwd: Path = REPO_ROOT) -> str | None:
+    """backend/pyproject.toml as it was at `revision`, or None if git cannot say."""
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{revision}:{PYPROJECT}"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def base_revision(
+    base_sha: str, head_sha: str, pr_base: str, *, cwd: Path = REPO_ROOT
+) -> str | None:
+    """The commit the diff is measured from (a pull request's merge base, or a push's `before`)."""
+    if pr_base:
+        try:
+            result = subprocess.run(
+                ["git", "merge-base", f"origin/{pr_base}", head_sha],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        return result.stdout.strip() or None if result.returncode == 0 else None
+    if base_sha and set(base_sha) != {"0"}:
+        return base_sha
+    return None
+
+
 def decide(env: dict[str, str], modules: list[MutationModule], *, cwd: Path = REPO_ROOT) -> Plan:
     event = env.get("EVENT_NAME", "")
     if event in ("workflow_dispatch", "schedule"):
@@ -187,7 +253,16 @@ def decide(env: dict[str, str], modules: list[MutationModule], *, cwd: Path = RE
     )
     if files is None:
         return everything(modules, "the diff could not be read: when in doubt, run everything")
-    return plan(files, modules)
+    moved = True
+    if PYPROJECT in files:
+        revision = base_revision(
+            env.get("BASE_SHA", ""), env.get("HEAD_SHA", "HEAD"), env.get("PR_BASE", ""), cwd=cwd
+        )
+        old = pyproject_at(revision, cwd=cwd) if revision else None
+        new_path = cwd / PYPROJECT
+        new = new_path.read_text(encoding="utf-8") if new_path.is_file() else None
+        moved = mutation_config_moved(old, new)
+    return plan(files, modules, mutation_config_changed=moved)
 
 
 def summary(plan_: Plan) -> str:

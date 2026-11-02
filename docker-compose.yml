@@ -289,7 +289,7 @@ services:
     # unexercised without reachable infra" posture as
     # src/engine/optimization/temporal_workflows.py. Verify this service
     # comes up cleanly the first time you `docker compose up` it for real.
-    image: temporalio/temporal:latest
+    image: temporalio/temporal:1.9.1
     container_name: TradingOS-2.0-Temporal
     restart: unless-stopped
     command: ["server", "start-dev", "--ip", "0.0.0.0"]
@@ -310,7 +310,7 @@ services:
     # egress policy, confirmed live via the identical `docker pull`
     # failure pattern seen on `temporalio/temporal:latest` in Phase 5.
     # Please confirm `docker compose up` once in a normal environment.
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.15.0
     container_name: TradingOS-2.0-Prometheus
     restart: unless-stopped
     depends_on:
@@ -365,7 +365,7 @@ services:
   grafana:
     # Dashboard + alert visualization (Build Spec §19, item 5). Same
     # unverified-in-this-sandbox posture as `prometheus`/`temporal` above.
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.2
     container_name: TradingOS-2.0-Grafana
     restart: unless-stopped
     depends_on:
