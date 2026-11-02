@@ -44,11 +44,13 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
+from redis.asyncio.client import PubSub
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.api.schemas import ApprovalRequestResponse
 from src.api.ws_auth import authenticate_websocket
+from src.api.ws_lifetime import serve_until_client_leaves
 from src.core.db import get_db, get_session_factory
 from src.core.redis_client import get_redis
 from src.engine.paper_trading.tick_feed import tick_stream_key
@@ -129,7 +131,7 @@ async def activity_feed_ws(
         return
     await websocket.accept()
     try:
-        await _stream_audit_log(websocket, session_factory)
+        await serve_until_client_leaves(websocket, _stream_audit_log(websocket, session_factory))
     except WebSocketDisconnect:
         pass
 
@@ -147,9 +149,20 @@ async def agent_logs_ws(
         return
     await websocket.accept()
     try:
-        await _stream_audit_log(websocket, session_factory)
+        await serve_until_client_leaves(websocket, _stream_audit_log(websocket, session_factory))
     except WebSocketDisconnect:
         pass
+
+
+async def _forward_pubsub(websocket: WebSocket, pubsub: PubSub) -> None:
+    async for message in pubsub.listen():
+        if message["type"] != "pmessage":
+            continue
+        try:
+            payload = json.loads(message["data"])
+        except (TypeError, ValueError):
+            continue
+        await websocket.send_json({"type": "event", "event": payload})
 
 
 @router.websocket("/organization-events")
@@ -169,14 +182,7 @@ async def organization_events_ws(
     pubsub = redis.pubsub()
     try:
         await pubsub.psubscribe(pattern)
-        async for message in pubsub.listen():
-            if message["type"] != "pmessage":
-                continue
-            try:
-                payload = json.loads(message["data"])
-            except (TypeError, ValueError):
-                continue
-            await websocket.send_json({"type": "event", "event": payload})
+        await serve_until_client_leaves(websocket, _forward_pubsub(websocket, pubsub))
     except WebSocketDisconnect:
         pass
     finally:
@@ -207,14 +213,7 @@ async def agent_pipeline_events_ws(
     pubsub = redis.pubsub()
     try:
         await pubsub.psubscribe(pattern)
-        async for message in pubsub.listen():
-            if message["type"] != "pmessage":
-                continue
-            try:
-                payload = json.loads(message["data"])
-            except (TypeError, ValueError):
-                continue
-            await websocket.send_json({"type": "event", "event": payload})
+        await serve_until_client_leaves(websocket, _forward_pubsub(websocket, pubsub))
     except WebSocketDisconnect:
         pass
     finally:
@@ -270,6 +269,25 @@ async def sign_off_queue_ws(
         pass
 
 
+async def _stream_ticks(websocket: WebSocket, redis: Redis, symbol: str) -> None:
+    stream_key = tick_stream_key(symbol)
+    last_id = "$"  # only ticks published after this connection opens
+    while True:
+        response = await redis.xread({stream_key: last_id}, block=2000, count=100)
+        if not response:
+            continue
+        for _stream, entries in response:
+            for entry_id, fields in entries:
+                last_id = entry_id
+                await websocket.send_json(
+                    {
+                        "symbol": symbol,
+                        "price": float(fields["price"]),
+                        "timestamp_ms": int(fields["timestamp_ms"]),
+                    }
+                )
+
+
 @router.websocket("/ticks")
 async def ticks_ws(
     websocket: WebSocket,
@@ -286,23 +304,7 @@ async def ticks_ws(
         return
 
     await websocket.accept()
-    stream_key = tick_stream_key(symbol)
-    last_id = "$"  # only ticks published after this connection opens
-
     try:
-        while True:
-            response = await redis.xread({stream_key: last_id}, block=2000, count=100)
-            if not response:
-                continue
-            for _stream, entries in response:
-                for entry_id, fields in entries:
-                    last_id = entry_id
-                    await websocket.send_json(
-                        {
-                            "symbol": symbol,
-                            "price": float(fields["price"]),
-                            "timestamp_ms": int(fields["timestamp_ms"]),
-                        }
-                    )
+        await serve_until_client_leaves(websocket, _stream_ticks(websocket, redis, symbol))
     except WebSocketDisconnect:
         pass

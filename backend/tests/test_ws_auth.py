@@ -217,6 +217,41 @@ async def test_a_valid_ticket_opens_the_socket_for_its_user(db_session_factory, 
     assert websocket.closed is None
 
 
+async def test_the_handshake_does_not_leave_a_connection_held_for_the_life_of_the_socket(
+    db_session_factory, redis, make_user
+):
+    """The route's session lives as long as the socket; one with its transaction left open held a
+    pooled connection idle in a transaction until the socket closed."""
+    user = await _user(make_user)
+    ticket = await issue_ws_ticket(redis, user.id, 30)
+    websocket = FakeWebSocket(query={"ticket": ticket})
+
+    async with db_session_factory() as db:
+        result = await authenticate_websocket(websocket, db, redis)  # type: ignore[arg-type]
+
+        assert result is not None and result.email == "viewer@example.com"  # readable: detached
+        assert not db.in_transaction()
+
+
+async def test_a_refused_handshake_leaves_no_transaction_open_either(
+    db_session_factory, redis, make_user
+):
+    user = await _user(make_user)
+    ticket = await issue_ws_ticket(redis, user.id, 30)
+    async with db_session_factory() as db:
+        row = await db.get(User, user.id)
+        row.is_active = False
+        await db.commit()
+
+    async with db_session_factory() as db:
+        result = await authenticate_websocket(  # type: ignore[arg-type]
+            FakeWebSocket(query={"ticket": ticket}), db, redis
+        )
+
+        assert result is None
+        assert not db.in_transaction()
+
+
 async def test_the_same_ticket_does_not_open_a_second_socket(db_session_factory, redis, make_user):
     user = await _user(make_user)
     ticket = await issue_ws_ticket(redis, user.id, 30)

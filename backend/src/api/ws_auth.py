@@ -61,6 +61,12 @@ async def authenticate_websocket(
         return None
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    # The session belongs to the route and lives as long as the socket does. Leave its transaction
+    # open and every socket holds a pooled connection, idle in a transaction, until it closes: a
+    # handful of tabs would use up the pool and the API would stop answering.
+    if user is not None:
+        db.expunge(user)
+    await db.rollback()
     if user is None or not user.is_active:
         await websocket.close(code=_POLICY_VIOLATION_CLOSE_CODE, reason="invalid user")
         return None
