@@ -49,7 +49,7 @@ function fill(overrides: Partial<PaperFill>): PaperFill {
   return {
     id: 'f', subscription_id: 's1', symbol: PUT_HIGH, side: 'sell', order_group_id: 'g1', leg_index: 0,
     requested_quantity: 50, filled_quantity: 50, avg_fill_price: 150, fully_filled: true, realized_pnl: 0,
-    costs_total: 0, costs_breakdown: null, data_source: 'real', created_at: '2026-10-16T04:00:00Z', ...overrides,
+    costs_total: 0, costs_breakdown: null, data_source: 'real', administrative: false, created_at: '2026-10-16T04:00:00Z', ...overrides,
   }
 }
 

@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `paper-desk-history-logic.spec.ts` -- what the Paper Desk says about fetching price history, daily signals and the fills
+  file, the order window, and how the desk is read when part of it fails. No browser or backend.
+- `paper-desk-history.spec.ts` -- the Paper Desk's history against a real backend: the fetch offered and refused, the
+  signals tab, orders opened eight at a time, the CSV export, a figure that cannot be read. It seeds a subscription
+  with `scripts/seed_e2e_paper_history.py` (a new symbol each run).
 - `orders-logic.spec.ts` -- what the Orders & Trades page decides: a tone for every status, what a price rests on, the
   request for each filter and page, positions and profit formatting. No browser or backend.
 - `orders.spec.ts` -- the Orders & Trades page against a real backend: the ledger paged to the last row, server-side

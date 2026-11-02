@@ -547,6 +547,8 @@ export type PaperFill = {
   costs_breakdown: PaperCostBreakdown | null
   // real: a real tick on the broker's real depth; mixed: a generated book; supplied: an operator's price
   data_source: string
+  // A close done by hand without the risk gate: not a trade the strategy made.
+  administrative: boolean
   created_at: string
 }
 
@@ -592,6 +594,36 @@ export const listPaperPositions = (subscriptionId: string) =>
   apiGet<PaperPosition[]>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/positions`)
 export const listPaperFills = (subscriptionId: string) =>
   apiGet<PaperFill[]>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/fills`)
+
+/** One buy or sell decision from the daily signal run on a subscription's price history. */
+export type PaperSignal = {
+  id: string
+  subscription_id: string
+  symbol: string
+  signal_type: 'BUY' | 'SELL'
+  /** The daily bar's own close, which the risk gate judges the order's price against. */
+  reference_price: number
+  /** True once a position was entered or exited on it. */
+  consumed: boolean
+  generated_at: string
+  consumed_at: string | null
+}
+export const listPaperSignals = (subscriptionId: string) =>
+  apiGet<PaperSignal[]>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/signals`)
+
+/** What fetching a subscription's real price history did, including a failure and its reason. */
+export type PaperHistoryBackfill = {
+  status: 'success' | 'failed'
+  symbol: string
+  rows: number
+  first_date: string | null
+  last_date: string | null
+  source: string | null
+  unreal_rows_removed: number
+  error: string | null
+}
+export const backfillPaperHistory = (subscriptionId: string) =>
+  apiPost<PaperHistoryBackfill>(`/api/v1/paper-trading/subscriptions/${subscriptionId}/backfill-history`)
 export const deactivatePaperSubscription = (
   subscriptionId: string,
   body: { reason: string; on_open_position?: 'close' | 'leave_unmanaged'; close_price?: number },

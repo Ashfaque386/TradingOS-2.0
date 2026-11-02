@@ -1098,6 +1098,8 @@ class PaperFillResponse(BaseModel):
     # What the fill rested on (see src.models.data_source): `real` for a real tick walked through
     # the broker's real depth, `mixed` when the book was generated.
     data_source: str = "unknown"
+    # A close done by hand without the risk gate: not a trade the strategy made.
+    administrative: bool = False
     created_at: str
 
 
@@ -1142,6 +1144,9 @@ class DailySignalResponse(BaseModel):
     signal_type: str
     reference_price: float
     consumed: bool
+    # When the signal was detected, and when (if ever) a position was entered or exited on it.
+    generated_at: str
+    consumed_at: str | None = None
 
 
 class RunDailySignalRequest(BaseModel):

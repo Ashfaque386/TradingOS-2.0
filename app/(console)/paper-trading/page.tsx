@@ -1,12 +1,14 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, RefreshCw } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Attention } from '@/components/paper-trading/attention'
+import { BackfillDialog } from '@/components/paper-trading/backfill-dialog'
 import { CloseDialog, DeactivateDialog, EnrolDialog, SettingsDialog, activate } from '@/components/paper-trading/dialogs'
 import { EngineAlertsPanel } from '@/components/paper-trading/engine-alerts'
 import { EquityPanel } from '@/components/equity/equity-panel'
+import { ErrorNotice } from '@/components/ui/error-notice'
 import { Ledger } from '@/components/paper-trading/ledger'
 import { Lane } from '@/components/paper-trading/lane'
 import {
@@ -17,7 +19,8 @@ import {
   getUnrealizedPaperPnl,
   listPaperSubscriptions,
 } from '@/lib/api'
-import { type AttentionItem, attentionItems } from '@/lib/paper-trading'
+import { messageOf } from '@/lib/errors'
+import { type AttentionItem, type DeskReading, attentionItems, isHistoryWait, settleDesk } from '@/lib/paper-trading'
 import { can } from '@/lib/permissions'
 import { useConsoleState } from '@/components/shell/console-state'
 import { usePolling } from '@/lib/use-polling'
@@ -38,6 +41,7 @@ type Dialog =
   | { kind: 'deactivate'; sub: PaperSubscription }
   | { kind: 'close'; sub: PaperSubscription }
   | { kind: 'settings'; sub: PaperSubscription }
+  | { kind: 'backfill'; sub: PaperSubscription }
   | null
 
 export default function PaperTradingPage() {
@@ -54,7 +58,10 @@ export default function PaperTradingPage() {
   const { marketHours } = useConsoleState()
   const marketOpen = marketHours?.is_open ?? false
 
-  // Poll quickly while the market is open (prices move), slowly when it is shut.
+  // Poll quickly while the market is open (prices move), slowly when it is shut. The three reads are
+  // independent: if only a figure cannot be read, the subscriptions are still shown, with the last
+  // figure and a line saying so.
+  const lastReading = useRef<DeskReading | null>(null)
   const {
     data: desk,
     error: loadError,
@@ -62,15 +69,17 @@ export default function PaperTradingPage() {
     refresh: load,
   } = usePolling(
     async () => {
-      const [subs, today, unrealized] = await Promise.all([
-        listPaperSubscriptions(),
-        getTodaysPaperPnl(),
-        getUnrealizedPaperPnl(),
-      ])
-      return { subs, today, unrealized }
+      const reading = settleDesk(
+        lastReading.current,
+        await Promise.allSettled([listPaperSubscriptions(), getTodaysPaperPnl(), getUnrealizedPaperPnl()]),
+        (reason) => messageOf(reason, 'no answer'),
+      )
+      lastReading.current = reading
+      return reading
     },
     { intervalMs: marketOpen ? POLL_OPEN_MS : POLL_SHUT_MS },
   )
+  const problems = desk?.problems ?? []
   const subs: PaperSubscription[] | null = desk?.subs ?? null
   const today: TodaysPaperPnl | null = desk?.today ?? null
   const unrealized: UnrealizedPaperPnl | null = desk?.unrealized ?? null
@@ -112,6 +121,7 @@ export default function PaperTradingPage() {
   const onAttentionAction = (item: AttentionItem) => {
     const sub = subs?.find((s) => s.id === item.subscriptionId)
     if (sub && item.action === 'close') setDialog({ kind: 'close', sub })
+    if (sub && isHistoryWait(item)) setDialog({ kind: 'backfill', sub })
   }
 
   // From an engine alert: open the subscription it is about and bring it into view.
@@ -148,6 +158,9 @@ export default function PaperTradingPage() {
         <EquityPanel mode="paper" />
 
         {error && <div className="ui-error" role="alert">{error}</div>}
+        {problems.map((problem) => (
+          <ErrorNotice key={problem} className="mb-3" message={problem} onRetry={() => void load()} />
+        ))}
         {notice && (
           <div className="pt-alert pt-alert-info" role="status" style={{ gridTemplateColumns: 'auto 1fr auto' }}>
             <span aria-hidden="true" />
@@ -205,6 +218,7 @@ export default function PaperTradingPage() {
               onClose={() => setDialog({ kind: 'close', sub })}
               onActivate={() => void switchOn(sub)}
               onEditSettings={() => setDialog({ kind: 'settings', sub })}
+              onBackfill={() => setDialog({ kind: 'backfill', sub })}
             />
           ))}
         </section>
@@ -221,6 +235,9 @@ export default function PaperTradingPage() {
       )}
       {dialog?.kind === 'deactivate' && (
         <DeactivateDialog sub={dialog.sub} onClose={() => setDialog(null)} onDone={() => afterChange(`${dialog.sub.symbol} is switched off.`)} />
+      )}
+      {dialog?.kind === 'backfill' && (
+        <BackfillDialog sub={dialog.sub} onClose={() => setDialog(null)} onDone={(message) => afterChange(message)} />
       )}
       {dialog?.kind === 'settings' && (
         <SettingsDialog

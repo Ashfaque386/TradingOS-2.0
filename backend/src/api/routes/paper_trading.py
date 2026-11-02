@@ -200,7 +200,21 @@ def _fill_response(fill: PaperFill) -> PaperFillResponse:
         costs_total=fill.costs_total,
         costs_breakdown=fill.costs_breakdown,
         data_source=fill.data_source,
+        administrative=fill.administrative,
         created_at=fill.created_at.isoformat(),
+    )
+
+
+def _signal_response(signal: DailySignal) -> DailySignalResponse:
+    return DailySignalResponse(
+        id=signal.id,
+        subscription_id=signal.subscription_id,
+        symbol=signal.symbol,
+        signal_type=signal.signal_type,
+        reference_price=signal.reference_price,
+        consumed=signal.consumed,
+        generated_at=signal.generated_at.isoformat(),
+        consumed_at=signal.consumed_at.isoformat() if signal.consumed_at else None,
     )
 
 
@@ -938,17 +952,7 @@ async def list_signals_endpoint(
         .where(DailySignal.subscription_id == subscription_id)
         .order_by(DailySignal.generated_at)
     )
-    return [
-        DailySignalResponse(
-            id=s.id,
-            subscription_id=s.subscription_id,
-            symbol=s.symbol,
-            signal_type=s.signal_type,
-            reference_price=s.reference_price,
-            consumed=s.consumed,
-        )
-        for s in result.scalars().all()
-    ]
+    return [_signal_response(s) for s in result.scalars().all()]
 
 
 @router.post("/daily-signal-run", status_code=status.HTTP_201_CREATED)
@@ -960,17 +964,7 @@ async def run_daily_signal_endpoint(
 ) -> list[DailySignalResponse]:
     as_of = pd.Timestamp(body.as_of) if body.as_of else pd.Timestamp.now().normalize()
     signals = await run_daily_signal_generation(db, price_provider=price_provider, as_of=as_of)
-    return [
-        DailySignalResponse(
-            id=s.id,
-            subscription_id=s.subscription_id,
-            symbol=s.symbol,
-            signal_type=s.signal_type,
-            reference_price=s.reference_price,
-            consumed=s.consumed,
-        )
-        for s in signals
-    ]
+    return [_signal_response(s) for s in signals]
 
 
 @router.post("/subscriptions/{subscription_id}/tick")

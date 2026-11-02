@@ -6,12 +6,17 @@
 import type {
   PaperCostBreakdown,
   PaperFill,
+  PaperHistoryBackfill,
   PaperInstrumentKind,
   PaperLastTick,
   PaperOptionStrategy,
   PaperPosition,
+  PaperSignal,
   PaperSubscription,
+  TodaysPaperPnl,
+  UnrealizedPaperPnl,
 } from './api'
+import { indiaStamp } from './time'
 
 // ---- Contracts ----
 
@@ -726,4 +731,142 @@ export function planSettingsChange(
     })
   }
   return { changes, errors }
+}
+
+// ---- Fetching a subscription's price history ----
+
+/** Whether an attention item is a subscription waiting for price history: the one the operator can
+ * answer by fetching it. (The item itself is shared with the server's alerts, so the kind is read from its id.) */
+export const isHistoryWait = (item: Pick<AttentionItem, 'id'>): boolean => item.id.endsWith(':history')
+
+/** What fetching the history did, in a sentence: how much, from which broker, over which dates, and
+ * what it replaced; or why it failed. */
+export function describeBackfill(result: PaperHistoryBackfill): string {
+  if (result.status === 'failed') {
+    return `Could not fetch the price history of ${result.symbol}: ${result.error?.trim() || 'the broker did not say why'}.`
+  }
+  if (result.rows === 0) return `The broker returned no price history for ${result.symbol}.`
+  const range = result.first_date && result.last_date ? ` (${result.first_date} to ${result.last_date})` : ''
+  const from = result.source ? ` from ${result.source}` : ''
+  const replaced =
+    result.unreal_rows_removed > 0
+      ? ` ${result.unreal_rows_removed.toLocaleString('en-IN')} generated ${result.unreal_rows_removed === 1 ? 'row was' : 'rows were'} replaced.`
+      : ''
+  return `Fetched ${result.rows.toLocaleString('en-IN')} daily ${result.rows === 1 ? 'price' : 'prices'} for ${result.symbol}${from}${range}.${replaced}`
+}
+
+// ---- Daily signals ----
+
+/** Signals newest first: the latest decision is the one the strategy is waiting to act on. */
+export function signalRows(signals: PaperSignal[]): PaperSignal[] {
+  return [...signals].sort((a, b) => (a.generated_at < b.generated_at ? 1 : a.generated_at > b.generated_at ? -1 : 0))
+}
+
+/** Whether a position was entered or exited on a signal, and when. */
+export function signalStatus(signal: Pick<PaperSignal, 'consumed' | 'consumed_at'>): string {
+  if (!signal.consumed) return 'Not acted on yet'
+  return signal.consumed_at ? `Acted on ${indiaStamp(signal.consumed_at)}` : 'Acted on'
+}
+
+// ---- The fills as a file ----
+
+/** One cell of a CSV: quoted when it holds a comma, a quote or a line break, and a text that a
+ * spreadsheet would read as a formula is made plain text. */
+export function csvCell(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value !== 'string') return String(value)
+  const text = /^[=+@\t\r]/.test(value) ? `'${value}` : value
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+const COST_COLUMNS = ['brokerage', 'stt', 'exchange_txn_charges', 'sebi_fee', 'stamp_duty', 'gst'] as const
+
+/** Every fill, oldest first, one row each: what was bought or sold and at what price, what it rested
+ * on, the price result before costs, and each line of what it cost. */
+export function fillsCsv(fills: PaperFill[]): string {
+  const header = [
+    'created_at_utc',
+    'time_india',
+    'symbol',
+    'side',
+    'requested_quantity',
+    'filled_quantity',
+    'avg_fill_price',
+    'fully_filled',
+    'data_source',
+    'gross_realized_pnl',
+    'costs_total',
+    ...COST_COLUMNS,
+    'manual_close',
+    'order_group_id',
+    'leg_index',
+  ]
+  const rows = [...fills]
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.leg_index - b.leg_index))
+    .map((fill) => [
+      fill.created_at,
+      indiaStamp(fill.created_at),
+      fill.symbol,
+      fill.side,
+      fill.requested_quantity,
+      fill.filled_quantity,
+      fill.avg_fill_price,
+      fill.fully_filled,
+      fill.data_source,
+      fill.realized_pnl,
+      fill.costs_total,
+      ...COST_COLUMNS.map((column) => fill.costs_breakdown?.[column] ?? 0),
+      fill.administrative,
+      fill.order_group_id,
+      fill.leg_index,
+    ])
+  return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n'
+}
+
+/** The file's name: what it holds and when it was made, in India's date. */
+export function fillsFilename(symbol: string, now: Date): string {
+  const day = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+  return `paper-fills-${symbol.replace(/[^A-Za-z0-9_-]+/g, '_')}-${day}.csv`
+}
+
+export const ORDERS_PER_STEP = 8
+
+/** How many orders to show of `total`, having shown `shown`: the list opens on the newest few and grows by a step. */
+export function ordersWindow(total: number, shown: number) {
+  const visible = Math.min(total, Math.max(ORDERS_PER_STEP, shown))
+  return { visible, remaining: total - visible, next: Math.min(total, visible + ORDERS_PER_STEP) }
+}
+
+// ---- Reading the desk when part of it cannot be read ----
+
+export type DeskReading = {
+  subs: PaperSubscription[]
+  today: TodaysPaperPnl | null
+  unrealized: UnrealizedPaperPnl | null
+  /** What could not be read this time, in words; the figures concerned are the last ones read. */
+  problems: string[]
+}
+
+/**
+ * The desk is three reads. The subscriptions are the page itself, so if they cannot be read the whole
+ * reading fails (and the page keeps the last one). Today's result and the open P&L are figures: if one
+ * fails the other parts are still shown, the failed figure keeps its last value, and the problem is
+ * said instead of the page going blank.
+ */
+export function settleDesk(
+  previous: DeskReading | null,
+  results: [PromiseSettledResult<PaperSubscription[]>, PromiseSettledResult<TodaysPaperPnl>, PromiseSettledResult<UnrealizedPaperPnl>],
+  describe: (reason: unknown) => string,
+): DeskReading {
+  const [subs, today, unrealized] = results
+  if (subs.status === 'rejected') throw subs.reason
+  const problems: string[] = []
+  if (today.status === 'rejected') problems.push(`Today’s result could not be read (${describe(today.reason)}); the figure shown is the last one read.`)
+  if (unrealized.status === 'rejected') problems.push(`Open profit and loss could not be read (${describe(unrealized.reason)}); the figure shown is the last one read.`)
+  return {
+    subs: subs.value,
+    today: today.status === 'fulfilled' ? today.value : (previous?.today ?? null),
+    unrealized: unrealized.status === 'fulfilled' ? unrealized.value : (previous?.unrealized ?? null),
+    problems,
+  }
 }

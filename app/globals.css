@@ -784,6 +784,7 @@
   .pt-cost-line { display: grid; grid-template-columns: 7.5rem 1fr auto; align-items: center; gap: .6rem; font-size: .64rem; color: #94a3b8; }
   .pt-cost-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.05); }
   .pt-cost-bar i { display: block; height: 100%; border-radius: 3px; background: #f59e0b; }
+  .pt-orders-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .5rem; }
   .pt-orders { display: grid; gap: .5rem; }
   .pt-order { border: 1px solid rgba(255,255,255,.07); border-radius: .5rem; padding: .55rem .75rem; }
   .pt-order header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .3rem 1rem; color: #64748b; font: .55rem 'JetBrains Mono', monospace; }

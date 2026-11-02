@@ -85,14 +85,6 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/backtests"): "Phase 9: create a backtest from the lake",
     ("POST", "/api/v1/backtests/optimize"): "Phase 9: optimise from the Backtests page",
     ("POST", "/api/v1/backtests/{}/walk-forward"): "Phase 9: walk-forward from the Backtests page",
-    (
-        "GET",
-        "/api/v1/paper-trading/subscriptions/{}/signals",
-    ): "Phase 9: daily signals tab on the Paper Desk",
-    (
-        "POST",
-        "/api/v1/paper-trading/subscriptions/{}/backfill-history",
-    ): "Phase 9: backfill action on the Paper Desk",
 }
 
 

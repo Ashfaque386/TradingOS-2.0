@@ -1,7 +1,7 @@
 'use client'
 
 import { AlertOctagon, AlertTriangle, Info } from 'lucide-react'
-import type { AttentionItem } from '@/lib/paper-trading'
+import { type AttentionItem, isHistoryWait } from '@/lib/paper-trading'
 
 const ICON = { critical: AlertOctagon, warning: AlertTriangle, info: Info } as const
 
@@ -29,6 +29,9 @@ export function Attention({
             </div>
             {canAct && item.action === 'close' && (
               <button type="button" className="button-danger" onClick={() => onAction(item)}>Close position</button>
+            )}
+            {canAct && isHistoryWait(item) && (
+              <button type="button" className="button-secondary" onClick={() => onAction(item)}>Fetch price history</button>
             )}
           </div>
         )

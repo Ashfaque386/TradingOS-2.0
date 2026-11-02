@@ -1,28 +1,39 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Download } from 'lucide-react'
+import { ErrorNotice } from '@/components/ui/error-notice'
 import {
   type PaperFill,
   type PaperPosition,
   type PaperSubscription,
   listPaperFills,
   listPaperPositions,
+  listPaperSignals,
 } from '@/lib/api'
+import { downloadText } from '@/lib/download'
+import { indiaStamp } from '@/lib/time'
+import { useQuery } from '@/lib/use-query'
 import {
   KIND_SHORT,
   OPTION_STRATEGY_LABEL,
+  ORDERS_PER_STEP,
   costLines,
   describeContract,
   earliestLegExpiry,
   expiryCountdown,
+  fillsCsv,
+  fillsFilename,
   formatAge,
   formatInr,
   groupFills,
   legsUnrealized,
   openLegs,
+  ordersWindow,
   payoffAt,
   payoffSummary,
+  signalRows,
+  signalStatus,
   subscriptionName,
   tone,
   underlyingSpot,
@@ -30,7 +41,7 @@ import {
 import { PayoffChart } from './payoff-chart'
 import { PriceFreshness } from './price-freshness'
 
-type Tab = 'legs' | 'payoff' | 'costs' | 'settings'
+type Tab = 'legs' | 'payoff' | 'signals' | 'costs' | 'settings'
 
 const STATE_CHIP: Record<PaperSubscription['state'], { label: string; className: string }> = {
   active: { label: 'Trading', className: 'pt-chip-ok' },
@@ -50,6 +61,7 @@ export function Lane({
   onClose,
   onActivate,
   onEditSettings,
+  onBackfill,
 }: {
   sub: PaperSubscription
   expanded: boolean
@@ -61,6 +73,7 @@ export function Lane({
   onClose: () => void
   onActivate: () => void
   onEditSettings: () => void
+  onBackfill: () => void
 }) {
   const [tab, setTab] = useState<Tab>('legs')
   const [positions, setPositions] = useState<PaperPosition[] | null>(null)
@@ -92,6 +105,7 @@ export function Lane({
   const tabs: { id: Tab; label: string }[] = [
     { id: 'legs', label: sub.open_legs > 1 ? 'Legs' : 'Position' },
     ...(isOption ? [{ id: 'payoff' as const, label: 'Payoff' }] : []),
+    { id: 'signals', label: 'Signals' },
     { id: 'costs', label: 'Costs and fills' },
     { id: 'settings', label: 'Settings' },
   ]
@@ -152,11 +166,15 @@ export function Lane({
           {loadError && <div className="ui-error" role="alert">{loadError}</div>}
           {tab === 'legs' && <LegsTab sub={sub} positions={positions} now={now} />}
           {tab === 'payoff' && <PayoffTab positions={positions} sub={sub} />}
+          {tab === 'signals' && <SignalsTab sub={sub} refreshKey={refreshKey} />}
           {tab === 'costs' && <CostsTab sub={sub} fills={fills} now={now} />}
           {tab === 'settings' && <SettingsTab sub={sub} countdown={countdown} canManage={canManage} onEdit={onEditSettings} />}
           {canManage && (
             <div className="pt-actions">
               {sub.open_legs > 0 && <button type="button" className="button-danger" onClick={onClose}>Close position</button>}
+              {sub.is_active && sub.state === 'awaiting_history' && (
+                <button type="button" className="button-secondary" onClick={onBackfill}>Fetch price history</button>
+              )}
               {sub.is_active ? (
                 <button type="button" className="button-secondary" onClick={onDeactivate}>Switch off</button>
               ) : (
@@ -247,11 +265,48 @@ function PayoffTab({ positions, sub }: { positions: PaperPosition[] | null; sub:
   )
 }
 
+/** What a subscription's daily signals decided, newest first, and whether a position was taken on each. */
+function SignalsTab({ sub, refreshKey }: { sub: PaperSubscription; refreshKey: number }) {
+  const { data, error, refresh } = useQuery(`signals:${sub.id}:${refreshKey}`, () => listPaperSignals(sub.id))
+  if (error && !data) return <ErrorNotice message={`Could not load the signals: ${error}`} onRetry={() => void refresh()} />
+  if (!data) return <p className="pt-muted">Loading…</p>
+  const rows = signalRows(data)
+  if (rows.length === 0) {
+    return <p className="pt-muted" style={{ fontSize: '.72rem' }}>The daily signal run has not written a signal for this subscription yet.</p>
+  }
+  return (
+    <>
+      <div className="table-scroll">
+        <table className="pt-table" aria-label="Daily signals">
+          <thead>
+            <tr><th>Detected (India)</th><th>Signal</th><th className="pt-r">Reference price</th><th>Position</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((signal) => (
+              <tr key={signal.id}>
+                <td className="pt-num">{indiaStamp(signal.generated_at)}</td>
+                <td><span className={`pt-chip ${signal.signal_type === 'BUY' ? 'pt-chip-ok' : 'pt-chip-warn'}`}>{signal.signal_type === 'BUY' ? 'Buy' : 'Sell'}</span></td>
+                <td className="pt-r pt-num">{formatInr(signal.reference_price, { decimals: 2 })}</td>
+                <td>{signalStatus(signal)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="pt-muted" style={{ marginTop: '.5rem', fontSize: '.6rem' }}>
+        The reference price is the daily bar’s close. The risk gate judges the price of each order against it.
+      </p>
+    </>
+  )
+}
+
 function CostsTab({ sub, fills, now }: { sub: PaperSubscription; fills: PaperFill[] | null; now: Date }) {
+  const [shown, setShown] = useState(ORDERS_PER_STEP)
   const lines = useMemo(() => costLines(fills ?? []), [fills])
   const orders = useMemo(() => groupFills(fills ?? []), [fills])
   if (fills === null) return <p className="pt-muted">Loading…</p>
   const largest = lines[0]?.amount ?? 0
+  const window = ordersWindow(orders.length, shown)
   return (
     <div className="pt-costs">
       <div>
@@ -271,16 +326,31 @@ function CostsTab({ sub, fills, now }: { sub: PaperSubscription; fills: PaperFil
         )}
       </div>
       <div>
-        <div className="pt-term-label" style={{ marginBottom: '.5rem' }}>ORDERS</div>
+        <div className="pt-orders-head">
+          <div className="pt-term-label">ORDERS · {orders.length}</div>
+          {orders.length > 0 && (
+            <button type="button" className="button-secondary" onClick={() => downloadText(fillsFilename(sub.symbol, new Date()), fillsCsv(fills))}>
+              <Download className="size-3" aria-hidden="true" />Export all fills (CSV)
+            </button>
+          )}
+        </div>
         {orders.length === 0 ? (
           <p className="pt-muted" style={{ fontSize: '.68rem' }}>No orders yet.</p>
         ) : (
           <div className="pt-orders">
-            {orders.slice(0, 8).map((order) => (
+            {orders.slice(0, window.visible).map((order) => (
               <div className="pt-order" key={order.orderGroupId}>
                 <header>
-                  <span>{new Date(order.createdAt).toLocaleString()}</span>
-                  <span>costs {formatInr(order.costsTotal, { decimals: 2 })}</span>
+                  <span>
+                    {indiaStamp(order.createdAt)}
+                    {order.fills.some((fill) => fill.administrative) && (
+                      <span className="pt-chip pt-chip-info" style={{ marginLeft: '.5rem' }} title="Closed by hand without the risk gate: not a trade the strategy made">manual close</span>
+                    )}
+                  </span>
+                  <span>
+                    <span className={`pt-${tone(order.realizedPnl)}`} title="The price result before costs">{formatInr(order.realizedPnl, { signed: true, decimals: 2 })}</span>
+                    {' '}before costs · costs {formatInr(order.costsTotal, { decimals: 2 })}
+                  </span>
                 </header>
                 <ul>
                   {order.fills.map((fill) => (
@@ -298,6 +368,14 @@ function CostsTab({ sub, fills, now }: { sub: PaperSubscription; fills: PaperFil
                 </ul>
               </div>
             ))}
+            {window.remaining > 0 && (
+              <div className="pt-actions">
+                <button type="button" className="button-secondary" onClick={() => setShown(window.next)}>
+                  Show {Math.min(ORDERS_PER_STEP, window.remaining)} more ({window.remaining} older)
+                </button>
+                <button type="button" className="button-secondary" onClick={() => setShown(orders.length)}>Show all {orders.length}</button>
+              </div>
+            )}
           </div>
         )}
       </div>
