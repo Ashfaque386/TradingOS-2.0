@@ -61,7 +61,11 @@ test('the log is paged on the server: every page, in order, to the very last ent
   await expect(page.locator('.audit-table tbody tr:not(.audit-diff-row)')).toHaveCount(25)
   const firstOnPageOne = await page.locator('.audit-table tbody tr td:last-child').first().innerText()
 
+  // Wait for the second page's own request, so a slow runner shows as "the request never came back"
+  // rather than as a missing line of text.
+  const secondPage = page.waitForResponse((r) => r.url().includes('/audit/entries') && r.url().includes('offset=25'), { timeout: 30_000 })
   await page.getByRole('button', { name: 'Next', exact: true }).click()
+  expect((await secondPage).status()).toBe(200)
   await expect(page.getByText(/^Showing 26–50 of [\d,]+$/)).toBeVisible()
   const firstOnPageTwo = await page.locator('.audit-table tbody tr td:last-child').first().innerText()
   // Newest first, so the second page starts with an older entry than the first page did.

@@ -24,7 +24,6 @@ import {
   type BrokerCircuitBreakerStatus,
   type BrokerCredentialStatus,
   type DatalakeStatus,
-  type Instrument,
   type LiveOptionChain,
   type LlmProviderStatus,
   type MarketDataProvenanceEntry,

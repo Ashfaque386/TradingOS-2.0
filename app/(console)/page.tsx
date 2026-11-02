@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Float, OrbitControls, Sparkles } from '@react-three/drei'
 import { useCallback, useMemo, useState } from 'react'
 import type { Mesh } from 'three'
-import { Activity, AlertTriangle, Bot, CheckCircle2, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, Bot, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi, Zap } from 'lucide-react'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
 import {
