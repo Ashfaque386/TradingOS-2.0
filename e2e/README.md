@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `orders-logic.spec.ts` -- what the Orders & Trades page decides: a tone for every status, what a price rests on, the
+  request for each filter and page, positions and profit formatting. No browser or backend.
+- `orders.spec.ts` -- the Orders & Trades page against a real backend: the ledger paged to the last row, server-side
+  filters, a price's source, audit-trail links by role, a strategy's live orders and trades, the intents. It seeds a
+  strategy with `scripts/seed_e2e_orders.py` (new names each run).
 - `audit-logic.spec.ts` -- what the Audit page decides: India time to UTC, the request and the address for each filter,
   page windows, the wording of a verification, an actor's action shares. No browser or backend.
 - `audit.spec.ts` -- the Audit Log against a real backend: paging to the last entry, server-side filters, a link that

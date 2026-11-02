@@ -6,6 +6,9 @@
  */
 import type { AuditActorSummary, AuditChainVerifyResult, AuditQuery } from './api'
 
+export { pageWindow } from './paging'
+export { indiaStamp } from './time'
+
 export type AuditFilterState = {
   search: string
   actor: string
@@ -88,31 +91,6 @@ export function filterToUrl(filter: AuditFilterState): string {
   }
   const text = params.toString()
   return text ? `?${text}` : ''
-}
-
-/** Which rows a page shows, and how many pages there are; a page past the end is clamped to the last. */
-export function pageWindow(total: number, page: number, size: number) {
-  const pages = Math.max(1, Math.ceil(total / size))
-  const current = Math.min(Math.max(1, page), pages)
-  const offset = (current - 1) * size
-  return { pages, current, offset, from: total === 0 ? 0 : offset + 1, to: Math.min(total, offset + size) }
-}
-
-/** `02 Nov 2026, 14:05:09` in India time; a dash for anything that is not a time. */
-export function indiaStamp(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return '—'
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date)
 }
 
 /** `3f9a1c2e…b7d4e1`: enough to tell two hashes apart in a list; the whole value is in the entry's details. */

@@ -110,6 +110,7 @@ this is where it stands.
 | Gap | What changed |
 |---|---|
 | W12 (Audit), and the two Audit routes with no screen | The log is paged and filtered by the server (actor, entity type, action, entity id, text, an India-time range) with the match count in `X-Total-Count`, so every entry can be reached, not the newest 200; an entity id opens its whole trace and an actor opens a summary; both hashes are shown whole; a verification lists its three checks; exports follow the filters. |
+| W7 (Orders), and the three live-trading routes with no screen | The ledger is one server-side query, filtered by mode, status, strategy and symbol, paged to the last row with the match count in `X-Total-Count`; each price says whether it is real or simulated; a new Live by strategy tab shows a strategy's positions and its live orders with the broker's id or the reason one failed, and each order's trades; the header counts come from the server; positions say "before costs" and a position nothing is watching says so. |
 
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.

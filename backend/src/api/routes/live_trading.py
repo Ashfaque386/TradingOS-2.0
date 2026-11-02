@@ -17,10 +17,11 @@ enrolled.
 import uuid
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.paging import set_total_count
 from src.api.schemas import (
     EnrollLiveTradingRequest,
     GenerateLiveOrderIntentRequest,
@@ -266,11 +267,23 @@ async def get_position_endpoint(
 @router.get("/strategies/{strategy_id}/orders")
 async def list_orders_endpoint(
     strategy_id: uuid.UUID,
+    response: Response,
+    limit: int = Query(default=100, gt=0, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> list[OrderResponse]:
+    """One strategy's live orders, newest first; `X-Total-Count` is how many it has in all."""
+    total = (
+        await db.execute(select(func.count(Order.id)).where(Order.strategy_id == strategy_id))
+    ).scalar_one()
+    set_total_count(response, total)
     result = await db.execute(
-        select(Order).where(Order.strategy_id == strategy_id).order_by(Order.submitted_at)
+        select(Order)
+        .where(Order.strategy_id == strategy_id)
+        .order_by(Order.submitted_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
     orders = result.scalars().all()
     return [
@@ -319,17 +332,31 @@ async def list_trades_endpoint(
 
 @router.get("/intents")
 async def list_intents_endpoint(
+    response: Response,
     strategy_id: uuid.UUID | None = None,
     status_filter: str | None = None,
+    limit: int = Query(default=100, gt=0, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> list[LiveOrderIntentResponse]:
-    query = select(LiveOrderIntent).order_by(LiveOrderIntent.generated_at.desc())
+    """One page of intents, newest first; `X-Total-Count` is how many the filters match in all."""
+    conditions = []
     if strategy_id is not None:
-        query = query.where(LiveOrderIntent.strategy_id == strategy_id)
+        conditions.append(LiveOrderIntent.strategy_id == strategy_id)
     if status_filter is not None:
-        query = query.where(LiveOrderIntent.status == status_filter)
-    result = await db.execute(query)
+        conditions.append(LiveOrderIntent.status == status_filter)
+    total = (
+        await db.execute(select(func.count(LiveOrderIntent.id)).where(*conditions))
+    ).scalar_one()
+    set_total_count(response, total)
+    result = await db.execute(
+        select(LiveOrderIntent)
+        .where(*conditions)
+        .order_by(LiveOrderIntent.generated_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     return [_intent_response(i) for i in result.scalars().all()]
 
 

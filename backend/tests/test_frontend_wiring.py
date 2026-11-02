@@ -76,19 +76,11 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
         "/api/v1/paper-trading/subscriptions/{}",
     ): "the subscriptions list carries the same row",
     ("GET", "/api/v1/paper-trading/subscriptions/{}/position"): "the positions endpoint covers it",
-    # ---- no screen yet: the phase of the gap analysis that adds it ----
-    (
-        "GET",
-        "/api/v1/live-trading/orders/{}/trades",
-    ): "Phase 9: live orders and trades per strategy",
-    (
-        "GET",
-        "/api/v1/live-trading/strategies/{}/orders",
-    ): "Phase 9: live orders and trades per strategy",
     (
         "GET",
         "/api/v1/live-trading/strategies/{}/position",
-    ): "Phase 9: live orders and trades per strategy",
+    ): "one position only; `GET /orders/positions` lists every symbol, live and paper",
+    # ---- no screen yet: the phase of the gap analysis that adds it ----
     ("GET", "/api/v1/market-data/holidays"): "Phase 9: holiday calendar on Market Analysis",
     ("POST", "/api/v1/backtests"): "Phase 9: create a backtest from the lake",
     ("POST", "/api/v1/backtests/optimize"): "Phase 9: optimise from the Backtests page",

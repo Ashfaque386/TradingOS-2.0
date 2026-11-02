@@ -168,7 +168,7 @@ test('the order form is a dry-run pre-trade check: it needs real numbers and sen
   await expect(page.getByRole('heading', { name: 'Pre-trade check' })).toBeVisible()
   await expect(run).toBeDisabled() // nothing is pre-filled with a made-up price or portfolio value
 
-  await page.getByLabel('SYMBOL').fill('E2ECHECK')
+  await page.getByLabel('SYMBOL', { exact: true }).fill('E2ECHECK')
   await page.getByLabel('QUANTITY').fill('10')
   await page.getByLabel('PROPOSED PRICE').fill('100')
   await page.getByLabel('REFERENCE PRICE').fill('100')

@@ -178,7 +178,7 @@ export function CommandPalette() {
       const [agentsRes, strategiesRes, ordersRes] = await Promise.allSettled([
         getAgents(),
         listStrategies(),
-        listOrders('both'),
+        listOrders({ limit: 50 }),
       ])
       if (cancelled) return
       const next: SearchEntity[] = []
@@ -194,7 +194,7 @@ export function CommandPalette() {
       }
       if (ordersRes.status === 'fulfilled') {
         const seen = new Set<string>()
-        for (const order of ordersRes.value.slice(0, 30)) {
+        for (const order of ordersRes.value.items.slice(0, 30)) {
           if (seen.has(order.symbol)) continue
           seen.add(order.symbol)
           next.push({ kind: 'order', name: order.symbol, detail: `${order.mode} · ${order.status}`, href: '/orders' })

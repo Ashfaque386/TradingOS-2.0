@@ -819,10 +819,51 @@ export type LiveOrderIntentDto = {
   batch_authorization_id: string | null
 }
 
-export const listLiveIntents = (statusFilter?: string) =>
-  apiGet<LiveOrderIntentDto[]>(
-    `/api/v1/live-trading/intents${statusFilter ? `?status_filter=${statusFilter}` : ''}`,
+export const listLiveIntents = (query: { statusFilter?: string; strategyId?: string; limit?: number; offset?: number } = {}) => {
+  const params = new URLSearchParams()
+  if (query.statusFilter) params.set('status_filter', query.statusFilter)
+  if (query.strategyId) params.set('strategy_id', query.strategyId)
+  params.set('limit', String(query.limit ?? 100))
+  params.set('offset', String(query.offset ?? 0))
+  return apiGetPage<LiveOrderIntentDto>(`/api/v1/live-trading/intents?${params.toString()}`)
+}
+
+/** One order a strategy sent to a broker: the broker's id for it, or why it failed. */
+export type LiveOrderDto = {
+  id: string
+  live_order_intent_id: string
+  strategy_id: string
+  symbol: string
+  side: string
+  quantity: number
+  broker_name: string
+  broker_order_id: string | null
+  status: string
+  failure_reason: string | null
+  submitted_at: string
+}
+
+/** A strategy's live orders, newest first. */
+export const listStrategyLiveOrders = (strategyId: string, query: { limit?: number; offset?: number } = {}) =>
+  apiGetPage<LiveOrderDto>(
+    `/api/v1/live-trading/strategies/${strategyId}/orders?limit=${query.limit ?? 25}&offset=${query.offset ?? 0}`,
   )
+
+/** One fill or attempt on a live order; `price` is the quote it was placed at, not a confirmed fill. */
+export type LiveTradeDto = {
+  id: string
+  order_id: string
+  symbol: string
+  side: string
+  quantity: number
+  price: number
+  status: string
+  data_source: string
+  executed_at: string
+}
+
+export const listLiveOrderTrades = (orderId: string) =>
+  apiGet<LiveTradeDto[]>(`/api/v1/live-trading/orders/${orderId}/trades`)
 
 export type LiveTradingSubscriptionDto = {
   id: string
@@ -1461,10 +1502,36 @@ export type UnifiedExecution = {
   price: number | null
   status: string
   strategy_id: string | null
+  strategy_name: string | null
+  /** What the price rests on: real, synthetic, mixed, supplied or unknown. */
+  data_source: string
+  /** A live trade's order; a paper fill has none. */
+  order_id: string | null
+  /** What a paper fill cost; a live trade's costs are not recorded. */
+  costs: number | null
+  /** A paper close done by hand without the risk gate. */
+  administrative: boolean
 }
 
-export const listOrders = (mode: 'paper' | 'live' | 'both' = 'both') =>
-  apiGet<UnifiedExecution[]>(`/api/v1/orders?mode=${mode}`)
+/** What narrows the execution ledger; each field is optional and they combine. */
+export type OrdersQuery = {
+  mode?: 'paper' | 'live' | 'both'
+  status?: string
+  symbol?: string
+  strategyId?: string
+  limit?: number
+  offset?: number
+}
+
+export const listOrders = (query: OrdersQuery = {}) => {
+  const params = new URLSearchParams({ mode: query.mode ?? 'both' })
+  if (query.status) params.set('status', query.status)
+  if (query.symbol) params.set('symbol', query.symbol)
+  if (query.strategyId) params.set('strategy_id', query.strategyId)
+  params.set('limit', String(query.limit ?? 100))
+  params.set('offset', String(query.offset ?? 0))
+  return apiGetPage<UnifiedExecution>(`/api/v1/orders?${params.toString()}`)
+}
 
 export type PositionByStrategy = {
   mode: 'paper' | 'live'
