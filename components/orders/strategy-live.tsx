@@ -4,7 +4,7 @@ import { Fragment, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Pager } from '@/components/ui/pager'
 import { ErrorNotice } from '@/components/ui/error-notice'
-import { type LiveOrderDto, type PositionByStrategy, type Strategy, listLiveOrderTrades, listStrategyLiveOrders } from '@/lib/api'
+import { type LiveOrderDto, type PositionByStrategy, type StrategySummary, listLiveOrderTrades, listStrategyLiveOrders } from '@/lib/api'
 import { PNL_CAPTION, failureLine, formatPnl, formatRupees, positionNote, sourceNote, statusLabel, statusTone } from '@/lib/orders'
 import { indiaStamp } from '@/lib/time'
 import { useQuery } from '@/lib/use-query'
@@ -58,7 +58,7 @@ function OrderTrades({ order }: { order: LiveOrderDto }) {
 }
 
 /** What one strategy holds and what it has sent to a broker, with the broker's own order id or the reason it failed. */
-export function StrategyLive({ strategies, positions }: { strategies: Strategy[]; positions: PositionByStrategy[] }) {
+export function StrategyLive({ strategies, positions }: { strategies: StrategySummary[]; positions: PositionByStrategy[] }) {
   const [strategyId, setStrategyId] = useState('')
   const [page, setPage] = useState(1)
   const [open, setOpen] = useState<string | null>(null)

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Check, Clock3, Timer, X } from 'lucide-react'
 import { Pager } from '@/components/ui/pager'
 import { ErrorNotice } from '@/components/ui/error-notice'
-import { type Strategy, listLiveIntents } from '@/lib/api'
+import { type StrategySummary, listLiveIntents } from '@/lib/api'
 import { INTENT_STATUSES, statusLabel, statusTone } from '@/lib/orders'
 import { indiaStamp } from '@/lib/time'
 import { useQuery } from '@/lib/use-query'
@@ -14,7 +14,7 @@ const SIZE = 25
 const LIVE_REFRESH_MS = 10_000
 
 /** What the safety layer did with every order a live strategy tried to place: let it through or blocked it, and why not. */
-export function IntentsPanel({ strategies }: { strategies: Strategy[] }) {
+export function IntentsPanel({ strategies }: { strategies: StrategySummary[] }) {
   const [status, setStatus] = useState('')
   const [strategyId, setStrategyId] = useState('')
   const [page, setPage] = useState(1)

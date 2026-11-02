@@ -12,7 +12,7 @@ import { WalkForwardDialog } from '@/components/backtests/walk-forward-dialog'
 import {
   type BacktestRun,
   type ComparisonResult,
-  type Strategy,
+  type StrategySummary,
   ApiError,
   compareBacktests,
   listBacktests,
@@ -69,7 +69,7 @@ export default function BacktestsPage() {
     { intervalMs: 15_000 },
   )
   const runs: BacktestRun[] = useMemo(() => loaded?.runs ?? [], [loaded])
-  const strategies: Strategy[] = useMemo(() => loaded?.strategies ?? [], [loaded])
+  const strategies: StrategySummary[] = useMemo(() => loaded?.strategies ?? [], [loaded])
 
   // A strategy has many versions and a run belongs to one of them: filter by all of the strategy's versions.
   const filteredRuns = useMemo(() => {

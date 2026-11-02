@@ -5,16 +5,22 @@ capabilities, pause/resume/retry/rerun it).
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from src.api.paging import set_total_count
 from src.api.schemas import CreateRunRequest, RunResponse, TaskSummaryResponse
 from src.core.db import get_db, get_session_factory
 from src.core.rbac import Role, register_policy, require_role
 from src.core.redis_client import get_redis
-from src.models.organization_run import OrganizationRun, RunSource
+from src.models.organization_run import (
+    TERMINAL_STATUSES,
+    OrganizationRun,
+    RunSource,
+    RunStatus,
+)
 from src.models.task import Task
 from src.models.user import User
 from src.orchestration import run_control
@@ -44,8 +50,10 @@ async def _load_run_response(db: AsyncSession, run_id: uuid.UUID) -> RunResponse
     tasks_result = await db.execute(
         select(Task).where(Task.run_id == run_id).order_by(Task.created_at)
     )
-    tasks = list(tasks_result.scalars())
+    return _run_response(run, list(tasks_result.scalars()))
 
+
+def _run_response(run: OrganizationRun, tasks: list[Task]) -> RunResponse:
     return RunResponse(
         id=run.id,
         objective=run.objective,
@@ -93,15 +101,50 @@ async def create_run_endpoint(
 
 @router.get("/runs")
 async def list_runs_endpoint(
+    response: Response,
+    limit: int = Query(default=50, gt=0, le=200),
+    offset: int = Query(default=0, ge=0),
+    status_filter: RunStatus | None = None,
+    active: bool = False,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> list[RunResponse]:
-    run_ids = (
-        (await db.execute(select(OrganizationRun.id).order_by(OrganizationRun.created_at.desc())))
-        .scalars()
-        .all()
+    """One page of runs, newest first, each with its tasks; `X-Total-Count` is how many runs the
+    filters match in all. `active` keeps only the runs not yet finished (pending, planning, running
+    or paused), however old: what a board of open work and a count of live runs need, and what a
+    page of the newest runs would lose behind newer finished ones.
+
+    The tasks of the whole page are read in one query: the list used to read each run and then its
+    tasks, two queries per run, for every run there had ever been."""
+    conditions = []
+    if status_filter is not None:
+        conditions.append(OrganizationRun.status == status_filter)
+    if active:
+        conditions.append(OrganizationRun.status.notin_(TERMINAL_STATUSES))
+    total = (
+        await db.execute(select(func.count(OrganizationRun.id)).where(*conditions))
+    ).scalar_one()
+    set_total_count(response, total)
+    runs = list(
+        (
+            await db.execute(
+                select(OrganizationRun)
+                .where(*conditions)
+                .order_by(OrganizationRun.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars()
     )
-    return [await _load_run_response(db, run_id) for run_id in run_ids]
+    tasks_by_run: dict[uuid.UUID, list[Task]] = {run.id: [] for run in runs}
+    if runs:
+        for task in (
+            await db.execute(
+                select(Task).where(Task.run_id.in_(tasks_by_run)).order_by(Task.created_at)
+            )
+        ).scalars():
+            tasks_by_run[task.run_id].append(task)
+    return [_run_response(run, tasks_by_run[run.id]) for run in runs]
 
 
 @router.get("/runs/{run_id}")

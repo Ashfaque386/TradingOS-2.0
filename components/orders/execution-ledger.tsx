@@ -6,7 +6,7 @@ import { ArrowDown, ArrowUp, Search } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { Pager } from '@/components/ui/pager'
 import { ErrorNotice } from '@/components/ui/error-notice'
-import { type Strategy, listOrders } from '@/lib/api'
+import { type StrategySummary, listOrders } from '@/lib/api'
 import {
   EXECUTION_STATUSES,
   NO_ORDERS_FILTER,
@@ -27,7 +27,7 @@ const PAGE_SIZES = [25, 50, 100]
 const LIVE_REFRESH_MS = 10_000
 
 /** Every paper fill and live trade, newest first, paged and filtered by the server. */
-export function ExecutionLedger({ strategies }: { strategies: Strategy[] }) {
+export function ExecutionLedger({ strategies }: { strategies: StrategySummary[] }) {
   const { role } = useAuth()
   const canReadAudit = can(role, 'GET /api/v1/audit/entries')
   const [filter, setFilter] = useState<OrdersFilter>(NO_ORDERS_FILTER)

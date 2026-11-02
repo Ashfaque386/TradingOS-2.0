@@ -59,6 +59,9 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `paged-lists.spec.ts` -- the runs on Mission Control, the strategies and the instrument master read a page at a time with the
+  total (120 runs, 130 equities and 120 option contracts written by `scripts/seed_e2e_runs.py` and `seed_e2e_instruments.py`;
+  the runs are dated in the past and removed again, so they never push another spec's runs off Mission Control's first page).
 - `chat-settings-logic.spec.ts` -- a chat title's rule, the provider choices and their marks, the export file name, the Settings
   address. No browser or backend.
 - `settings-sections.spec.ts` -- the Settings section in the address, and removing a broker's credentials or an LLM key asking

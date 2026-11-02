@@ -301,6 +301,12 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/market-data/option-underlyings": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/market-data/provenance": [
     "PortfolioManager",
     "ReadOnlyAuditor",

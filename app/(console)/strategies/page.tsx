@@ -4,7 +4,7 @@ import { FormEvent, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronRight, RefreshCw, TrendingUp } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
-import { type Strategy, ApiError, createStrategy, listStrategies } from '@/lib/api'
+import { type StrategySummary, ApiError, createStrategy, listStrategiesPage } from '@/lib/api'
 import { Badge, type Stage, stageOf, stages } from '@/components/strategies/shared'
 import { LiveSubscriptions } from '@/components/strategies/live-subscriptions'
 import { ErrorNotice } from '@/components/ui/error-notice'
@@ -21,11 +21,13 @@ export default function StrategiesPage() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
-  const { data: loadedStrategies, error: loadError, refresh: reload } = usePolling(listStrategies, { intervalMs: 15_000 })
-  const strategies: Strategy[] = useMemo(() => loadedStrategies ?? [], [loadedStrategies])
+  // The newest 500, the most the server gives at once; the board says so when there are more.
+  const { data: loadedStrategies, error: loadError, refresh: reload } = usePolling(() => listStrategiesPage({ limit: 500 }), { intervalMs: 15_000 })
+  const strategies: StrategySummary[] = useMemo(() => loadedStrategies?.items ?? [], [loadedStrategies])
+  const totalStrategies = loadedStrategies?.total ?? 0
 
   const grouped = useMemo(
-    () => Object.fromEntries(stages.map((stage) => [stage, strategies.filter((s) => stageOf(s) === stage)])) as Record<Stage, Strategy[]>,
+    () => Object.fromEntries(stages.map((stage) => [stage, strategies.filter((s) => stageOf(s) === stage)])) as Record<Stage, StrategySummary[]>,
     [strategies],
   )
 
@@ -54,8 +56,9 @@ export default function StrategiesPage() {
       <select value={instrumentClass} onChange={e => setInstrumentClass(e.target.value)} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs text-foreground"><option value="equity">Equity</option><option value="options">Options</option></select>
       <button type="submit" disabled={creating || !name.trim() || !objective.trim()} className="button-primary">{creating ? <RefreshCw className="size-3 animate-spin" /> : <ArrowRight className="size-3" />}Generate</button>
       {createError && <span className="text-xs text-rose-300">{createError}</span>}
-      {loadError && <ErrorNotice className="w-full" message={`Could not load the strategies: ${loadError}`} onRetry={() => void reload()} />}
     </form>}
+    {loadError && <ErrorNotice className="mb-3 w-full" message={`Could not load the strategies: ${loadError}`} onRetry={() => void reload()} />}
+    {totalStrategies > strategies.length && <p role="status" className="mb-3 text-xs text-amber-200">The board shows the newest {strategies.length.toLocaleString('en-IN')} of {totalStrategies.toLocaleString('en-IN')} strategies.</p>}
     <div className="strategy-board">{stages.map((stage, index) => <section className="strategy-column" key={stage}><div className="strategy-column-title"><div><span className="stage-index">0{index + 1}</span><h2>{stage}</h2></div><span className="stage-count">{grouped[stage].length}</span></div><div className="strategy-cards">{grouped[stage].map(item => <button className="strategy-card" key={item.id} onClick={() => router.push(`/strategies/${item.id}`)}><div className="flex items-start justify-between gap-2"><Badge tone={item.instrument_class === 'options' ? 'violet' : 'cyan'}>{item.instrument_class}</Badge><span className="font-mono text-[10px] text-slate-500">{item.versions.length} ver</span></div><h3>{item.name}</h3><div className="flex items-center justify-between gap-2"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><TrendingUp className="size-3" /> {item.versions[item.versions.length - 1]?.static_validation_passed ? 'validated' : 'awaiting validation'}</span></div><div className="mt-3 flex items-center justify-between border-t border-white/8 pt-2 text-[10px] text-slate-500"><span>REVIEW WORKSPACE</span><ChevronRight className="size-3.5 text-cyan-300" /></div></button>)}</div></section>)}</div>
     <LiveSubscriptions strategies={strategies} />
   </div></>

@@ -6,7 +6,7 @@ import {
   type PaperEnrolPreview,
   type PaperInstrumentKind,
   type PaperOptionStrategy,
-  type Strategy,
+  type StrategySummary,
   enrolPaperSubscription,
   listStrategies,
   previewPaperEnrolment,
@@ -21,7 +21,7 @@ import { SymbolPicker } from './symbol-picker'
 const PREVIEW_DEBOUNCE_MS = 500
 
 export function EnrolDialog({ onClose, onDone }: { onClose: () => void; onDone: (id: string) => void }) {
-  const [strategies, setStrategies] = useState<Strategy[] | null>(null)
+  const [strategies, setStrategies] = useState<StrategySummary[] | null>(null)
   const [strategyId, setStrategyId] = useState('')
   const [kind, setKind] = useState<PaperInstrumentKind>('equity')
   const [symbol, setSymbol] = useState('')

@@ -173,7 +173,8 @@ export default function Home() {
   const load = useCallback(async () => {
     const [agentsRes, runsRes, pnl, unrealizedPnlRes, liveSubsRes] = await Promise.allSettled([
       getAgents(),
-      listRuns(),
+      // Only the runs in progress, however old: that is what the live count and the status line need
+      listRuns({ active: true, limit: 200 }),
       getTodaysPaperPnl(),
       getUnrealizedPaperPnl(),
       listLiveSubscriptions(),

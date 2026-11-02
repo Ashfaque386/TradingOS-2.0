@@ -18,10 +18,11 @@ from typing import Any
 import httpx
 import pandas as pd
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.paging import set_total_count
 from src.api.schemas import (
     DatalakeStatusResponse,
     FreshnessRecordResponse,
@@ -99,6 +100,7 @@ register_policy("GET", "/api/v1/market-data/pulse", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/freshness/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/indicators/{symbol}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/instruments", roles=list(Role))
+register_policy("GET", "/api/v1/market-data/option-underlyings", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/option-chain/{underlying}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/option-expiries/{underlying}", roles=list(Role))
 register_policy("GET", "/api/v1/market-data/provenance", roles=list(Role))
@@ -329,10 +331,37 @@ async def indicators_endpoint(
 
 @router.get("/instruments")
 async def instruments_endpoint(
+    response: Response,
+    q: str | None = Query(default=None, max_length=32),
+    instrument_type: str | None = Query(default=None, max_length=16),
+    underlying: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, gt=0, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> list[InstrumentResponse]:
-    result = await db.execute(select(Instrument).order_by(Instrument.symbol))
+    """One page of the instrument master by symbol; `X-Total-Count` is how many match. `q` finds a
+    symbol by any part of it, `instrument_type` and `underlying` narrow it (the options of one
+    underlying, say). The master holds every contract of every expiry, so the whole of it was far
+    more than any page of the console needed."""
+    conditions = []
+    if q is not None and q.strip():
+        conditions.append(Instrument.symbol.icontains(q.strip(), autoescape=True))
+    if instrument_type is not None:
+        conditions.append(Instrument.instrument_type == instrument_type)
+    if underlying is not None:
+        conditions.append(Instrument.underlying_symbol == underlying)
+    total = (
+        await db.execute(select(func.count()).select_from(Instrument).where(*conditions))
+    ).scalar_one()
+    set_total_count(response, total)
+    result = await db.execute(
+        select(Instrument)
+        .where(*conditions)
+        .order_by(Instrument.symbol)
+        .offset(offset)
+        .limit(limit)
+    )
     return [
         InstrumentResponse(
             symbol=row.symbol,
@@ -350,6 +379,22 @@ async def instruments_endpoint(
         )
         for row in result.scalars().all()
     ]
+
+
+@router.get("/option-underlyings")
+async def option_underlyings_endpoint(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> list[str]:
+    """The underlyings that have options in the instrument master, by name: what a picker of
+    underlyings needs, without reading every contract to find them."""
+    rows = await db.execute(
+        select(Instrument.underlying_symbol)
+        .where(Instrument.instrument_type == "option", Instrument.underlying_symbol.is_not(None))
+        .distinct()
+        .order_by(Instrument.underlying_symbol)
+    )
+    return [symbol for (symbol,) in rows if symbol]
 
 
 @router.get("/option-chain/{underlying}")

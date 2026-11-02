@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useMemo } from 'react'
 import { Zap } from 'lucide-react'
-import { type Strategy, listLiveSubscriptions } from '@/lib/api'
+import { type StrategySummary, listLiveSubscriptions } from '@/lib/api'
 import { liveSubscriptionRows } from '@/lib/live-limits'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { useQuery } from '@/lib/use-query'
@@ -11,7 +11,7 @@ import { useQuery } from '@/lib/use-query'
 /** Every live subscription on one screen: which are trading on their own with real money, which have
  * autonomy off, which are switched off, and the limits each carries. Each opens its strategy's lifecycle
  * tab, where autonomy and the limits are changed. */
-export function LiveSubscriptions({ strategies }: { strategies: Strategy[] }) {
+export function LiveSubscriptions({ strategies }: { strategies: StrategySummary[] }) {
   const { data, error, refresh } = useQuery('live-subscriptions', listLiveSubscriptions, { intervalMs: 15_000 })
   const rows = useMemo(() => liveSubscriptionRows(data ?? [], strategies), [data, strategies])
   const autonomous = rows.filter((r) => r.state === 'autonomous').length

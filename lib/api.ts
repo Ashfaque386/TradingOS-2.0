@@ -830,7 +830,24 @@ export type OrganizationRun = {
   tasks: TaskSummary[]
 }
 
-export const listRuns = () => apiGet<OrganizationRun[]>('/api/v1/orchestration/runs')
+export type RunListQuery = {
+  limit?: number
+  offset?: number
+  /** Only the runs still in progress (pending, planning or running), however old */
+  active?: boolean
+  status?: string
+}
+/** One page of runs, newest first, each with its tasks, and how many match in all. */
+export const listRunsPage = (query: RunListQuery = {}) => {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.offset) params.set('offset', String(query.offset))
+  if (query.active) params.set('active', 'true')
+  if (query.status) params.set('status_filter', query.status)
+  const suffix = params.toString()
+  return apiGetPage<OrganizationRun>(`/api/v1/orchestration/runs${suffix ? `?${suffix}` : ''}`)
+}
+export const listRuns = async (query: RunListQuery = {}) => (await listRunsPage(query)).items
 export const createRun = (objective: string) =>
   apiPost<OrganizationRun>('/api/v1/orchestration/runs', { objective })
 export const pauseRun = (runId: string) =>
@@ -1309,6 +1326,14 @@ export type Strategy = {
   versions: StrategyVersion[]
 }
 
+// A version as the list of strategies carries it: no code, validation errors, sandbox result or
+// options legs (a strategy read on its own, `getStrategy`, has them).
+export type StrategyVersionSummary = Pick<
+  StrategyVersion,
+  'id' | 'version_number' | 'static_validation_passed' | 'sandbox_passed' | 'created_at'
+>
+export type StrategySummary = Omit<Strategy, 'versions'> & { versions: StrategyVersionSummary[] }
+
 export type SuggestionDto = {
   id: string
   strategy_id: string
@@ -1338,7 +1363,18 @@ export type GoLiveReadinessResult = {
   reasons: string[]
 }
 
-export const listStrategies = () => apiGet<Strategy[]>('/api/v1/strategies')
+export type StrategyListQuery = { limit?: number; offset?: number; status?: string }
+/** One page of strategies, newest first, with a summary of each one's versions, and how many match. */
+export const listStrategiesPage = (query: StrategyListQuery = {}) => {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.offset) params.set('offset', String(query.offset))
+  if (query.status) params.set('status_filter', query.status)
+  const suffix = params.toString()
+  return apiGetPage<StrategySummary>(`/api/v1/strategies${suffix ? `?${suffix}` : ''}`)
+}
+/** Up to the newest 500 strategies (the most the server gives at once), for the pickers that offer one. */
+export const listStrategies = async () => (await listStrategiesPage({ limit: 500 })).items
 
 /** Every improvement suggestion made for a strategy, newest first. */
 export const listStrategySuggestions = (strategyId: string) =>
@@ -2301,7 +2337,27 @@ export type Instrument = {
   is_active: boolean
   last_synced_at: string
 }
-export const listInstruments = () => apiGet<Instrument[]>('/api/v1/market-data/instruments')
+export type InstrumentQuery = {
+  /** Any part of the symbol, in any case */
+  q?: string
+  instrumentType?: string
+  underlying?: string
+  limit?: number
+  offset?: number
+}
+/** One page of the instrument master by symbol, and how many match in all. */
+export const listInstruments = (query: InstrumentQuery = {}) => {
+  const params = new URLSearchParams()
+  if (query.q) params.set('q', query.q)
+  if (query.instrumentType) params.set('instrument_type', query.instrumentType)
+  if (query.underlying) params.set('underlying', query.underlying)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.offset) params.set('offset', String(query.offset))
+  const suffix = params.toString()
+  return apiGetPage<Instrument>(`/api/v1/market-data/instruments${suffix ? `?${suffix}` : ''}`)
+}
+/** The underlyings that have options in the master, by name. */
+export const getOptionUnderlyings = () => apiGet<string[]>('/api/v1/market-data/option-underlyings')
 
 // ---- System vitals (Phase 17 real-world testing pass) ----
 export type LlmProviderHealthVitals = {

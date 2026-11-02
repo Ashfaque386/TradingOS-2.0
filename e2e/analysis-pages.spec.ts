@@ -173,7 +173,7 @@ test.describe('the indicator periods', () => {
 
   test('an instrument list that cannot be loaded says so, with a way to try again', async ({ page }) => {
     await login(page, E2E_USERS.pm)
-    await page.route('**/api/v1/market-data/instruments', (route) => respond(route, { detail: 'the master is down' }, 500))
+    await page.route('**/api/v1/market-data/instruments*', (route) => respond(route, { detail: 'the master is down' }, 500))
     await page.goto('/analysis?tab=technical')
 
     const notice = page.getByRole('alert').filter({ hasText: 'Could not load the instrument list: the master is down' })

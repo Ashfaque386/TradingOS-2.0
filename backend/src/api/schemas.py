@@ -432,6 +432,31 @@ class StrategyResponse(BaseModel):
     versions: list[StrategyVersionResponse] = []
 
 
+class StrategyVersionSummaryResponse(BaseModel):
+    """A version without its code, validation errors, sandbox result or options legs: what a list
+    of strategies needs (which versions there are and whether each passed its checks)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    version_number: int
+    static_validation_passed: bool
+    sandbox_passed: bool | None
+    created_at: datetime_type
+
+
+class StrategySummaryResponse(BaseModel):
+    """A strategy as the list shows it. Every version's code used to travel with every strategy in
+    the list, so the list grew with the code written, not with the number of strategies."""
+
+    id: uuid.UUID
+    name: str
+    objective: str
+    instrument_class: str
+    status: str
+    versions: list[StrategyVersionSummaryResponse] = []
+
+
 class SubmitSuggestionRequest(BaseModel):
     base_version_id: uuid.UUID
     suggestion_text: str = Field(min_length=1, max_length=4000)

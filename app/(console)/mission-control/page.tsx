@@ -36,6 +36,7 @@ import {
   getScheduledJobs,
   listOperatorGuidance,
   listRuns,
+  listRunsPage,
   pauseRun,
   retryRun,
   rerunRun,
@@ -46,6 +47,7 @@ import {
 import { useWebSocketChannel } from '@/lib/ws'
 import { ApprovalsHistory, describeApproval } from '@/components/mission-control/approvals-history'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Pager } from '@/components/ui/pager'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { can } from '@/lib/permissions'
@@ -89,6 +91,9 @@ function relativeTime(iso: string): string {
 // Scheduler names as src/main.py's lifespan registers them ->
 // plain-language labels for the panel (docs/phase19-audit.md Part 1.1's
 // finding: 15 real jobs across 6 schedulers existed with zero UI surface).
+// Runs on the board at once; the rest are a page away
+const RUN_PAGE = 50
+
 const SCHEDULER_LABELS: Record<string, string> = {
   market_data: 'Market Data',
   paper_trading: 'Paper Trading',
@@ -723,6 +728,8 @@ export default function MissionControlPage() {
   // see the Strategies page's per-strategy autonomy switch instead.)
   const canDecide = can(role, 'POST /api/v1/approvals/{approval_id}/decide')
   const [view, setView] = useState<'kanban' | 'queue'>('kanban')
+  const [runPage, setRunPage] = useState(1)
+  const [runTotal, setRunTotal] = useState(0)
   // The command palette links to /mission-control?view=queue.
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('view') === 'queue') setView('queue')
@@ -798,13 +805,32 @@ export default function MissionControlPage() {
 
   const runsPoll = usePolling(
     async () => {
-      const data = await listRuns()
-      setRuns(data)
-      setSelected((prev) => (prev ? (data.find((r) => r.id === prev.id) ?? null) : null))
+      // Every run still open (waiting for a person, planning, running), however old: work that needs
+      // someone must not drop off the board behind newer runs that have finished. The history, the
+      // finished runs, is a page of the newest first, and the older ones are on the pages after it.
+      const [open, history] = await Promise.all([
+        listRuns({ active: true, limit: 200 }),
+        listRunsPage({ limit: RUN_PAGE, offset: (runPage - 1) * RUN_PAGE }),
+      ])
+      const openIds = new Set(open.map((r) => r.id))
+      const board = [...open, ...history.items.filter((r) => !openIds.has(r.id))]
+      setRuns(board)
+      setRunTotal(history.total)
+      // An open run that is on neither stays open as it was rather than closing under the reader.
+      setSelected((prev) => (prev ? (board.find((r) => r.id === prev.id) ?? prev) : null))
     },
     { intervalMs: 8_000 },
   )
   const refreshRuns = runsPoll.refresh
+  const firstRunPage = useRef(true)
+  useEffect(() => {
+    if (firstRunPage.current) {
+      firstRunPage.current = false
+      return
+    }
+    void runsPoll.refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runPage])
 
   const feedProblems = [
     runsPoll.error && `the runs (${runsPoll.error})`,
@@ -886,6 +912,7 @@ export default function MissionControlPage() {
     </div>
     <div className="flex items-center justify-between border-b border-white/10"><TabList label="Mission Control views" className="flex gap-1"><button role="tab" aria-selected={view === 'kanban'} tabIndex={view === 'kanban' ? 0 : -1} className={`mission-tab ${view === 'kanban' ? 'mission-tab-active' : ''}`} onClick={() => setView('kanban')}><Layers3 className="size-4" />Kanban board</button><button role="tab" aria-selected={view === 'queue'} tabIndex={view === 'queue' ? 0 : -1} className={`mission-tab ${view === 'queue' ? 'mission-tab-active' : ''}`} onClick={() => setView('queue')}><ShieldCheck className="size-4" />Sign-off queue <span className="badge-count">{pendingCount}</span></button></TabList><span className="hidden font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">approvals and run control</span></div>
     {view === 'kanban' ? <div className="flex gap-3 overflow-x-auto pb-3">{columns.map((column) => { const columnRuns = runs.filter((run) => columnForRun(run) === column); return <section key={column} className="kanban-column"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-cyan-300 shadow-[0_0_12px_currentColor]" /><h2 className="text-xs font-semibold uppercase tracking-wider">{column}</h2></div><span className="font-mono text-[10px] text-muted-foreground">{columnRuns.length.toString().padStart(2, '0')}</span></div><div className="flex min-h-40 flex-col gap-3">{columnRuns.map((run) => <motion.article layoutId={run.id} onClick={() => setSelected(run)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(run) } }} role="button" tabIndex={0} aria-label={`Open run: ${run.objective}`} key={run.id} className="task-card"><div className="flex items-start gap-2"><h3 className="flex-1 text-xs font-medium leading-relaxed">{run.objective}</h3><ChevronRight className="size-3 text-muted-foreground" /></div><div className="mt-4 flex items-center justify-between"><div className="avatar-stack">{agentInitials(run).map((agent, i) => <span key={`${run.id}-${agent}-${i}`}>{agent}</span>)}</div><span className="font-mono text-[10px] text-muted-foreground"><Clock3 className="mr-1 inline size-3" />{runElapsed(run)}</span></div><div className="mt-3 flex items-center gap-2"><span className="font-mono text-[9px] uppercase tracking-wide shrink-0" style={{ color: accentFor(run) }}>{runStatusLabel(run)}</span><div className="progress-track flex-1"><span style={{ width: `${runProgress(run)}%`, background: accentFor(run) }} /></div><span className="font-mono text-[9px]" style={{ color: accentFor(run) }}>{runProgress(run)}%</span></div></motion.article>)}</div></section> })}</div> : <SignoffQueue signoff={signoff} canDecide={canDecide} decisionError={decisionError} onDecideApproval={handleDecideApproval} />}
+    {view === 'kanban' && runTotal > RUN_PAGE && <Pager total={runTotal} page={runPage} size={RUN_PAGE} noun="runs" onPage={setRunPage} note="Open runs are always on the board; the pages are the history." />}
   </div>{selected && <TaskDrawer key={selected.id} run={selected} onClose={() => { setSelected(null); setRunActionError(null) }} onAction={(action) => handleRunAction(selected, action)} canAct={!readOnly} actionError={runActionError} />}</>
 }
 

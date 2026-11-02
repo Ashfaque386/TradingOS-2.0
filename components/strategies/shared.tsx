@@ -13,7 +13,7 @@ const STAGE_LABELS: Record<string, Stage> = {
   Deprecated: 'Deprecated',
 }
 
-export function stageOf(strategy: Strategy): Stage {
+export function stageOf(strategy: Pick<Strategy, 'status'>): Stage {
   return STAGE_LABELS[strategy.status] ?? 'Ideation'
 }
 

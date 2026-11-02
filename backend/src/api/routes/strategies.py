@@ -8,10 +8,11 @@ the ApprovalRequest this flow's /promote depends on).
 import uuid
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.paging import set_total_count
 from src.api.routes.memory import memory_service_dependency
 from src.api.schemas import (
     ApprovalRequestResponse,
@@ -22,7 +23,9 @@ from src.api.schemas import (
     GoLiveThresholdsResponse,
     NotDerivedResponse,
     StrategyResponse,
+    StrategySummaryResponse,
     StrategyVersionResponse,
+    StrategyVersionSummaryResponse,
     SubmitSuggestionRequest,
     SuggestionResponse,
 )
@@ -132,13 +135,69 @@ async def create_strategy_endpoint(
 
 @router.get("")
 async def list_strategies_endpoint(
+    response: Response,
+    limit: int = Query(default=200, gt=0, le=500),
+    offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, max_length=32),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
-) -> list[StrategyResponse]:
-    strategy_ids = (
-        (await db.execute(select(Strategy.id).order_by(Strategy.created_at.desc()))).scalars().all()
+) -> list[StrategySummaryResponse]:
+    """One page of strategies, newest first, each with a summary of its versions (no code: read one
+    strategy, `GET /strategies/{id}`, for that); `X-Total-Count` is how many the filter matches.
+    The list used to carry every version's code and read each strategy on its own."""
+    conditions = []
+    if status_filter is not None:
+        conditions.append(Strategy.status == status_filter)
+    total = (await db.execute(select(func.count(Strategy.id)).where(*conditions))).scalar_one()
+    set_total_count(response, total)
+    strategies = list(
+        (
+            await db.execute(
+                select(Strategy)
+                .where(*conditions)
+                .order_by(Strategy.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars()
     )
-    return [await _load_strategy_response(db, strategy_id) for strategy_id in strategy_ids]
+    versions_by_strategy: dict[uuid.UUID, list[StrategyVersionSummaryResponse]] = {
+        strategy.id: [] for strategy in strategies
+    }
+    if strategies:
+        rows = await db.execute(
+            select(
+                StrategyVersion.strategy_id,
+                StrategyVersion.id,
+                StrategyVersion.version_number,
+                StrategyVersion.static_validation_passed,
+                StrategyVersion.sandbox_passed,
+                StrategyVersion.created_at,
+            )
+            .where(StrategyVersion.strategy_id.in_(versions_by_strategy))
+            .order_by(StrategyVersion.version_number)
+        )
+        for strategy_id, version_id, number, static_passed, sandbox_passed, created_at in rows:
+            versions_by_strategy[strategy_id].append(
+                StrategyVersionSummaryResponse(
+                    id=version_id,
+                    version_number=number,
+                    static_validation_passed=static_passed,
+                    sandbox_passed=sandbox_passed,
+                    created_at=created_at,
+                )
+            )
+    return [
+        StrategySummaryResponse(
+            id=strategy.id,
+            name=strategy.name,
+            objective=strategy.objective,
+            instrument_class=strategy.instrument_class,
+            status=strategy.status,
+            versions=versions_by_strategy[strategy.id],
+        )
+        for strategy in strategies
+    ]
 
 
 @router.get("/{strategy_id}")

@@ -9,6 +9,7 @@ import { IndicatorForm } from '@/components/analysis/indicator-form'
 import { HolidaysTab } from '@/components/analysis/holidays-tab'
 import { ChartContainer } from '@/components/ui/chart'
 import { ErrorNotice } from '@/components/ui/error-notice'
+import { Pager } from '@/components/ui/pager'
 import { TabList } from '@/components/ui/tab-list'
 import { type AnalysisTab, type AnalysisView, isSymbol, viewFromQuery, viewToQuery } from '@/lib/analysis-view'
 import { describeQuoteRefusals } from '@/lib/broker-quotes'
@@ -34,6 +35,7 @@ import {
   getLiveOptionChain,
   getLiveOptionExpiries,
   getMarketPulse,
+  getOptionUnderlyings,
   getSystemVitals,
   listBrokerCircuitBreakerStatus,
   listBrokerCredentialStatus,
@@ -118,13 +120,28 @@ const OVERLAYS = [
 ] as const
 type OverlayId = (typeof OVERLAYS)[number]['id']
 
-/** The share to look at: the instrument list, filtered as you type, and any symbol typed in full, since
- * the lake can hold bars for a share the list does not. */
-function SymbolPicker({ instruments, symbol, onSymbol }: { instruments: Instrument[]; symbol: string | null; onSymbol: (symbol: string) => void }) {
-  const [query, setQuery] = useState('')
-  const typed = query.trim().toUpperCase()
-  const filtered = instruments.filter((i) => i.symbol.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 50)
-  const openable = typed !== '' && isSymbol(typed) && !instruments.some((i) => i.symbol === typed)
+/** The instrument master read a page at a time: what is typed finds symbols on the server (after a
+ * short pause, so each keystroke is not a request), and the list is the first page of what matched. */
+function useInstrumentSearch() {
+  const [typed, setTyped] = useState('')
+  const [search, setSearch] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(typed.trim()), 250)
+    return () => clearTimeout(id)
+  }, [typed])
+  const list = useQuery(`instruments:${search}`, () => listInstruments({ q: search || undefined, limit: INSTRUMENT_PAGE }))
+  return { typed, setTyped, list }
+}
+type InstrumentSearch = ReturnType<typeof useInstrumentSearch>
+const INSTRUMENT_PAGE = 50
+
+/** The share to look at: the symbols that match what is typed, and any symbol typed in full, since the
+ * lake can hold bars for a share the instrument master does not. */
+function SymbolPicker({ search, symbol, onSymbol }: { search: InstrumentSearch; symbol: string | null; onSymbol: (symbol: string) => void }) {
+  const typed = search.typed.trim().toUpperCase()
+  const items = search.list.data?.items ?? []
+  const total = search.list.data?.total ?? 0
+  const openable = typed !== '' && isSymbol(typed) && !items.some((i) => i.symbol === typed)
   return (
     <Panel title="Symbol" eyebrow="SEARCH" className="symbol-panel">
       <label className="symbol-search-box">
@@ -132,22 +149,25 @@ function SymbolPicker({ instruments, symbol, onSymbol }: { instruments: Instrume
         <input
           aria-label="Search symbol"
           placeholder="Search NSE / BSE symbol..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          value={search.typed}
+          onChange={(e) => search.setTyped(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && typed !== '' && isSymbol(typed)) onSymbol(typed) }}
         />
       </label>
       <div className="symbol-list">
         {openable && <button className="symbol-chip" onClick={() => onSymbol(typed)}>Open {typed} (not in the instrument list)</button>}
-        {filtered.map((i) => <button key={i.symbol} className={i.symbol === symbol ? 'symbol-chip active' : 'symbol-chip'} onClick={() => onSymbol(i.symbol)}>{i.symbol}</button>)}
+        {items.map((i) => <button key={i.symbol} className={i.symbol === symbol ? 'symbol-chip active' : 'symbol-chip'} onClick={() => onSymbol(i.symbol)}>{i.symbol}</button>)}
+        {total > items.length && <p className="px-1 pt-1 text-[10px] text-muted-foreground">Showing the first {items.length} of {total.toLocaleString('en-IN')} symbols. Type more of the symbol to narrow it.</p>}
       </div>
     </Panel>
   )
 }
 
 function TechnicalTab({ symbol: chosen, onSymbol, params, onParams }: { symbol: string | null; onSymbol: (symbol: string) => void; params: IndicatorParams; onParams: (params: IndicatorParams) => void }) {
-  const instruments = useQuery('instruments', listInstruments)
-  const symbol = chosen ?? instruments.data?.[0]?.symbol ?? null
+  const search = useInstrumentSearch()
+  const instruments = search.list
+  // Until one is chosen or something is typed, the first symbol of the master is the one shown.
+  const symbol = chosen ?? (search.typed ? null : instruments.data?.items[0]?.symbol) ?? null
   const indicators = useQuery(
     `indicators:${symbol}:${indicatorQuery(params)}`,
     () => getIndicators(symbol as string, params),
@@ -187,7 +207,7 @@ function TechnicalTab({ symbol: chosen, onSymbol, params, onParams }: { symbol: 
   return (
     <div className="technical-layout">
       {loadError && <div className="col-span-full"><ErrorNotice message={loadError} onRetry={() => void (instruments.error ? instruments.refresh() : indicators.refresh())} /></div>}
-      <SymbolPicker instruments={instruments.data ?? []} symbol={symbol} onSymbol={onSymbol} />
+      <SymbolPicker search={search} symbol={symbol} onSymbol={onSymbol} />
       <div className="indicator-settings">
         <Panel title="Indicator settings" eyebrow="PERIODS USED FOR EVERY CHART BELOW">
           {/* Keyed by the applied periods, so Apply and Reset leave the boxes showing what was applied. */}
@@ -256,8 +276,10 @@ function TechnicalTab({ symbol: chosen, onSymbol, params, onParams }: { symbol: 
 }
 
 function FreshnessTab({ symbol: chosen, onSymbol }: { symbol: string | null; onSymbol: (symbol: string) => void }) {
-  const instruments = useQuery('instruments', listInstruments)
-  const symbol = chosen ?? instruments.data?.[0]?.symbol ?? null
+  const search = useInstrumentSearch()
+  const instruments = search.list
+  // Until one is chosen or something is typed, the first symbol of the master is the one shown.
+  const symbol = chosen ?? (search.typed ? null : instruments.data?.items[0]?.symbol) ?? null
   const freshness = useQuery(`freshness:${symbol}`, () => getFreshness(symbol as string), { enabled: symbol !== null })
   const records = freshness.data ?? []
   const loadError = instruments.error && !instruments.data
@@ -269,7 +291,7 @@ function FreshnessTab({ symbol: chosen, onSymbol }: { symbol: string | null; onS
   return (
     <div className="technical-layout">
       {loadError && <div className="col-span-full"><ErrorNotice message={loadError} onRetry={() => void (instruments.error ? instruments.refresh() : freshness.refresh())} /></div>}
-      <SymbolPicker instruments={instruments.data ?? []} symbol={symbol} onSymbol={onSymbol} />
+      <SymbolPicker search={search} symbol={symbol} onSymbol={onSymbol} />
       <Panel title={`${symbol ?? '—'} · dataset freshness`} eyebrow="DATA PIPELINE HEALTH">
         <div className="overflow-x-auto"><table className="analysis-table"><thead><tr><th>Data type</th><th>Data date</th><th>Row count</th><th>Ingested at (India time)</th></tr></thead><tbody>{records.map((r, i) => <tr key={i}><td>{r.data_type}</td><td className="mono">{r.data_date}</td><td className="mono">{r.row_count.toLocaleString('en-IN')}</td><td className="mono">{indiaStamp(r.ingested_at)}</td></tr>)}{records.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-xs text-muted-foreground">No freshness records for this symbol.</td></tr>}</tbody></table></div>
       </Panel>
@@ -532,21 +554,34 @@ function LiveOptionChainPanel() {
   )
 }
 
-function OptionChainTab() {
-  const instrumentList = useQuery('instruments', listInstruments)
-  const instruments = instrumentList.data ?? []
-  const [underlying, setUnderlying] = useState('NIFTY')
-  const loadError = instrumentList.error && !instrumentList.data ? `Could not load the instrument list: ${instrumentList.error}` : null
+const OPTION_PAGE = 100
 
-  const options = instruments.filter((i) => i.instrument_type === 'option' && i.underlying_symbol === underlying)
-  const underlyings = Array.from(new Set(instruments.filter((i) => i.instrument_type === 'option').map((i) => i.underlying_symbol).filter((s): s is string => Boolean(s))))
+function OptionChainTab() {
+  const underlyingList = useQuery('option-underlyings', getOptionUnderlyings)
+  const [chosen, setChosen] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const underlyings = underlyingList.data ?? []
+  const underlying = chosen ?? (underlyings.includes('NIFTY') ? 'NIFTY' : underlyings[0] ?? 'NIFTY')
+  const contracts = useQuery(
+    `options:${underlying}:${page}`,
+    () => listInstruments({ instrumentType: 'option', underlying, limit: OPTION_PAGE, offset: (page - 1) * OPTION_PAGE }),
+    { enabled: underlyingList.data !== null },
+  )
+  const options = contracts.data?.items ?? []
+  const total = contracts.data?.total ?? 0
+  const loadError = underlyingList.error && !underlyingList.data
+    ? `Could not load the instrument list: ${underlyingList.error}`
+    : contracts.error
+      ? `Could not load the options of ${underlying}: ${contracts.error}`
+      : null
 
   return (
     <div className="flex flex-col gap-5">
-      {loadError && <ErrorNotice message={loadError} />}
+      {loadError && <ErrorNotice message={loadError} onRetry={() => void (underlyingList.error ? underlyingList.refresh() : contracts.refresh())} />}
       <LiveOptionChainPanel />
-      <Panel title="Option instrument master" eyebrow={`${underlying} · STATIC INSTRUMENT MASTER`} actions={<select value={underlying} onChange={(e) => setUnderlying(e.target.value)} className="backtest-select">{underlyings.length > 0 ? underlyings.map((s) => <option key={s}>{s}</option>) : <option>{underlying}</option>}</select>}>
-        <div className="overflow-x-auto mt-4"><table className="option-chain-table"><thead><tr><th>Symbol</th><th>Strike</th><th>Type</th><th>Expiry</th><th>Lot size</th><th>Tick size</th></tr></thead><tbody>{options.map((o) => <tr key={o.symbol}><td className="mono">{o.symbol}</td><td className="strike-cell">{o.strike_price}</td><td>{o.option_type}</td><td className="mono">{o.expiry_date}</td><td className="mono">{o.lot_size}</td><td className="mono">{o.tick_size}</td></tr>)}{options.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-xs text-muted-foreground">No option instruments found for this underlying.</td></tr>}</tbody></table></div>
+      <Panel title="Option instrument master" eyebrow={`${underlying} · STATIC INSTRUMENT MASTER`} actions={<select aria-label="Underlying" value={underlying} onChange={(e) => { setChosen(e.target.value); setPage(1) }} className="backtest-select">{underlyings.length > 0 ? underlyings.map((s) => <option key={s}>{s}</option>) : <option>{underlying}</option>}</select>}>
+        <div className="overflow-x-auto mt-4"><table className="option-chain-table"><thead><tr><th>Symbol</th><th>Strike</th><th>Type</th><th>Expiry</th><th>Lot size</th><th>Tick size</th></tr></thead><tbody>{options.map((o) => <tr key={o.symbol}><td className="mono">{o.symbol}</td><td className="strike-cell">{o.strike_price}</td><td>{o.option_type}</td><td className="mono">{o.expiry_date}</td><td className="mono">{o.lot_size}</td><td className="mono">{o.tick_size}</td></tr>)}{options.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-xs text-muted-foreground">{contracts.data ? 'No option instruments found for this underlying.' : 'Loading…'}</td></tr>}</tbody></table></div>
+        {total > OPTION_PAGE && <div className="p-3"><Pager total={total} page={page} size={OPTION_PAGE} noun="contracts" onPage={setPage} /></div>}
       </Panel>
     </div>
   )

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Field, Segmented } from '@/components/ui/field'
 import { Modal } from '@/components/ui/modal'
-import { type BacktestRun, type Strategy, createBacktestFromLake } from '@/lib/api'
+import { type BacktestRun, type StrategySummary, createBacktestFromLake } from '@/lib/api'
 import { type BacktestForm, STRATEGY_LABEL, emptyForm, formProblems, lakeRequest, runnableVersionId } from '@/lib/backtests'
 import { messageOf } from '@/lib/errors'
 
@@ -16,7 +16,7 @@ export function NewBacktestDialog({
   onClose,
   onDone,
 }: {
-  strategies: Strategy[]
+  strategies: StrategySummary[]
   initial?: Partial<BacktestForm>
   onClose: () => void
   onDone: (run: BacktestRun) => void

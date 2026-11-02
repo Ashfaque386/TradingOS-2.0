@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Field } from '@/components/ui/field'
 import { Modal } from '@/components/ui/modal'
-import { type OptimizationResult, type Strategy, optimizeBacktest } from '@/lib/api'
+import { type OptimizationResult, type StrategySummary, optimizeBacktest } from '@/lib/api'
 import {
   OBJECTIVE_LABEL,
   type OptimizeForm,
@@ -24,7 +24,7 @@ export function OptimizeDialog({
   onClose,
   onUse,
 }: {
-  strategies: Strategy[]
+  strategies: StrategySummary[]
   onClose: () => void
   /** Open a backtest with this share, window and average length already filled in. */
   onUse: (form: Partial<OptimizeForm> & { smaWindow: number }) => void
