@@ -12,7 +12,9 @@ class RefreshToken(Base):
     """One row per issued refresh token. Single-use: redeeming a token sets
     used_at/revoked_at and mints a new row sharing the same family_id. If a
     token that is already revoked is presented again, it's a reuse attempt —
-    the whole family_id is revoked (see src/api/routes/auth.py).
+    the whole family_id is revoked (see src/api/routes/auth.py), unless it was redeemed only seconds
+    ago and its replacement has never been used: a reply that never reached the browser, answered
+    with another successor (so a family can briefly hold two live tokens; sign-out ends them all).
     """
 
     __tablename__ = "refresh_tokens"

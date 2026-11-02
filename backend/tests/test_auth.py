@@ -9,6 +9,7 @@ import asyncio
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
+from src.core.config import get_settings
 from src.core.roles import Role
 from src.core.web_session import REFRESH_COOKIE_NAME
 from src.models.audit_log import AuditLog
@@ -343,8 +344,11 @@ async def test_the_new_access_token_works(client: AsyncClient, make_user):
 
 
 async def test_refresh_reuse_detection_revokes_the_family_and_is_audited(
-    client: AsyncClient, make_user, db_session_factory
+    client: AsyncClient, make_user, db_session_factory, monkeypatch
 ):
+    # With the allowance for a lost reply off (tests/test_refresh_grace.py has it on): a retired
+    # token coming back at once is a replay.
+    monkeypatch.setattr(get_settings(), "refresh_token_reuse_grace_seconds", 0)
     login = await _signed_in(client, make_user)
     first_cookie = _refresh_cookie(login)
     rotated = await client.post("/api/v1/auth/refresh")

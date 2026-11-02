@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
+    # A refresh swaps the cookie for a new token and retires the old one. If the reply is lost (a
+    # reload cancels the request after the server has answered) the browser presents the retired
+    # token again. Within this many seconds, and while the token that replaced it has never been
+    # used, that is answered with a fresh token instead of being taken for a stolen one; after it,
+    # or once the replacement was used, a retired token is a replay and ends the session. 0 turns
+    # it off.
+    refresh_token_reuse_grace_seconds: int = 30
 
     # Sign-in (Phase 8). A wrong password is counted against the account, not only the address it
     # came from: `login_max_failed_attempts` failures within `login_failure_window_minutes` lock

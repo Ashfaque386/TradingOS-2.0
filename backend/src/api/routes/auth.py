@@ -4,7 +4,11 @@ A session is a short-lived **access token** (in the response body; the console k
 only) and a long-lived **refresh token** (an HttpOnly cookie, never in a body: see
 src.core.web_session). Each refresh swaps the cookie for a new token and retires the old one;
 presenting a retired token again means a copy of it leaked, so the whole family is revoked and an
-audit entry says so.
+audit entry says so. The one exception is a reply that never reached the browser: if the token was
+retired only seconds ago and the token that replaced it has not been used, the browser most likely
+never got it (a reload cancelled the request after the server had answered), so the retired token is
+given a fresh successor instead of ending the session (`_is_a_lost_reply_retried`), and that is
+audited too.
 
 Registration is for the very first account only (it becomes the administrator). After that accounts
 are made by an administrator (`POST /admin/users`), so the console of a system reachable from a
@@ -302,8 +306,10 @@ async def refresh(
     except (InvalidTokenError, KeyError, ValueError):
         return _refresh_rejected(request)
 
+    # Locked for update: two copies of one token arriving together are looked at one after the
+    # other, the second seeing what the first did.
     stored = (
-        await db.execute(select(RefreshToken).where(RefreshToken.id == token_id))
+        await db.execute(select(RefreshToken).where(RefreshToken.id == token_id).with_for_update())
     ).scalar_one_or_none()
     if stored is None or stored.family_id != family_id or stored.user_id != user_id:
         return _refresh_rejected(request)
@@ -315,43 +321,91 @@ async def refresh(
         # when a reuse was detected. Nothing leaked here; it is simply no longer a session.
         return _refresh_rejected(request)
 
+    retried = False
     if stored.revoked_at is not None:
-        # This exact single-use token was already redeemed once before -- presenting it again means
-        # either the token leaked or a client raced itself. Treat as compromise: revoke every
-        # still-live token in the family so a stolen token can't keep rotating alongside the
-        # legitimate client, and leave a record that it happened.
-        await db.execute(
-            update(RefreshToken)
-            .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
-            .values(revoked_at=now)
-        )
-        await write_audit_entry(
-            db,
-            actor=str(user_id),
-            action="auth.refresh_token_reuse_detected",
-            entity_type="user",
-            entity_id=str(user_id),
-            details={"family_id": str(family_id), "client_ip": scope_client_ip(request.scope)},
-        )
-        await db.commit()
-        logger.warning("auth.refresh_token_reuse_detected", user_id=str(user_id))
-        return _refresh_rejected(request)
+        if await _is_a_lost_reply_retried(db, stored, now):
+            retried = True
+        else:
+            # This exact single-use token was already redeemed once before -- presenting it again
+            # means either the token leaked or a client raced itself. Treat as compromise: revoke
+            # every still-live token in the family so a stolen token can't keep rotating alongside
+            # the legitimate client, and leave a record that it happened.
+            await db.execute(
+                update(RefreshToken)
+                .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
+                .values(revoked_at=now)
+            )
+            await write_audit_entry(
+                db,
+                actor=str(user_id),
+                action="auth.refresh_token_reuse_detected",
+                entity_type="user",
+                entity_id=str(user_id),
+                details={"family_id": str(family_id), "client_ip": scope_client_ip(request.scope)},
+            )
+            await db.commit()
+            logger.warning("auth.refresh_token_reuse_detected", user_id=str(user_id))
+            return _refresh_rejected(request)
 
     if stored.expires_at < now:
-        stored.revoked_at = now
-        await db.commit()
+        if stored.revoked_at is None:
+            stored.revoked_at = now
+            await db.commit()
         return _refresh_rejected(request)
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None or not user.is_active:
         return _refresh_rejected(request)
 
-    stored.used_at = now
-    stored.revoked_at = now
-    await db.commit()
-
-    skip_audit_entry(request, because="a session's token rotating; the sign-in is what is recorded")
+    if retried:
+        assert stored.used_at is not None  # a retry is only ever of a token that was redeemed
+        await write_audit_entry(
+            db,
+            actor=str(user_id),
+            action="auth.refresh_token_retried",
+            entity_type="user",
+            entity_id=str(user_id),
+            details={
+                "family_id": str(family_id),
+                "seconds_since_rotation": round((now - stored.used_at).total_seconds(), 3),
+                "client_ip": scope_client_ip(request.scope),
+            },
+        )
+        logger.info("auth.refresh_token_retried", user_id=str(user_id))
+        skip_audit_entry(request, because="the retry is recorded by its own entry above")
+    else:
+        stored.used_at = now
+        stored.revoked_at = now
+        await db.commit()
+        skip_audit_entry(
+            request, because="a session's token rotating; the sign-in is what is recorded"
+        )
     return await _start_session(request, response, db, user, family_id=family_id)
+
+
+async def _is_a_lost_reply_retried(db: AsyncSession, retired: RefreshToken, now: datetime) -> bool:
+    """True when a retired token coming back is most likely the same browser whose reply was lost,
+    not a copy that leaked: it was redeemed no more than `refresh_token_reuse_grace_seconds` ago,
+    and the token that replaced it is still live and has never been presented. (A reload cancels a
+    refresh the server has already answered: the new token is never stored, and the page presents
+    the old one again.) Once the replacement has been used, or revoked by a sign-out or an
+    administrator, the old token coming back is a replay as ever."""
+    grace = timedelta(seconds=get_settings().refresh_token_reuse_grace_seconds)
+    if retired.used_at is None or not timedelta(0) <= now - retired.used_at <= grace:
+        return False
+    successor = (
+        await db.execute(
+            select(RefreshToken)
+            .where(
+                RefreshToken.family_id == retired.family_id,
+                RefreshToken.id != retired.id,
+                RefreshToken.issued_at >= retired.used_at,
+            )
+            .order_by(RefreshToken.issued_at)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return successor is not None and successor.used_at is None and successor.revoked_at is None
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -372,8 +426,14 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)) -> Respon
     stored = (
         await db.execute(select(RefreshToken).where(RefreshToken.id == token_id))
     ).scalar_one_or_none()
-    if stored is not None and stored.revoked_at is None:
-        stored.revoked_at = datetime.now(UTC)
+    if stored is not None:
+        # The family, not just this token: a retried refresh leaves two live tokens in it, and
+        # signing out must end both.
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.family_id == stored.family_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
         await db.commit()
     return ended
 

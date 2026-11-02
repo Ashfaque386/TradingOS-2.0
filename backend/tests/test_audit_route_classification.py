@@ -110,8 +110,8 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/auth/login"): (N, "inbound authentication"),
     ("POST", "/auth/refresh"): (
         Q,
-        "a session's token rotating on every page load; the sign-in, a reuse of a retired token "
-        "and a lock are what is recorded",
+        "a session's token rotating on every page load; the sign-in, a reuse of a retired token, "
+        "a retry after a lost reply and a lock are what is recorded",
     ),
     ("POST", "/auth/logout"): (N, "inbound authentication"),
     ("POST", "/auth/ws-ticket"): (

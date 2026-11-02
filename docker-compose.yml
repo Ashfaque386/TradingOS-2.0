@@ -55,6 +55,7 @@ services:
       REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-auto}
       REFRESH_COOKIE_SAMESITE: ${REFRESH_COOKIE_SAMESITE:-strict}
       WS_TICKET_TTL_SECONDS: ${WS_TICKET_TTL_SECONDS:-30}
+      REFRESH_TOKEN_REUSE_GRACE_SECONDS: ${REFRESH_TOKEN_REUSE_GRACE_SECONDS:-30}
       # Reverse proxies whose X-Forwarded-For / -Proto are believed (addresses or CIDR blocks). Empty
       # believes none, which is right when the console talks to this port directly.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
