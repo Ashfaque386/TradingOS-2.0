@@ -81,7 +81,6 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
         "/api/v1/live-trading/strategies/{}/position",
     ): "one position only; `GET /orders/positions` lists every symbol, live and paper",
     # ---- no screen yet: the phase of the gap analysis that adds it ----
-    ("GET", "/api/v1/market-data/holidays"): "Phase 9: holiday calendar on Market Analysis",
     (
         "POST",
         "/api/v1/backtests",

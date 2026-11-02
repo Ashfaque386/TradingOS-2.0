@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `analysis-logic.spec.ts` -- the indicator parameters' bounds and wording, the Market Analysis address, the holiday wording, calendar
+  days and India's date, the Markdown reader, the investor-report period rules, the Portfolio figures. No browser or backend.
+- `analysis-pages.spec.ts` -- Market Analysis against a real backend: the address, the holiday calendar, the indicator periods, the
+  lake's lag and the provider health (the last two stated by stubbed routes where the database cannot arrange them). It seeds a
+  share's recent bars with `scripts/seed_e2e_recent_bars.py`.
 - `strategies-logic.spec.ts` -- the line diff, the version and suggestion wording, the live limits form's rules, the live list's
   order. No browser or backend.
 - `strategies-review.spec.ts` -- a strategy's own page against a real backend: its address and tabs, versions, the diff,

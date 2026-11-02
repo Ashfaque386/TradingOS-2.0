@@ -39,8 +39,15 @@ def _period_bounds_ist(period_start: date, period_end: date) -> tuple[datetime, 
 
 
 async def generate_investor_report(
-    db: AsyncSession, *, period_start: date, period_end: date, cadence: str = "weekly"
+    db: AsyncSession,
+    *,
+    period_start: date,
+    period_end: date,
+    cadence: str = "weekly",
+    generated_by: str = INVESTOR_REPORTING_ACTOR,
 ) -> InvestorReport:
+    """`generated_by` is who asked: the scheduler's actor by default, or the person who generated it
+    by hand, so the history says which reports a human wrote."""
     start, end = _period_bounds_ist(period_start, period_end)
 
     total_realized_pnl = (
@@ -161,7 +168,7 @@ async def generate_investor_report(
         period_end=period_end,
         cadence=cadence,
         content_markdown=content,
-        generated_by=INVESTOR_REPORTING_ACTOR,
+        generated_by=generated_by,
     )
     db.add(report)
     await db.commit()

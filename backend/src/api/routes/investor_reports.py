@@ -6,7 +6,8 @@ manual "generate now" trigger for ops visibility -- mirrors
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -15,8 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.engine.paper_trading.market_hours import IST
 from src.models.investor_report import InvestorReport
 from src.models.user import User
+from src.orchestration.investor_report_period import ReportPeriodError, check_report_period
 from src.orchestration.investor_reporting import generate_investor_report
 
 router = APIRouter(prefix="/investor-reports", tags=["investor-reports"])
@@ -44,7 +47,7 @@ class InvestorReportResponse(InvestorReportSummaryResponse):
 class GenerateInvestorReportRequest(BaseModel):
     period_start: date
     period_end: date
-    cadence: str = "weekly"
+    cadence: Literal["weekly", "monthly"] = "weekly"
 
 
 def _summary(report: InvestorReport) -> InvestorReportSummaryResponse:
@@ -86,10 +89,25 @@ async def get_investor_report_endpoint(
 async def generate_investor_report_endpoint(
     body: GenerateInvestorReportRequest,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role),
+    current_user: User = Depends(require_role),
 ) -> InvestorReportResponse:
+    """Writes a report for the period, which must be one that can be reported on: it ends on or
+    after the day it starts, is not in the future in India, and fits its cadence (a week, or a
+    month). Asking twice for the same period writes a second report, on purpose: more may have
+    been filled since."""
+    try:
+        check_report_period(
+            body.period_start, body.period_end, body.cadence, today=datetime.now(IST).date()
+        )
+    except ReportPeriodError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     report = await generate_investor_report(
-        db, period_start=body.period_start, period_end=body.period_end, cadence=body.cadence
+        db,
+        period_start=body.period_start,
+        period_end=body.period_end,
+        cadence=body.cadence,
+        # The column holds 64 characters; a longer address is cut rather than refused.
+        generated_by=f"user:{current_user.email}"[:64],
     )
     return InvestorReportResponse(
         **_summary(report).model_dump(),

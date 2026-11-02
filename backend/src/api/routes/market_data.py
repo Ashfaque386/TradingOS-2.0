@@ -48,8 +48,13 @@ from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
 from src.data.broker_provider import NoRealDataSourceError
 from src.data.lake import read_daily_bars
+from src.data.lake_status import trading_days_behind
 from src.data.market_data_factory import get_market_data_provider
-from src.data.nse_calendar import calendar_file_covers_year, holidays_for_year
+from src.data.nse_calendar import (
+    calendar_file_covers_year,
+    holidays_for_year,
+    previous_nse_trading_day,
+)
 from src.data.providers import AnyMarketDataProvider
 from src.engine.indicators import (
     bollinger_bands,
@@ -239,15 +244,15 @@ def _series_to_list(series: pd.Series[Any]) -> list[float | None]:
 @router.get("/indicators/{symbol}")
 async def indicators_endpoint(
     symbol: str,
-    lookback_days: int = 250,
-    sma_window: int = 20,
-    ema_span: int = 20,
-    rsi_period: int = 14,
-    macd_fast: int = 12,
-    macd_slow: int = 26,
-    macd_signal_period: int = 9,
-    bollinger_window: int = 20,
-    bollinger_std: float = 2.0,
+    lookback_days: int = Query(default=250, ge=5, le=2000),
+    sma_window: int = Query(default=20, ge=2, le=400),
+    ema_span: int = Query(default=20, ge=2, le=400),
+    rsi_period: int = Query(default=14, ge=2, le=100),
+    macd_fast: int = Query(default=12, ge=2, le=100),
+    macd_slow: int = Query(default=26, ge=3, le=200),
+    macd_signal_period: int = Query(default=9, ge=2, le=100),
+    bollinger_window: int = Query(default=20, ge=2, le=400),
+    bollinger_std: float = Query(default=2.0, gt=0, le=5),
     root: Path = Depends(get_data_lake_root),
     current_user: User = Depends(require_role),
 ) -> IndicatorSeriesResponse:
@@ -255,7 +260,27 @@ async def indicators_endpoint(
     the data lake actually has for `symbol` -- reads `src.data.lake`
     directly rather than `DataLakePriceProvider` (which silently falls
     back to synthetic data), so a symbol the pipeline hasn't ingested
-    honestly comes back empty instead of a fabricated series."""
+    honestly comes back empty instead of a fabricated series.
+
+    The periods are bounded (a window of 0 or 1 is not an indicator, and pandas raises on it, which
+    was a 500), and the MACD's fast average must be shorter than its slow one. The series carries
+    the parameters it was computed with, so what a chart says is what it drew."""
+    if macd_fast >= macd_slow:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"The MACD's fast average ({macd_fast}) must be shorter than its slow one "
+                f"({macd_slow})."
+            ),
+        )
+    parameters: dict[str, Any] = {
+        "macd_fast": macd_fast,
+        "macd_slow": macd_slow,
+        "macd_signal_period": macd_signal_period,
+        "bollinger_window": bollinger_window,
+        "bollinger_std": bollinger_std,
+        "lookback_days": lookback_days,
+    }
     end = datetime.now(UTC).date()
     start = end - timedelta(days=lookback_days)
     df = read_daily_bars(root, symbol, start, end)
@@ -276,6 +301,7 @@ async def indicators_endpoint(
             bollinger_upper=[],
             bollinger_middle=[],
             bollinger_lower=[],
+            **parameters,
         )
 
     close = df["close"]
@@ -297,6 +323,7 @@ async def indicators_endpoint(
         bollinger_upper=_series_to_list(boll_upper),
         bollinger_middle=_series_to_list(boll_mid),
         bollinger_lower=_series_to_list(boll_lower),
+        **parameters,
     )
 
 
@@ -535,6 +562,7 @@ async def datalake_status_endpoint(
         )
     ).one()
 
+    required_daily = previous_nse_trading_day(datetime.now(IST).date())
     return DatalakeStatusResponse(
         as_of=datetime.now(UTC).isoformat(),
         pipelines=pipelines,
@@ -542,6 +570,8 @@ async def datalake_status_endpoint(
         symbols_with_intraday_data=intraday_symbols or 0,
         most_recent_daily_data_date=daily_max_date,
         most_recent_intraday_data_date=intraday_max_date,
+        required_daily_data_date=required_daily,
+        daily_data_behind_trading_days=trading_days_behind(daily_max_date, required_daily),
     )
 
 

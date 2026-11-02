@@ -4,6 +4,8 @@
 // every page/component should go through here rather than calling
 // `fetch` directly, so auth and error handling stay in one place.
 
+import { DEFAULT_PARAMS, type IndicatorParams, indicatorQuery } from '@/lib/indicator-params'
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 export class ApiError extends Error {
@@ -2160,9 +2162,35 @@ export type IndicatorSeries = {
   bollinger_upper: (number | null)[]
   bollinger_middle: (number | null)[]
   bollinger_lower: (number | null)[]
+  // What the series was computed with (the SMA, EMA and RSI carry theirs above)
+  macd_fast: number
+  macd_slow: number
+  macd_signal_period: number
+  bollinger_window: number
+  bollinger_std: number
+  lookback_days: number
 }
-export const getIndicators = (symbol: string, lookbackDays = 250) =>
-  apiGet<IndicatorSeries>(`/api/v1/market-data/indicators/${symbol}?lookback_days=${lookbackDays}`)
+export const getIndicators = (symbol: string, params: IndicatorParams = DEFAULT_PARAMS) =>
+  apiGet<IndicatorSeries>(`/api/v1/market-data/indicators/${encodeURIComponent(symbol)}?${indicatorQuery(params)}`)
+
+// ---- The trading holidays the calendar knows for a year ----
+export type HolidayEntry = {
+  date: string
+  weekday: string
+  name: string | null
+  source: string
+  // A holiday that falls on a Saturday or Sunday changes nothing: the exchange is shut anyway
+  on_weekend: boolean
+}
+export type Holidays = {
+  year: number
+  holidays: HolidayEntry[]
+  // False: the calendar file lists nothing for this year, so its movable holidays are being treated as trading days
+  calendar_file_covers_year: boolean
+  warning: string | null
+}
+export const getHolidays = (year?: number) =>
+  apiGet<Holidays>(`/api/v1/market-data/holidays${year === undefined ? '' : `?year=${year}`}`)
 
 // ---- Data lake provenance + status (Phase 23,
 // docs/phase20-old-vs-new-comparison.md item 35) -- `/provenance` is the
@@ -2201,6 +2229,10 @@ export type DatalakeStatus = {
   symbols_with_intraday_data: number
   most_recent_daily_data_date: string | null
   most_recent_intraday_data_date: string | null
+  // The day a backtest requires daily data for, and how many trading days the newest daily data is short of it
+  // (0 is current; null when the lake holds no daily data)
+  required_daily_data_date: string
+  daily_data_behind_trading_days: number | null
 }
 export const getDatalakeStatus = () =>
   apiGet<DatalakeStatus>('/api/v1/market-data/datalake/status')

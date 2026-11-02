@@ -1502,6 +1502,14 @@ class IndicatorSeriesResponse(BaseModel):
     bollinger_upper: list[float | None]
     bollinger_middle: list[float | None]
     bollinger_lower: list[float | None]
+    # What the series was computed with, so a chart's title says what is drawn (the SMA, EMA and RSI
+    # carry theirs above).
+    macd_fast: int
+    macd_slow: int
+    macd_signal_period: int
+    bollinger_window: int
+    bollinger_std: float
+    lookback_days: int
 
 
 class FreshnessRecordResponse(BaseModel):
@@ -1599,6 +1607,11 @@ class DatalakeStatusResponse(BaseModel):
     symbols_with_intraday_data: int
     most_recent_daily_data_date: date_type | None
     most_recent_intraday_data_date: date_type | None
+    # The day a backtest requires daily data for (the last trading day before today, IST), and how
+    # many trading days the newest daily data is short of it: 0 is current, null when the lake holds
+    # no daily data at all.
+    required_daily_data_date: date_type
+    daily_data_behind_trading_days: int | None
 
 
 class RunDailyIngestionRequest(BaseModel):

@@ -25,9 +25,9 @@ export const NAV_TARGETS: readonly NavTarget[] = [
   { label: 'Backtests', href: '/backtests', keywords: 'backtest monte carlo equity' },
   { label: 'Orders & Trades', href: '/orders', keywords: 'orders trades ledger fills' },
   { label: 'Paper Desk', href: '/paper-trading', keywords: 'paper trading subscriptions futures options legs costs positions' },
-  { label: 'Portfolio', href: '/portfolio', keywords: 'allocation recommendations risk metrics' },
-  { label: 'Market Analysis', href: '/analysis', keywords: 'vix sectors option chain indicators' },
-  { label: 'Investor Reports', href: '/investor-reports', keywords: 'report weekly monthly performance' },
+  { label: 'Portfolio', href: '/portfolio', keywords: 'allocation recommendations accept reject risk metrics' },
+  { label: 'Market Analysis', href: '/analysis', keywords: 'vix sectors option chain indicators holidays calendar trading days data lake providers' },
+  { label: 'Investor Reports', href: '/investor-reports', keywords: 'report weekly monthly performance download markdown' },
   { label: 'Audit Log', href: '/audit', keywords: 'audit hash chain integrity', requires: 'GET /api/v1/audit/entries' },
   { label: 'Settings', href: '/settings', keywords: 'config credentials skills risk limits' },
 ]
