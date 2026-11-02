@@ -33,7 +33,7 @@ test('a page reload restores the session from the cookie, with nothing stored fo
   await page.reload()
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('button', { name: E2E_USERS.admin.email })).toBeVisible()
+  await expect(page.getByRole('button', { name: E2E_USERS.admin.email, exact: true })).toBeVisible()
 
   // The long-lived credential is an HttpOnly cookie scoped to the auth routes ...
   const cookie = await refreshCookie(page)
@@ -58,7 +58,7 @@ test('tokens an earlier version kept in localStorage are removed on load', async
 test('signing out ends the session: the cookie goes and a reload lands on the sign-in page', async ({ page }) => {
   await login(page, E2E_USERS.admin)
 
-  await page.getByRole('button', { name: E2E_USERS.admin.email }).click()
+  await page.getByRole('button', { name: E2E_USERS.admin.email, exact: true }).click()
   await page.getByRole('button', { name: 'Logout' }).click()
   await expect(page).toHaveURL(/\/login$/, { timeout: 15_000 })
   expect(await refreshCookie(page)).toBeUndefined()
@@ -79,7 +79,7 @@ test('two tabs reloading together both stay signed in', async ({ page, context }
 
   await expect(page).toHaveURL('/')
   await expect(other).toHaveURL(/\/strategies$/)
-  await expect(other.getByRole('button', { name: E2E_USERS.admin.email })).toBeVisible()
+  await expect(other.getByRole('button', { name: E2E_USERS.admin.email, exact: true })).toBeVisible()
 })
 
 test('a session survives the session restore failing with no response at all', async ({ page }) => {

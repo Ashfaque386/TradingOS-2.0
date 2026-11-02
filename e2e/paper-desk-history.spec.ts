@@ -115,14 +115,20 @@ test('a fetch that works says what it got and what it replaced', async ({ page }
   await expect(page.getByRole('status').filter({ hasText: `Fetched 1,240 daily prices for ${seed.symbol} from zerodha (2021-11-02 to 2026-10-30). 12 generated rows were replaced.` })).toBeVisible()
 })
 
-test('the lane offers the fetch too, to an operator and to no one else', async ({ page }) => {
+test('the lane offers the fetch too, to an operator', async ({ page }) => {
   await login(page, E2E_USERS.pm)
   await stateAwaitingHistory(page)
   await openLane(page)
-  await expect(lane(page).getByRole('button', { name: 'Fetch price history' })).toBeVisible()
 
+  await expect(lane(page).getByRole('button', { name: 'Fetch price history' })).toBeVisible()
+})
+
+test('and to no one else', async ({ page }) => {
   await login(page, E2E_USERS.risk)
+  await stateAwaitingHistory(page)
   await openLane(page)
+
+  await expect(lane(page)).toContainText('Waiting for history')
   await expect(lane(page).getByRole('button', { name: 'Fetch price history' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Fetch price history' })).toHaveCount(0)
 })

@@ -47,7 +47,7 @@ test('no page runs into its own Content-Security-Policy', async ({ page }) => {
   const violations: string[] = []
   for (const path of PAGES) {
     await page.goto(path)
-    await expect(page.getByRole('button', { name: E2E_USERS.admin.email })).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByRole('button', { name: E2E_USERS.admin.email, exact: true })).toBeVisible({ timeout: 20_000 })
     await page.waitForTimeout(1_500) // let the page's own requests and sockets start
     const found = await page.evaluate(() => (window as unknown as Violations).__cspViolations)
     violations.push(...found.map((v) => `${path}: ${v}`))
