@@ -487,6 +487,12 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/strategies/{strategy_id}/suggestions": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/system/backups": [
     "SystemAdministrator"
   ],
@@ -517,6 +523,10 @@
   "PATCH /api/v1/chat/sessions/{session_id}": [
     "PortfolioManager",
     "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "PATCH /api/v1/live-trading/subscriptions/{subscription_id}": [
     "RiskManager",
     "SystemAdministrator"
   ],

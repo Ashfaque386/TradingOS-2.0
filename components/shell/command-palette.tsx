@@ -189,7 +189,7 @@ export function CommandPalette() {
       }
       if (strategiesRes.status === 'fulfilled') {
         for (const strategy of strategiesRes.value) {
-          next.push({ kind: 'strategy', name: strategy.name, detail: `${strategy.instrument_class} · ${strategy.status}`, href: '/strategies' })
+          next.push({ kind: 'strategy', name: strategy.name, detail: `${strategy.instrument_class} · ${strategy.status}`, href: `/strategies/${strategy.id}` })
         }
       }
       if (ordersRes.status === 'fulfilled') {

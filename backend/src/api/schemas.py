@@ -402,6 +402,10 @@ class SuggestionResponse(BaseModel):
     ai_verdict: dict[str, Any] | None
     regenerated_version_id: uuid.UUID | None
     regeneration_diff: str | None
+    # Who asked and when it was asked and reviewed: what a history of suggestions shows.
+    requested_by: str | None = None
+    created_at: datetime_type | None = None
+    reviewed_at: datetime_type | None = None
 
 
 class DecideApprovalRequest(BaseModel):
@@ -1341,6 +1345,52 @@ class LiveTradingSubscriptionResponse(BaseModel):
     max_intents_per_window: int
     rate_limit_window_minutes: int
     max_notional_per_intent: float
+
+
+class UpdateLiveSubscriptionRequest(BaseModel):
+    """Tighten a live subscription's standing limits, or switch it off. Never loosens a limit and
+    never switches one back on: those are a fresh enrolment. A reason is required and audited."""
+
+    max_intents_per_window: int | None = Field(default=None, gt=0)
+    rate_limit_window_minutes: int | None = Field(default=None, gt=0)
+    max_notional_per_intent: float | None = Field(default=None, gt=0)
+    intent_expiry_seconds: int | None = Field(default=None, gt=0, le=300)
+    deactivate: bool = False
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_says_something(cls, value: str) -> str:
+        value = value.strip()
+        if not 3 <= len(value) <= 500:
+            raise ValueError("give a reason of 3 to 500 characters")
+        return value
+
+    @model_validator(mode="after")
+    def _one_kind_of_change(self) -> "UpdateLiveSubscriptionRequest":
+        limits = (
+            self.max_intents_per_window,
+            self.rate_limit_window_minutes,
+            self.max_notional_per_intent,
+            self.intent_expiry_seconds,
+        )
+        named = any(v is not None for v in limits)
+        if self.deactivate and named:
+            raise ValueError("switching a subscription off takes no other change")
+        if not self.deactivate and not named:
+            raise ValueError("name a limit to tighten, or switch the subscription off")
+        return self
+
+
+class LiveLimitChange(BaseModel):
+    field: str
+    before: float
+    after: float
+
+
+class UpdateLiveSubscriptionResponse(BaseModel):
+    subscription: LiveTradingSubscriptionResponse
+    changes: list[LiveLimitChange]
 
 
 class SetAutonomousTradingRequest(BaseModel):

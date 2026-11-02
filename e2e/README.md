@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `strategies-logic.spec.ts` -- the line diff, the version and suggestion wording, the live limits form's rules, the live list's
+  order. No browser or backend.
+- `strategies-review.spec.ts` -- a strategy's own page against a real backend: its address and tabs, versions, the diff,
+  suggestions, and the live limits (tightening, the position guards, switching off, who may). It seeds strategies with
+  `scripts/seed_e2e_strategy_versions.py`, `seed_e2e_live_intent.py` and `seed_e2e_live_position.py`.
 - `backtests-logic.spec.ts` -- what the Backtests page decides: the form rules, the requests, a run's description, walk-forward
   windows, the optimisation's wording, Monte Carlo rows, the ledger's summary. No browser or backend.
 - `backtests-lake.spec.ts` -- backtests on the data lake against a real backend: a run from a share and two dates, its ledger,

@@ -200,6 +200,8 @@ critical_files = [
   "src/core/ws_ticket.py",
   "src/api/ws_auth.py",
   "src/observability/security_headers.py",
+  # ... what may still be changed about a live subscription, and which way ...
+  "src/orchestration/live_subscription_limits.py",
   # ... the gates a strategy or an order must pass through ...
   "src/orchestration/approvals.py",
   "src/orchestration/transitions.py",
@@ -325,6 +327,15 @@ tests = ["tests/test_client_ip.py"]
 # 6 survivors, none able to change what the module does: the two type aliases (`|` to `&`, or to None:
 # used only in annotations), `list[Network] = []` to `= None` (the next line then fails at import time
 # in every test), and a default of the `scheme` key to another string that is not "https" either.
+max_survivors = 6
+
+[[tool.tradingos.mutation.module]]
+path = "src/orchestration/live_subscription_limits.py"
+tests = ["tests/test_live_subscription_limits.py"]
+# 6 survivors, none able to change what the module does: the `Direction` alias (3: a type used only in
+# annotations), the name of the `raise` direction (anything that is not "lower" is read as raising),
+# and `>=` for `>` and `<=` for `<` in the looseness test (a value equal to the current one has
+# already been skipped, so the boundary is never reached).
 max_survivors = 6
 
 [[tool.tradingos.mutation.module]]

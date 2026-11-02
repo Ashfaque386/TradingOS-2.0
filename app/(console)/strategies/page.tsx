@@ -1,330 +1,20 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Code2, Gauge, MessageSquare, RefreshCw, ShieldAlert, ShieldCheck, Sparkles, Terminal, TrendingUp, X, Zap } from 'lucide-react'
+import { FormEvent, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { ArrowRight, ChevronRight, RefreshCw, TrendingUp } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
-import {
-  type EnrollLiveTradingInput,
-  type LiveOrderIntentDto,
-  type LiveTradingSubscriptionDto,
-  type Strategy,
-  type SuggestionDto,
-  ApiError,
-  createStrategy,
-  enrollLiveTrading,
-  generateLiveIntent,
-  getStrategy,
-  listLiveSubscriptions,
-  listStrategies,
-  promoteStrategy,
-  regenerateFromSuggestion,
-  requestLiveEligibility,
-  requestPromotion,
-  reviewSuggestion,
-  setLiveAutonomy,
-  submitSuggestion,
-} from '@/lib/api'
-import { GoLiveEvidencePanel } from '@/components/strategies/go-live-evidence'
-import { ShadowModePanel } from '@/components/strategies/shadow-mode-panel'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { type Strategy, ApiError, createStrategy, listStrategies } from '@/lib/api'
+import { Badge, type Stage, stageOf, stages } from '@/components/strategies/shared'
+import { LiveSubscriptions } from '@/components/strategies/live-subscriptions'
 import { ErrorNotice } from '@/components/ui/error-notice'
-import { TabList } from '@/components/ui/tab-list'
 import { can } from '@/lib/permissions'
 import { usePolling } from '@/lib/use-polling'
-
-type Stage = 'Ideation' | 'Coding' | 'Backtesting' | 'Paper Trading' | 'Live Eligible' | 'Live' | 'Deprecated'
-const stages: Stage[] = ['Ideation', 'Coding', 'Backtesting', 'Paper Trading', 'Live Eligible', 'Live', 'Deprecated']
-
-const STAGE_LABELS: Record<string, Stage> = {
-  Ideation: 'Ideation',
-  Coding: 'Coding',
-  Backtesting: 'Backtesting',
-  PaperTrading: 'Paper Trading',
-  LiveEligible: 'Live Eligible',
-  Live: 'Live',
-  Deprecated: 'Deprecated',
-}
-
-function stageOf(strategy: Strategy): Stage {
-  return STAGE_LABELS[strategy.status] ?? 'Ideation'
-}
-
-function Badge({ children, tone = 'cyan' }: { children: React.ReactNode; tone?: string }) {
-  return <span className={`strategy-badge tone-${tone}`}>{children}</span>
-}
-
-const ENROLL_DEFAULTS: Omit<EnrollLiveTradingInput, 'strategy_id'> = {
-  symbol: '',
-  broker_name: 'zerodha',
-  builtin_strategy: 'sma_crossover',
-  sma_window: 15,
-  initial_capital: 100_000,
-  stop_loss_pct: 3,
-  position_size_pct: 5,
-  intent_expiry_seconds: 90,
-  max_intents_per_window: 5,
-  rate_limit_window_minutes: 60,
-  max_notional_per_intent: 50_000,
-}
-
-function LiveTradingPanel({ strategyId, canOperate, canSignOffLive }: { strategyId: string; canOperate: boolean; canSignOffLive: boolean }) {
-  const [subscription, setSubscription] = useState<LiveTradingSubscriptionDto | null>(null)
-  const [loaded, setLoaded] = useState(false)
-  const [enrollForm, setEnrollForm] = useState({ ...ENROLL_DEFAULTS })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [confirmOpen, setConfirmOpen] = useState<'enable' | 'disable' | 'tick' | null>(null)
-  const [tickPrice, setTickPrice] = useState('')
-  const [lastIntent, setLastIntent] = useState<LiveOrderIntentDto | null>(null)
-
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  async function reload() {
-    try {
-      const subs = await listLiveSubscriptions()
-      setSubscription(subs.find((s) => s.strategy_id === strategyId) ?? null)
-      setLoaded(true)
-      setLoadError(null)
-    } catch (err) {
-      setLoadError(err instanceof Error && err.message ? err.message : 'Could not load the live trading status')
-    }
-  }
-
-  useEffect(() => {
-    reload()
-  }, [strategyId])
-
-  async function handleEnroll(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!enrollForm.symbol.trim() || !enrollForm.broker_name.trim()) return
-    setBusy(true)
-    setError(null)
-    try {
-      await enrollLiveTrading({
-        strategy_id: strategyId,
-        ...enrollForm,
-        symbol: enrollForm.symbol.trim().toUpperCase(),
-      })
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to enroll in live trading')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // Throws to keep the confirmation open with the reason; the dialog closes itself when this returns.
-  async function applyAutonomy(enable: boolean) {
-    if (!subscription) return
-    try {
-      setSubscription(await setLiveAutonomy(subscription.id, enable))
-    } catch (err) {
-      throw new Error(err instanceof ApiError ? err.message : 'Failed to update autonomous trading state')
-    }
-  }
-
-  async function generateTick() {
-    if (!subscription || !tickPrice.trim()) return
-    setError(null)
-    try {
-      setLastIntent(await generateLiveIntent(subscription.id, Number(tickPrice)))
-    } catch (err) {
-      throw new Error(err instanceof ApiError ? err.message : 'Failed to generate an intent from this tick')
-    }
-  }
-
-  // With autonomy on, a tick that produces a signal sends a real order, so it is confirmed like the switch is.
-  async function handleGenerateTick() {
-    if (!subscription || !tickPrice.trim()) return
-    if (subscription.autonomous_trading_enabled) return setConfirmOpen('tick')
-    setBusy(true)
-    try {
-      await generateTick()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate an intent from this tick')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (!loaded) {
-    return <div className="mt-6 rounded-xl border border-white/10 p-4">
-      <p className="eyebrow">LIVE TRADING · AUTONOMOUS EXECUTION</p>
-      {loadError
-        ? <ErrorNotice className="mt-3" message={`Could not load the live trading status, so enrolling and the switches are hidden: ${loadError}`} onRetry={() => void reload()} />
-        : <p className="mt-3 text-xs text-muted-foreground">Loading the live trading status…</p>}
-    </div>
-  }
-
-  return <div className="mt-6 rounded-xl border border-white/10 p-4">
-    <p className="eyebrow">LIVE TRADING · AUTONOMOUS EXECUTION</p>
-    {loadError && <ErrorNotice className="mt-3" message={`The status below may be out of date: ${loadError}`} onRetry={() => void reload()} />}
-    {!subscription && <>
-      <p className="mt-2 text-xs text-muted-foreground">No live-trading subscription yet for this strategy. Enrolling wires it into the autonomous execution pipeline -- autonomy itself stays off, by default, until explicitly enabled below.</p>
-      {canOperate ? <form onSubmit={handleEnroll} className="mt-3 grid grid-cols-2 gap-3 text-xs">
-        <label className="flex flex-col gap-1">Symbol<input value={enrollForm.symbol} onChange={(e) => setEnrollForm({ ...enrollForm, symbol: e.target.value })} placeholder="e.g. RELIANCE" className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
-        <label className="flex flex-col gap-1">Broker<select value={enrollForm.broker_name} onChange={(e) => setEnrollForm({ ...enrollForm, broker_name: e.target.value })} className="rounded border border-white/10 bg-black/20 px-2 py-1"><option value="zerodha">Zerodha</option><option value="upstox">Upstox</option></select></label>
-        <label className="flex flex-col gap-1">Max orders / window (standing cap)<input type="number" value={enrollForm.max_intents_per_window} onChange={(e) => setEnrollForm({ ...enrollForm, max_intents_per_window: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
-        <label className="flex flex-col gap-1">Window (minutes)<input type="number" value={enrollForm.rate_limit_window_minutes} onChange={(e) => setEnrollForm({ ...enrollForm, rate_limit_window_minutes: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
-        <label className="flex flex-col gap-1">Max notional / order (₹)<input type="number" value={enrollForm.max_notional_per_intent} onChange={(e) => setEnrollForm({ ...enrollForm, max_notional_per_intent: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
-        <label className="flex flex-col gap-1">Position size (% of capital)<input type="number" value={enrollForm.position_size_pct} onChange={(e) => setEnrollForm({ ...enrollForm, position_size_pct: Number(e.target.value) })} className="rounded border border-white/10 bg-black/20 px-2 py-1" /></label>
-        <div className="col-span-2"><button type="submit" disabled={busy || !enrollForm.symbol.trim()} className="button-secondary">Enroll in live trading</button></div>
-      </form> : <p className="mt-3 text-xs text-muted-foreground">Your role can view live-trading state but not enroll a subscription.</p>}
-    </>}
-    {subscription && <>
-      <div className="danger-banner mt-3">
-        {subscription.autonomous_trading_enabled ? <Zap className="size-4 text-emerald-300" /> : <ShieldAlert className="size-4" />}
-        <div>
-          <strong className={subscription.autonomous_trading_enabled ? 'text-emerald-300' : ''}>{subscription.autonomous_trading_enabled ? 'LIVE AUTONOMOUS TRADING IS ON' : 'Autonomous trading is OFF'}</strong>
-          <small>{subscription.symbol} via {subscription.broker_name} · {subscription.autonomous_trading_enabled ? `enabled by ${subscription.autonomy_enabled_by ?? 'unknown'}${subscription.autonomy_enabled_at ? ` at ${new Date(subscription.autonomy_enabled_at).toLocaleString()}` : ''}` : 'no order can be generated for this strategy until this is explicitly enabled'}</small>
-        </div>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
-        <span>Standing cap: {subscription.max_intents_per_window} orders / {subscription.rate_limit_window_minutes}m</span>
-        <span>Max notional/order: ₹{subscription.max_notional_per_intent.toLocaleString()}</span>
-      </div>
-      {canOperate && <div className="mt-4 rounded-lg border border-white/10 p-3">
-        <p className="eyebrow">SIMULATE A TICK · OPS VISIBILITY, NEVER REQUIRED</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">Runs the same step the scheduler runs on its own. <strong className="text-foreground">{subscription.autonomous_trading_enabled ? 'Autonomy is on, so a signal from this tick sends a real order to the broker.' : 'Autonomy is off, so this generates and sends nothing.'}</strong></p>
-        <div className="mt-2 flex gap-2"><input type="number" value={tickPrice} onChange={(e) => setTickPrice(e.target.value)} placeholder="tick price" className="min-w-0 flex-1 rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /><button disabled={busy || !tickPrice.trim()} onClick={handleGenerateTick} className="button-secondary">Generate intent</button></div>
-        {lastIntent === null && <p className="mt-2 text-[11px] text-muted-foreground">No intent yet this session.{!subscription.autonomous_trading_enabled && ' Autonomy is off, so a tick generates nothing.'}</p>}
-        {lastIntent && <p className="mt-2 text-[11px] text-muted-foreground">Last result: <strong className="text-foreground">{lastIntent.side.toUpperCase()} {lastIntent.quantity} {lastIntent.symbol}</strong> · status <strong className="text-foreground">{lastIntent.status.toUpperCase()}</strong></p>}
-      </div>}
-      {canSignOffLive ? <div className="mt-3">
-        {subscription.autonomous_trading_enabled
-          ? <button disabled={busy} onClick={() => setConfirmOpen('disable')} className="button-danger">Disable autonomous trading</button>
-          : <button disabled={busy} onClick={() => setConfirmOpen('enable')} className="button-primary"><Zap className="size-3" />Enable autonomous trading</button>}
-      </div> : <p className="mt-3 text-xs text-muted-foreground">Only SystemAdministrator/RiskManager can flip the autonomy switch.</p>}
-    </>}
-    {error && <div className="mt-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{error}</div>}
-    {confirmOpen && subscription && (
-      <ConfirmDialog
-        title={confirmOpen === 'tick' ? `Simulate a tick for ${subscription.symbol}` : confirmOpen === 'enable' ? `Enable live autonomous trading for ${subscription.symbol}` : `Disable live autonomous trading for ${subscription.symbol}`}
-        description={confirmOpen === 'tick'
-          ? `Autonomy is on for this strategy, so a signal from a tick at ${tickPrice} sends a real order to the broker, exactly as the scheduler would. Type the symbol to go ahead.`
-          : confirmOpen === 'enable'
-            ? "Once enabled, every real signal this strategy generates submits straight to the broker with no per-order human approval -- only the Kill Switch, Compliance Checker, Correlation Constraint, and this subscription's own standing rate/notional caps can stop an order. Type the symbol to confirm."
-            : 'This strategy stops generating any new live orders immediately. Type the symbol to confirm.'}
-        confirmLabel={confirmOpen === 'tick' ? 'Run the tick' : confirmOpen === 'enable' ? 'Confirm and enable autonomy' : 'Confirm and disable autonomy'}
-        tone={confirmOpen === 'disable' ? 'default' : 'danger'}
-        phrase={subscription.symbol}
-        onConfirm={() => (confirmOpen === 'tick' ? generateTick() : applyAutonomy(confirmOpen === 'enable'))}
-        onClose={() => setConfirmOpen(null)}
-      />
-    )}
-  </div>
-}
-
-function Review({ strategyId, onBack, canOperate, canSignOffLive }: { strategyId: string; onBack: () => void; canOperate: boolean; canSignOffLive: boolean }) {
-  const [strategy, setStrategy] = useState<Strategy | null>(null)
-  const [tab, setTab] = useState('Overview')
-  const [feedback, setFeedback] = useState('')
-  const [suggestion, setSuggestion] = useState<SuggestionDto | null>(null)
-  const [submittingSuggestion, setSubmittingSuggestion] = useState(false)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  async function reload() {
-    try {
-      setStrategy(await getStrategy(strategyId))
-      setLoadError(null)
-    } catch (err) {
-      setLoadError(err instanceof Error && err.message ? err.message : 'Could not load this strategy')
-    }
-  }
-
-  useEffect(() => {
-    reload()
-  }, [strategyId])
-
-  if (!strategy) {
-    return <div className="mx-auto w-full max-w-[1700px] p-8 text-sm text-muted-foreground">
-      {loadError
-        ? <ErrorNotice message={`Could not load this strategy: ${loadError}`} onRetry={() => void reload()} />
-        : 'Loading strategy…'}
-      <button type="button" className="button-secondary mt-4" onClick={onBack}><ArrowLeft className="size-3" />Back to the board</button>
-    </div>
-  }
-
-  const latestVersion = strategy.versions[strategy.versions.length - 1] ?? null
-  const stage = stageOf(strategy)
-  const isOptions = strategy.instrument_class === 'options'
-
-  async function handleSubmitFeedback() {
-    if (!feedback.trim() || !latestVersion) return
-    setSubmittingSuggestion(true)
-    setActionError(null)
-    try {
-      const submitted = await submitSuggestion(strategy!.id, latestVersion.id, feedback.trim())
-      const reviewed = await reviewSuggestion(strategy!.id, submitted.id)
-      setSuggestion(reviewed)
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : 'Failed to submit suggestion')
-    } finally {
-      setSubmittingSuggestion(false)
-    }
-  }
-
-  async function handleRegenerate() {
-    if (!suggestion) return
-    setBusy(true)
-    setActionError(null)
-    try {
-      await regenerateFromSuggestion(strategy!.id, suggestion.id)
-      setSuggestion(null)
-      setFeedback('')
-      await reload()
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : 'Failed to regenerate')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleLifecycleAction(action: 'request-promotion' | 'promote' | 'request-live') {
-    setBusy(true)
-    setActionError(null)
-    try {
-      if (action === 'request-promotion') await requestPromotion(strategy!.id)
-      else if (action === 'promote') await promoteStrategy(strategy!.id)
-      else await requestLiveEligibility(strategy!.id)
-      await reload()
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : `Failed: ${action}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return <div className="mx-auto w-full max-w-[1700px]">
-    <button onClick={onBack} className="mb-4 flex items-center gap-2 text-xs text-cyan-200 transition hover:text-white"><ArrowLeft className="size-4" /> Back to lifecycle board</button>
-    <div className="strategy-review-hero"><div><div className="flex flex-wrap items-center gap-2"><Badge>{strategy.instrument_class}</Badge><Badge tone="green">{stage}</Badge><span className="font-mono text-[10px] text-slate-500">STRATEGY ID · {strategy.id.slice(0, 8).toUpperCase()}</span></div><h1 className="mt-3 text-2xl font-semibold tracking-tight text-white">{strategy.name}</h1><p className="mt-2 max-w-3xl text-sm text-slate-400">{strategy.objective}</p></div><div className="strategy-review-score"><span>VERSIONS</span><strong>{strategy.versions.length}</strong><small>{latestVersion?.static_validation_passed ? 'latest passes static validation' : 'latest failing validation'}</small></div></div>
-    {actionError && <div className="mt-3 rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{actionError}</div>}
-    <TabList label="Strategy views" className="strategy-tabs">{['Overview', 'Code', ...(isOptions ? ['Options Legs'] : []), 'Lifecycle', ...(stage === 'Backtesting' ? [] : ['Shadow Mode'])].map(item => <button key={item} role="tab" aria-selected={tab === item} tabIndex={tab === item ? 0 : -1} onClick={() => setTab(item)} className={tab === item ? 'active' : ''}>{item === 'Code' ? <Code2 className="size-3.5" /> : item === 'Lifecycle' ? <Gauge className="size-3.5" /> : null}{item}</button>)}</TabList>
-    <div className="strategy-review-panel">
-      {tab === 'Overview' && <div className="review-content"><div className="review-icon"><Sparkles className="size-5" /></div><p className="eyebrow">STRATEGY OBJECTIVE</p><h2>{strategy.objective}</h2><div className="logic-grid"><div><span>INSTRUMENT CLASS</span><strong>{strategy.instrument_class}</strong></div><div><span>STATUS</span><strong>{strategy.status}</strong></div><div><span>STATIC VALIDATION</span><strong>{latestVersion?.static_validation_passed ? 'Passed' : 'Failed'}</strong></div><div><span>SANDBOX</span><strong>{latestVersion?.sandbox_passed === null ? 'Not run' : latestVersion?.sandbox_passed ? 'Passed' : 'Failed'}</strong></div></div>{latestVersion?.static_validation_errors && latestVersion.static_validation_errors.length > 0 && <div className="mt-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">{latestVersion.static_validation_errors.join(', ')}</div>}</div>}
-      {tab === 'Code' && <div className="review-content"><div className="code-toolbar"><span><Terminal className="size-4 text-cyan-300" /> generated_strategy.py · v{latestVersion?.version_number ?? '—'}</span><Badge tone="green">READ ONLY</Badge></div><pre className="strategy-code"><code>{latestVersion?.code ?? '// no version generated yet'}</code></pre>{canOperate && <div className="feedback-box"><label htmlFor="feedback">Suggest Improvement</label><div className="flex gap-2"><textarea id="feedback" value={feedback} onChange={e => setFeedback(e.target.value)} placeholder="Ask the AI reviewer to improve risk controls, clarity, or execution logic..." /><button disabled={!feedback.trim() || submittingSuggestion || !latestVersion} onClick={handleSubmitFeedback}>{submittingSuggestion ? <RefreshCw className="size-4 animate-spin" /> : <MessageSquare className="size-4" />} Submit</button></div>{suggestion?.ai_verdict && <div className="verdict"><Sparkles className="size-4 text-violet-300" /><div><strong>AI Review Verdict · {String(suggestion.ai_verdict.verdict ?? suggestion.status)}</strong><p>{String(suggestion.ai_verdict.notes ?? suggestion.ai_verdict.summary ?? JSON.stringify(suggestion.ai_verdict))}</p><button disabled={busy} onClick={handleRegenerate} className="button-secondary mt-3"><RefreshCw className="size-3" />Regenerate version from suggestion</button></div></div>}</div>}</div>}
-      {tab === 'Options Legs' && <div className="review-content"><div className="flex items-center justify-between"><div><p className="eyebrow">DEFINED RISK STRUCTURE</p><h2 className="mt-2">Options legs</h2></div>{latestVersion?.options_legs && <Badge tone="green"><ShieldCheck className="size-3" /> {String((latestVersion.options_legs as Record<string, unknown>).naked_scan_status ?? 'grounded')}</Badge>}</div><pre className="strategy-code mt-4"><code>{latestVersion?.options_legs ? JSON.stringify(latestVersion.options_legs, null, 2) : 'No options legs recorded for this version.'}</code></pre></div>}
-      {tab === 'Shadow Mode' && <ShadowModePanel strategyId={strategy.id} defaultSymbol="" canRun={canOperate || canSignOffLive} />}
-      {tab === 'Lifecycle' && <div className="review-content">
-        <div className="readiness-banner"><Gauge className="size-5" /><div><strong>Current stage: {stage}</strong><p>Advance this strategy through the real pipeline gates below.</p></div></div>
-        {canOperate && stage === 'Backtesting' && <div className="mt-4 flex gap-2"><button disabled={busy} onClick={() => handleLifecycleAction('request-promotion')} className="button-secondary">Request promotion to paper trading</button><button disabled={busy} onClick={() => handleLifecycleAction('promote')} className="button-primary"><Check className="size-3" />Promote (after approval)</button></div>}
-        {canSignOffLive && stage === 'Paper Trading' && <div className="mt-4"><button disabled={busy} onClick={() => handleLifecycleAction('request-live')} className="button-secondary">Request live-eligibility sign-off</button></div>}
-        {(stage === 'Paper Trading' || stage === 'Live Eligible') && <GoLiveEvidencePanel strategyId={strategy.id} stage={stage} canSignOff={canSignOffLive} onChanged={reload} />}
-        {(stage === 'Live Eligible' || stage === 'Live') && <LiveTradingPanel strategyId={strategy.id} canOperate={canOperate} canSignOffLive={canSignOffLive} />}
-        {!canOperate && !canSignOffLive && <p className="mt-4 text-xs text-muted-foreground">Your role has read-only access to lifecycle actions.</p>}
-      </div>}
-    </div>
-  </div>
-}
 
 export default function StrategiesPage() {
   const { role } = useAuth()
   const canOperate = can(role, 'POST /api/v1/strategies')
-  const canSignOffLive = can(role, 'POST /api/v1/strategies/{strategy_id}/approve-live-eligibility')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const router = useRouter()
   const [name, setName] = useState('')
   const [objective, setObjective] = useState('')
   const [instrumentClass, setInstrumentClass] = useState('equity')
@@ -356,8 +46,6 @@ export default function StrategiesPage() {
     }
   }
 
-  if (selectedId) return <><Review strategyId={selectedId} onBack={() => setSelectedId(null)} canOperate={canOperate} canSignOffLive={canSignOffLive} /></>
-
   return <><div className="mx-auto w-full max-w-[1700px]">
     <div className="strategy-page-header"><div><p className="eyebrow">TRADINGOS // STRATEGY CONTROL PLANE</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] text-white">Strategy lifecycle</h1><p className="mt-2 text-sm text-slate-400">From generated hypothesis to controlled live capital. Select a strategy to open its review workspace.</p></div><div className="strategy-header-stats"><div><strong>{strategies.length}</strong><span>TRACKED</span></div><div><strong>{strategies.filter(s => !['Ideation', 'Live', 'Deprecated'].includes(stageOf(s))).length.toString().padStart(2, '0')}</strong><span>IN FLIGHT</span></div><div><strong className="text-emerald-300">{strategies.filter(s => stageOf(s) === 'Live').length.toString().padStart(2, '0')}</strong><span>LIVE</span></div></div></div>
     {canOperate && <form onSubmit={handleCreate} className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/[.02] p-3">
@@ -368,6 +56,7 @@ export default function StrategiesPage() {
       {createError && <span className="text-xs text-rose-300">{createError}</span>}
       {loadError && <ErrorNotice className="w-full" message={`Could not load the strategies: ${loadError}`} onRetry={() => void reload()} />}
     </form>}
-    <div className="strategy-board">{stages.map((stage, index) => <section className="strategy-column" key={stage}><div className="strategy-column-title"><div><span className="stage-index">0{index + 1}</span><h2>{stage}</h2></div><span className="stage-count">{grouped[stage].length}</span></div><div className="strategy-cards">{grouped[stage].map(item => <button className="strategy-card" key={item.id} onClick={() => setSelectedId(item.id)}><div className="flex items-start justify-between gap-2"><Badge tone={item.instrument_class === 'options' ? 'violet' : 'cyan'}>{item.instrument_class}</Badge><span className="font-mono text-[10px] text-slate-500">{item.versions.length} ver</span></div><h3>{item.name}</h3><div className="flex items-center justify-between gap-2"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><TrendingUp className="size-3" /> {item.versions[item.versions.length - 1]?.static_validation_passed ? 'validated' : 'awaiting validation'}</span></div><div className="mt-3 flex items-center justify-between border-t border-white/8 pt-2 text-[10px] text-slate-500"><span>REVIEW WORKSPACE</span><ChevronRight className="size-3.5 text-cyan-300" /></div></button>)}</div></section>)}</div>
+    <div className="strategy-board">{stages.map((stage, index) => <section className="strategy-column" key={stage}><div className="strategy-column-title"><div><span className="stage-index">0{index + 1}</span><h2>{stage}</h2></div><span className="stage-count">{grouped[stage].length}</span></div><div className="strategy-cards">{grouped[stage].map(item => <button className="strategy-card" key={item.id} onClick={() => router.push(`/strategies/${item.id}`)}><div className="flex items-start justify-between gap-2"><Badge tone={item.instrument_class === 'options' ? 'violet' : 'cyan'}>{item.instrument_class}</Badge><span className="font-mono text-[10px] text-slate-500">{item.versions.length} ver</span></div><h3>{item.name}</h3><div className="flex items-center justify-between gap-2"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><TrendingUp className="size-3" /> {item.versions[item.versions.length - 1]?.static_validation_passed ? 'validated' : 'awaiting validation'}</span></div><div className="mt-3 flex items-center justify-between border-t border-white/8 pt-2 text-[10px] text-slate-500"><span>REVIEW WORKSPACE</span><ChevronRight className="size-3.5 text-cyan-300" /></div></button>)}</div></section>)}</div>
+    <LiveSubscriptions strategies={strategies} />
   </div></>
 }

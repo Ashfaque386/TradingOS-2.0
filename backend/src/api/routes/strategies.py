@@ -66,6 +66,7 @@ register_policy("POST", "/api/v1/strategies", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/strategies", roles=list(Role))
 register_policy("GET", "/api/v1/strategies/{strategy_id}", roles=list(Role))
 register_policy("GET", "/api/v1/strategies/{strategy_id}/go-live-evidence", roles=list(Role))
+register_policy("GET", "/api/v1/strategies/{strategy_id}/suggestions", roles=list(Role))
 # Submitting a suggestion writes a row and feeds the regeneration flow, so it is an operator
 # action like its review and regenerate steps; it was open to every role, the read-only
 # auditor included.
@@ -147,6 +148,24 @@ async def get_strategy_endpoint(
     _current_user: User = Depends(require_role),
 ) -> StrategyResponse:
     return await _load_strategy_response(db, strategy_id)
+
+
+@router.get("/{strategy_id}/suggestions")
+async def list_suggestions_endpoint(
+    strategy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> list[SuggestionResponse]:
+    """Every improvement suggestion made for this strategy, newest first, with the AI reviewer's
+    verdict and, once regenerated, the version it produced and what changed."""
+    if await db.get(Strategy, strategy_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    rows = await db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.strategy_id == strategy_id)
+        .order_by(StrategySuggestion.created_at.desc())
+    )
+    return [SuggestionResponse.model_validate(s) for s in rows.scalars().all()]
 
 
 @router.post("/{strategy_id}/suggestions", status_code=status.HTTP_201_CREATED)

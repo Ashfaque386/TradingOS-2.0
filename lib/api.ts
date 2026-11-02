@@ -944,6 +944,22 @@ export const setLiveAutonomy = (subscriptionId: string, enabled: boolean) =>
 // Manual intent-generation trigger -- exercises the exact same
 // generate_live_order_intent function the scheduler calls automatically;
 // useful for ops visibility and demonstration, never a required step.
+/** Tighten a live subscription's limits (each may only get stricter), or switch it off for good. A
+ * reason is required and audited. Administrator and risk manager only. */
+export type UpdateLiveSubscriptionInput = {
+  max_intents_per_window?: number
+  rate_limit_window_minutes?: number
+  max_notional_per_intent?: number
+  intent_expiry_seconds?: number
+  deactivate?: boolean
+  reason: string
+}
+export type LiveLimitChange = { field: string; before: number; after: number }
+export const updateLiveSubscription = (subscriptionId: string, body: UpdateLiveSubscriptionInput) =>
+  apiPatch<{ subscription: LiveTradingSubscriptionDto; changes: LiveLimitChange[] }>(
+    `/api/v1/live-trading/subscriptions/${subscriptionId}`,
+    body,
+  )
 export const generateLiveIntent = (subscriptionId: string, tickPrice: number) =>
   apiPost<LiveOrderIntentDto | null>(
     `/api/v1/live-trading/subscriptions/${subscriptionId}/generate-intent`,
@@ -1253,6 +1269,10 @@ export type SuggestionDto = {
   ai_verdict: Record<string, unknown> | null
   regenerated_version_id: string | null
   regeneration_diff: string | null
+  // Who asked and when it was asked and reviewed.
+  requested_by: string | null
+  created_at: string | null
+  reviewed_at: string | null
 }
 
 export type GoLiveReadinessInput = {
@@ -1270,6 +1290,10 @@ export type GoLiveReadinessResult = {
 }
 
 export const listStrategies = () => apiGet<Strategy[]>('/api/v1/strategies')
+
+/** Every improvement suggestion made for a strategy, newest first. */
+export const listStrategySuggestions = (strategyId: string) =>
+  apiGet<SuggestionDto[]>(`/api/v1/strategies/${strategyId}/suggestions`)
 export const getStrategy = (strategyId: string) => apiGet<Strategy>(`/api/v1/strategies/${strategyId}`)
 export const createStrategy = (name: string, objective: string, instrumentClass: string) =>
   apiPost<Strategy>('/api/v1/strategies', { name, objective, instrument_class: instrumentClass })

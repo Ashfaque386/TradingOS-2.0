@@ -162,6 +162,10 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         I,
         "a repeat is a documented 200; the domain function writes no row either",
     ),
+    ("PATCH", "/live-trading/subscriptions/{subscription_id}"): (
+        X,
+        "tests/test_live_subscription_limits.py::test_a_change_that_changes_nothing_is_refused_and_not_audited",
+    ),
     ("POST", "/live-trading/subscriptions/{subscription_id}/generate-intent"): (
         N,
         "evaluates a tick and reports the intent or null",

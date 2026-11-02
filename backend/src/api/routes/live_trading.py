@@ -25,6 +25,7 @@ from src.api.paging import set_total_count
 from src.api.schemas import (
     EnrollLiveTradingRequest,
     GenerateLiveOrderIntentRequest,
+    LiveLimitChange,
     LiveOrderIntentResponse,
     LivePositionResponse,
     LiveTradingSubscriptionResponse,
@@ -32,6 +33,8 @@ from src.api.schemas import (
     RunDailySignalRequest,
     SetAutonomousTradingRequest,
     TradeResponse,
+    UpdateLiveSubscriptionRequest,
+    UpdateLiveSubscriptionResponse,
 )
 from src.brokers.base import BrokerAdapter
 from src.brokers.factory import build_configured_adapter
@@ -47,6 +50,8 @@ from src.models.order import Order
 from src.models.trade import Trade
 from src.models.user import User
 from src.observability.audit_middleware import skip_audit_entry
+from src.orchestration.live_subscription_limits import LimitChangeRefused
+from src.orchestration.live_subscription_updates import deactivate_subscription, tighten_limits
 from src.orchestration.live_trading import (
     StrategyNotLiveEligibleError,
     SubscriptionNotFoundError,
@@ -73,6 +78,11 @@ register_policy("GET", "/api/v1/live-trading/subscriptions/{subscription_id}", r
 register_policy(
     "POST",
     "/api/v1/live-trading/subscriptions/{subscription_id}/autonomy",
+    roles=_LIVE_SIGNOFF_ROLES,
+)
+register_policy(
+    "PATCH",
+    "/api/v1/live-trading/subscriptions/{subscription_id}",
     roles=_LIVE_SIGNOFF_ROLES,
 )
 register_policy("GET", "/api/v1/live-trading/strategies/{strategy_id}/position", roles=list(Role))
@@ -238,6 +248,45 @@ async def get_subscription_endpoint(
     if subscription is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
     return _subscription_response(subscription)
+
+
+@router.patch("/subscriptions/{subscription_id}")
+async def update_subscription_endpoint(
+    subscription_id: uuid.UUID,
+    body: UpdateLiveSubscriptionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> UpdateLiveSubscriptionResponse:
+    """Makes a live subscription's standing limits stricter, or switches it off for good, with a
+    reason that is audited. The administrator and the risk manager only (the same pair as the
+    autonomy switch). It never loosens a limit and never switches a subscription back on: both are
+    a fresh enrolment. See `src.orchestration.live_subscription_limits` for the rules."""
+    actor = str(current_user.id)
+    try:
+        if body.deactivate:
+            subscription = await deactivate_subscription(
+                db, subscription_id, actor=actor, reason=body.reason
+            )
+            changes: list[LiveLimitChange] = [LiveLimitChange(field="is_active", before=1, after=0)]
+        else:
+            requested = {
+                name: value
+                for name, value in body.model_dump(exclude={"reason", "deactivate"}).items()
+                if value is not None
+            }
+            subscription, applied = await tighten_limits(
+                db, subscription_id, actor=actor, reason=body.reason, requested=requested
+            )
+            changes = [
+                LiveLimitChange(field=c.field, before=c.before, after=c.after) for c in applied
+            ]
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except LimitChangeRefused as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return UpdateLiveSubscriptionResponse(
+        subscription=_subscription_response(subscription), changes=changes
+    )
 
 
 @router.get("/strategies/{strategy_id}/position")
