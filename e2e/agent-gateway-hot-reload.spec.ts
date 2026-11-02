@@ -5,6 +5,35 @@ import { E2E_USERS, login, API_BASE_URL } from './utils'
 
 const CONFIG_PATH = path.resolve(__dirname, '../config/tradingos.config.json')
 
+type Version = { id: number; status: string }
+
+async function listVersions(token: string): Promise<Version[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/gateway/config/versions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return (await res.json()) as Version[]
+}
+
+// Returns once no version has been added for 3 seconds. A config write made through the API (an earlier
+// spec's) is applied a second time by the file watcher when it notices the change, a moment later
+// (src/gateway/service.py calls it "a harmless extra version row"); it must not arrive after this test
+// has read where the history stands and be taken for the test's own.
+async function waitUntilVersionsSettle(token: string): Promise<void> {
+  const giveUpAt = Date.now() + 30_000
+  let newest = -1
+  let since = Date.now()
+  while (Date.now() < giveUpAt) {
+    const top = (await listVersions(token))[0]?.id ?? 0
+    if (top !== newest) {
+      newest = top
+      since = Date.now()
+    } else if (Date.now() - since >= 3_000) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+}
+
 // Build Spec §21-22 hardening pass: src/gateway/watcher.py hot-reloads
 // config/tradingos.config.json on every filesystem change, re-running the
 // exact same apply pipeline the CLI and (later) the API use
@@ -27,6 +56,7 @@ test('an invalid hot-reloaded config is rejected and the app keeps running on th
   })
   const { access_token: token } = (await loginRes.json()) as { access_token: string }
 
+  await waitUntilVersionsSettle(token)
   const beforeRes = await fetch(`${API_BASE_URL}/api/v1/gateway/config`, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -40,16 +70,11 @@ test('an invalid hot-reloaded config is rejected and the app keeps running on th
     // Poll for the watcher's own version-history row rather than a fixed
     // sleep -- inotify plus this pipeline's DB write is normally
     // sub-second, but never assert on timing you don't control.
-    let versions: { id: number; status: string }[] = []
+    let rejected = undefined as Version | undefined // assigned inside the retried function, which TypeScript does not follow
     await expect(async () => {
-      const res = await fetch(`${API_BASE_URL}/api/v1/gateway/config/versions`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      versions = (await res.json()) as { id: number; status: string }[]
-      expect(versions[0]?.id).toBeGreaterThan(before.version_id)
+      rejected = (await listVersions(token)).find((v) => v.id > before.version_id && v.status === 'rejected')
+      expect(rejected).toBeDefined()
     }).toPass({ timeout: 15_000 })
-
-    expect(versions[0]!.status).toBe('rejected')
 
     // The app must still be running on the last-known-good config -- the
     // "Current" version is unchanged, and the resolved config an operator
@@ -66,7 +91,7 @@ test('an invalid hot-reloaded config is rejected and the app keeps running on th
     // still points at the pre-existing good version.
     await login(page, E2E_USERS.admin)
     await page.goto('/settings')
-    await expect(page.getByText(`v${versions[0]!.id}`)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(`v${rejected!.id}`)).toBeVisible({ timeout: 10_000 })
     const currentRow = page.locator('li', { has: page.getByText('Current', { exact: true }) })
     await expect(currentRow.getByText(`v${before.version_id}`, { exact: true })).toBeVisible()
 

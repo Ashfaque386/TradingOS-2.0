@@ -125,6 +125,7 @@ test('an entity opens its whole trace, oldest first, and the log can be narrowed
 
   const dialog = page.getByRole('dialog', { name: `Everything recorded for ${entityId}` })
   await expect(dialog).toBeVisible()
+  await expect(dialog.locator('.audit-trace-seq').first()).toBeVisible() // the trace fills when its request answers
   const sequences = (await dialog.locator('.audit-trace-seq').allInnerTexts()).map((s) => Number(s.replace('#', '')))
   expect(sequences.length).toBeGreaterThan(0)
   expect(sequences).toEqual([...sequences].sort((a, b) => a - b)) // oldest first
@@ -157,6 +158,7 @@ test('an actor opens a summary of what they have done, and the log can be narrow
   await expect(dialog.getByText('First seen')).toBeVisible()
   await expect(dialog.getByText('Last seen')).toBeVisible()
   await expect(dialog.getByRole('table', { name: 'Actions, most frequent first' })).toBeVisible()
+  await expect(dialog.locator('.audit-share-table tbody td:nth-child(2)').first()).toBeVisible()
   const counts = (await dialog.locator('.audit-share-table tbody td:nth-child(2)').allInnerTexts()).map((c) => Number(c.replace(/,/g, '')))
   expect(counts.length).toBeGreaterThan(0)
   expect(counts).toEqual([...counts].sort((a, b) => b - a)) // most frequent first
