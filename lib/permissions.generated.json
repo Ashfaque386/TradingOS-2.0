@@ -50,7 +50,19 @@
     "RiskManager",
     "SystemAdministrator"
   ],
+  "GET /api/v1/agents/skills": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/agents/{agent_id}/activity": [
+    "PortfolioManager",
+    "ReadOnlyAuditor",
+    "RiskManager",
+    "SystemAdministrator"
+  ],
+  "GET /api/v1/agents/{agent_id}/narration": [
     "PortfolioManager",
     "ReadOnlyAuditor",
     "RiskManager",
@@ -520,6 +532,9 @@
   "PATCH /api/v1/admin/users/{user_id}/role": [
     "SystemAdministrator"
   ],
+  "PATCH /api/v1/agents/{agent_id}": [
+    "SystemAdministrator"
+  ],
   "PATCH /api/v1/chat/sessions/{session_id}": [
     "PortfolioManager",
     "ReadOnlyAuditor",
@@ -869,6 +884,9 @@
     "SystemAdministrator"
   ],
   "PUT /api/v1/gateway/config": [
+    "SystemAdministrator"
+  ],
+  "PUT /api/v1/gateway/llm-provider-order": [
     "SystemAdministrator"
   ],
   "PUT /api/v1/memory/settings": [

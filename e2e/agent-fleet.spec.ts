@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { E2E_USERS, api, login, tokenFor } from './utils'
+import { E2E_USERS, api, configVersion, login, tokenFor } from './utils'
 
 // Agent Fleet: the roster, the per-agent workspace, and who may edit an agent. Editing an identity
 // writes the gateway config file, so a spec that changes one puts it back.
@@ -68,6 +68,7 @@ test('only an administrator can edit an identity, and a cleared field stays clea
     await api(adminToken, '/api/v1/agents/ceo-agent/identity', {
       method: 'PUT',
       body: { name: before.display_name, emoji: before.emoji ?? '' },
+      headers: (await configVersion(adminToken)).ifMatch,
     })
   }
 })

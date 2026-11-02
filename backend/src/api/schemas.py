@@ -219,6 +219,9 @@ class AgentSummaryResponse(BaseModel):
     # "this agent's own subject matter has no backing data anywhere," not
     # "this agent isn't wired to the LangGraph pipeline."
     has_data_source: bool
+    # The config version these settings are from: a console edit sends it back in If-Match,
+    # and is refused if the config has moved on since.
+    config_version_id: int | None = None
 
 
 class RunPipelineRequest(BaseModel):
@@ -274,6 +277,48 @@ class SetAgentIdentityRequest(BaseModel):
     avatar: str | None = None
     theme: str | None = None
     voice: str | None = None
+
+
+class UpdateAgentSettingsRequest(BaseModel):
+    """What to change about one agent; a field left out is left alone. Sent with the config
+    version the editor read, in If-Match."""
+
+    enabled: bool | None = None
+    heartbeat_enabled: bool | None = None
+    heartbeat_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    skills: list[str] | None = Field(default=None, max_length=32)
+
+
+class UpdateAgentSettingsResponse(BaseModel):
+    status: str
+    version_id: int
+    errors: list[str]
+    # The settings that actually changed ("enabled", "skills", ...)
+    changed: list[str]
+
+
+class UpdateLlmProviderOrderRequest(BaseModel):
+    order: list[str] = Field(min_length=1, max_length=16)
+
+
+class SkillCatalogEntryResponse(BaseModel):
+    skill_id: str
+    summary: str
+    effect: Literal["read", "action"]
+    # False: a placeholder with the real interface that returns an empty result
+    working: bool
+    granted_to: list[str]
+
+
+class NarrationLineResponse(BaseModel):
+    kind: Literal["state", "heartbeat", "work", "gap"]
+    text: str
+
+
+class AgentNarrationResponse(BaseModel):
+    agent_id: str
+    as_of: str
+    lines: list[NarrationLineResponse]
 
 
 class PromptVersionResponse(BaseModel):

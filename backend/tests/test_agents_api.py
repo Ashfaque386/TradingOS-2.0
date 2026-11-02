@@ -33,6 +33,17 @@ def _isolated_gateway_config(tmp_path):
     app.dependency_overrides.pop(_config_path, None)
 
 
+async def _apply_isolated_config(db_session_factory) -> dict[str, str]:
+    """Applies the per-test copy of the config, as startup does, and returns the `If-Match` header
+    a console edit sends: the version it read."""
+    from src.gateway.apply import apply_config_from_file
+
+    path = app.dependency_overrides[_config_path]()
+    async with db_session_factory() as db:
+        result = await apply_config_from_file(db, path, source="test-seed")
+    return {"If-Match": f'"{result.version_id}"'}
+
+
 async def _login(client: AsyncClient, email: str, password: str) -> str:
     resp = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert resp.status_code == 200
@@ -99,10 +110,11 @@ async def test_run_pipeline_endpoint_reaches_deployment(client, make_user):
     assert body["deployment_result"] == {"simulated": True, "deployed": True, "target": "paper"}
 
 
-async def test_set_identity_updates_only_given_fields(client, make_user):
+async def test_set_identity_updates_only_given_fields(client, make_user, db_session_factory):
     await make_user("admin1@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
     token = await _login(client, "admin1@example.com", "supersecret1")
     headers = {"Authorization": f"Bearer {token}"}
+    headers |= await _apply_isolated_config(db_session_factory)
 
     resp = await client.put(
         "/api/v1/agents/ceo-agent/identity",
@@ -111,6 +123,8 @@ async def test_set_identity_updates_only_given_fields(client, make_user):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "active"
+    # a second save is made on the version the first one produced
+    headers["If-Match"] = f'"{resp.json()["version_id"]}"'
 
     listing = await client.get("/api/v1/agents", headers=headers)
     by_id = {a["agent_id"]: a for a in listing.json()}
@@ -143,14 +157,15 @@ async def test_set_identity_requires_admin_role(client, make_user):
     assert resp.status_code == 403
 
 
-async def test_set_identity_404s_for_unknown_agent(client, make_user):
+async def test_set_identity_404s_for_unknown_agent(client, make_user, db_session_factory):
     await make_user("admin2@example.com", "supersecret1", Role.SYSTEM_ADMINISTRATOR)
     token = await _login(client, "admin2@example.com", "supersecret1")
+    if_match = await _apply_isolated_config(db_session_factory)
 
     resp = await client.put(
         "/api/v1/agents/not-a-real-agent/identity",
         json={"name": "Nope"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}"} | if_match,
     )
     assert resp.status_code == 404
 

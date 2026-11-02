@@ -117,6 +117,7 @@ this is where it stands.
 | Market Analysis, and the holiday route with no screen | The indicator periods can be chosen (each bounded, refused in its own words, and shown in the chart titles from what the server computed with); a period longer than the history is named; a Holiday Calendar tab lists the year with weekend holidays marked and warns when the calendar file does not cover it; the data lake page says how many trading days behind the newest daily data is and shows a failed run's error; each LLM provider shows when it last answered or failed; the view is in the address; times are India's. |
 | Investor Reports | A report is read as a document and saved as a Markdown file; the form opens on the period the scheduler would report and the server refuses a period that is backwards, in the future or too long for its cadence; a hand-made report says who made it; a history that cannot be loaded is said to every role. |
 | Portfolio | Each of the three reads fails on its own; the net P&L is shown beside the gross and the costs; accepting or rejecting a recommendation is confirmed first. |
+| Agent Fleet and the gateway config (W18, and G28's audit actor and narration) | Every edit of the config names the version it was based on and is refused (409, nothing written) if that has moved on; one agent's settings and the LLM order are changed in place on the server; a refused edit cannot leave a broken file; a save leaves one version, not two; skills are chosen from the six the app ships (with the placeholders marked) instead of typed; an agent's narration says in sentences what it is doing and what is missing; the audit trail names the person, not `cli`. |
 
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
@@ -134,7 +135,7 @@ this is where it stands.
 - **G23** the kill-switch threshold ignores the dual-control limit (`get_effective_risk_limit` has no caller), `POST /check` can overwrite it, and an automatic trip would write no audit row.
 - **G24** the "clean shadow-mode streak" the Go-Live gate asks for is undefined and cannot be derived (`shadow_mode_runs` has no strategy or outcome).
 - **G27** `prom/prometheus`, `grafana/grafana` and `temporalio/temporal` are `:latest`; Python has no lock or constraints file.
-- **G28** per-agent narration is unbuilt; fundamentals, valuation and macro agents have no data source; agent edits are audited as `"cli"`.
+- **G28** fundamentals, valuation and macro agents have no data source. (Per-agent narration and the `"cli"` audit actor were closed in phase 9, slice 7a.)
 - **G29** `/admin/users*` has no UI.
 
 **Backend/frontend wiring audit (2026-10-30, static read of 182 endpoints and 153 client exports).** No frontend call lacks a backend

@@ -26,6 +26,9 @@ from src.models.agent_config_version import AgentConfigVersion, ConfigVersionSta
 from src.models.agent_identity import AgentIdentity
 from src.models.agent_to_agent_policy import AgentToAgentPolicy
 
+# `agent_config_versions.source` holds 32 characters; a longer label is cut, not refused.
+SOURCE_LENGTH = 32
+
 
 @dataclass(frozen=True, slots=True)
 class ApplyResult:
@@ -72,11 +75,11 @@ async def _sync_agent_to_agent_policy(session: AsyncSession, config: TradingOSCo
 
 
 async def _record_active(
-    session: AsyncSession, *, source: str, raw_text: str, config: TradingOSConfig
+    session: AsyncSession, *, source: str, actor: str, raw_text: str, config: TradingOSConfig
 ) -> ApplyResult:
     version = AgentConfigVersion(
         status=ConfigVersionStatus.ACTIVE,
-        source=source,
+        source=source[:SOURCE_LENGTH],
         raw_content=raw_text,
         parsed_config=config.model_dump(mode="json", by_alias=True),
         validation_errors=None,
@@ -90,7 +93,7 @@ async def _record_active(
 
     await write_audit_entry(
         session,
-        actor=source,
+        actor=actor,
         action="agent_gateway.config_applied",
         entity_type="agent_config_version",
         entity_id=str(version.id),
@@ -102,11 +105,11 @@ async def _record_active(
 
 
 async def _record_rejected(
-    session: AsyncSession, *, source: str, raw_text: str, errors: list[str]
+    session: AsyncSession, *, source: str, actor: str, raw_text: str, errors: list[str]
 ) -> ApplyResult:
     version = AgentConfigVersion(
         status=ConfigVersionStatus.REJECTED,
-        source=source,
+        source=source[:SOURCE_LENGTH],
         raw_content=raw_text,
         parsed_config=None,
         validation_errors=errors,
@@ -116,7 +119,7 @@ async def _record_rejected(
 
     await write_audit_entry(
         session,
-        actor=source,
+        actor=actor,
         action="agent_gateway.config_rejected",
         entity_type="agent_config_version",
         entity_id=str(version.id),
@@ -128,18 +131,32 @@ async def _record_rejected(
     return ApplyResult(status=ConfigVersionStatus.REJECTED, version_id=version.id, errors=errors)
 
 
-async def apply_config_text(session: AsyncSession, raw_text: str, *, source: str) -> ApplyResult:
+async def apply_config_text(
+    session: AsyncSession, raw_text: str, *, source: str, actor: str | None = None
+) -> ApplyResult:
+    """`source` is the short label kept on the version (32 characters are stored); `actor` is who
+    the audit trail names: the person's address for a console edit, and the label itself when it
+    is left out (the CLI, the file watcher)."""
+    actor = actor or source
     try:
         data = parse_config_text(raw_text)
         config = validate_config_dict(data, raw_text=raw_text)
     except ConfigLoadError as exc:
-        return await _record_rejected(session, source=source, raw_text=raw_text, errors=exc.errors)
-    return await _record_active(session, source=source, raw_text=raw_text, config=config)
+        return await _record_rejected(
+            session, source=source, actor=actor, raw_text=raw_text, errors=exc.errors
+        )
+    return await _record_active(
+        session, source=source, actor=actor, raw_text=raw_text, config=config
+    )
 
 
-async def apply_config_from_file(session: AsyncSession, path: Path, *, source: str) -> ApplyResult:
+async def apply_config_from_file(
+    session: AsyncSession, path: Path, *, source: str, actor: str | None = None
+) -> ApplyResult:
     try:
         raw_text = read_config_text(path)
     except ConfigLoadError as exc:
-        return await _record_rejected(session, source=source, raw_text="", errors=exc.errors)
-    return await apply_config_text(session, raw_text, source=source)
+        return await _record_rejected(
+            session, source=source, actor=actor or source, raw_text="", errors=exc.errors
+        )
+    return await apply_config_text(session, raw_text, source=source, actor=actor)

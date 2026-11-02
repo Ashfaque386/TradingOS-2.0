@@ -21,6 +21,7 @@ from watchdog.observers.api import BaseObserver
 
 from src.core.db import AsyncSessionLocal
 from src.gateway.apply import ApplyResult, apply_config_from_file
+from src.gateway.state import get_state
 from src.models.agent_config_version import ConfigVersionStatus
 
 logger = structlog.get_logger(__name__)
@@ -101,6 +102,11 @@ class ConfigWatcher:
         if content_hash == self._last_content_hash:
             return
         self._last_content_hash = content_hash
+
+        # A change the API or a service call made itself was applied by them, with its own version
+        # and audit row: applying it again here only adds a duplicate version.
+        if get_state().consume_self_write(content_hash):
+            return
 
         async with AsyncSessionLocal() as session:
             result = await apply_config_from_file(session, self._config_path, source=self._source)

@@ -580,6 +580,10 @@
   .analysis-page .holiday-summary{padding:.85rem 1rem;color:#94a3b8;font-size:.72rem}.analysis-page .holiday-summary strong{color:#e2e8f0}
   .analysis-page .holiday-weekend td{color:#64748b}
   @media (max-width:1100px){.technical-layout .symbol-panel{grid-row:auto}.technical-layout .indicator-settings{grid-column:1}}
+  /* Skills and the agent narration (phase 9 slice 7) */
+  .skill-tag{margin-left:.4rem;border-radius:999px;background:rgba(251,191,36,.14);padding:.05rem .45rem;color:#fcd34d;font-size:.55rem;font-weight:600}
+  .fleet-workspace .narration-list{margin:.4rem 0 1rem 1.1rem;list-style:disc;color:#cbd5e1;font-size:.74rem;line-height:1.65}.fleet-workspace .narration-list li{margin:.3rem 0}
+  .set-page .set-skill-summary{margin:.5rem 0;color:#94a3b8;font-size:.68rem;line-height:1.5;text-align:left}
   /* A document drawn from Markdown (investor reports) */
   .md-doc{color:#e2e8f0;font-size:.82rem;line-height:1.65;max-width:78ch}.md-doc h2,.md-doc h3,.md-doc h4,.md-doc h5{color:#f8fafc;font-weight:600;letter-spacing:-.01em}.md-doc h2{margin:0 0 .9rem;font-size:1.15rem}.md-doc h3{margin:1.5rem 0 .55rem;padding-top:1rem;border-top:1px solid rgba(255,255,255,.07);font-size:.95rem}.md-doc h4,.md-doc h5{margin:1.1rem 0 .4rem;font-size:.85rem}.md-doc p{margin:.55rem 0}.md-doc ul,.md-doc ol{margin:.5rem 0 .5rem 1.15rem;padding:0}.md-doc ul{list-style:disc}.md-doc ol{list-style:decimal}.md-doc li{margin:.3rem 0;padding-left:.2rem}.md-doc strong{color:#f8fafc;font-weight:600}.md-doc code{border-radius:.3rem;background:rgba(148,163,184,.12);padding:.08rem .35rem;font:.75rem 'JetBrains Mono',monospace}.md-doc hr{margin:1.2rem 0;border:0;border-top:1px solid rgba(255,255,255,.1)}
 

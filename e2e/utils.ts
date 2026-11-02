@@ -28,14 +28,25 @@ export async function tokenFor(user: { email: string; password: string }): Promi
 }
 
 /** Calls the API as a fixture user's token and returns the parsed body (the status is checked by the caller's expectations). */
-export async function api<T>(token: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; body: T }> {
+export async function api<T>(
+  token: string,
+  path: string,
+  init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+): Promise<{ status: number; body: T }> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: init.method ?? 'GET',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   })
   const text = await res.text()
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T }
+}
+
+/** The gateway config version running now, and the `If-Match` header an edit of it sends: every edit of
+ * the config names the version it was based on, and is refused (409) if that has moved on. */
+export async function configVersion(token: string): Promise<{ id: number; ifMatch: Record<string, string> }> {
+  const { body } = await api<{ version_id: number }>(token, '/api/v1/gateway/config')
+  return { id: body.version_id, ifMatch: { 'If-Match': `"${body.version_id}"` } }
 }
 
 /** Signs in through the sign-in page. Switching personas mid-test (e.g. pm requests, admin decides)

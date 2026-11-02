@@ -173,10 +173,14 @@ export async function apiGetPage<T>(path: string): Promise<Page<T>> {
 }
 export const apiPost = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined })
-export const apiPut = <T>(path: string, body?: unknown) =>
-  request<T>(path, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined })
-export const apiPatch = <T>(path: string, body?: unknown) =>
-  request<T>(path, { method: 'PATCH', body: body !== undefined ? JSON.stringify(body) : undefined })
+export const apiPut = <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+  request<T>(path, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined, headers })
+export const apiPatch = <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+  request<T>(path, { method: 'PATCH', body: body !== undefined ? JSON.stringify(body) : undefined, headers })
+
+/** The `If-Match` header of an edit to the gateway config: the version the person read. The server
+ * refuses (409) an edit made on a version that has since been replaced, and one that names none (428). */
+const onConfigVersion = (versionId: number) => ({ 'If-Match': `"${versionId}"` })
 export const apiDelete = <T>(path: string) => request<T>(path, { method: 'DELETE' })
 
 // ---- Auth ----
@@ -304,9 +308,42 @@ export type AgentSummary = {
   // whose subject matter (fundamentals, valuation, macro/economic
   // calendar) has no real backing data source anywhere in this codebase.
   has_data_source: boolean
+  // The gateway config version these settings are from; an edit sends it back (see `onConfigVersion`)
+  config_version_id: number | null
 }
 
 export const getAgents = () => apiGet<AgentSummary[]>('/api/v1/agents')
+
+// ---- One agent's settings, edited on the config version the page read ----
+export type AgentSettingsPatch = {
+  enabled?: boolean
+  heartbeat_enabled?: boolean
+  heartbeat_interval_minutes?: number
+  skills?: string[]
+}
+export type AgentSettingsResult = ApplyResult & {
+  // The settings that actually changed ("enabled", "skills", ...)
+  changed: string[]
+}
+export const patchAgentSettings = (agentId: string, patch: AgentSettingsPatch, versionId: number) =>
+  apiPatch<AgentSettingsResult>(`/api/v1/agents/${agentId}`, patch, onConfigVersion(versionId))
+
+// ---- The skills the app ships with: a grant is a choice from this list, not a typed id ----
+export type SkillCatalogEntry = {
+  skill_id: string
+  summary: string
+  effect: 'read' | 'action'
+  // false: a placeholder with the real interface that returns an empty result
+  working: boolean
+  granted_to: string[]
+}
+export const getSkillCatalog = () => apiGet<SkillCatalogEntry[]>('/api/v1/agents/skills')
+
+// ---- What an agent is doing, in sentences built from what was recorded ----
+export type NarrationLine = { kind: 'state' | 'heartbeat' | 'work' | 'gap'; text: string }
+export type AgentNarration = { agent_id: string; as_of: string; lines: NarrationLine[] }
+export const getAgentNarration = (agentId: string) =>
+  apiGet<AgentNarration>(`/api/v1/agents/${agentId}/narration`)
 
 // ---- Per-agent activity (Phase 19 Part 3.2) -- real HeartbeatLog rows
 // plus orchestration Tasks joined by capability, never a fabricated
@@ -341,8 +378,8 @@ export type SetAgentIdentityInput = {
   voice?: string
 }
 
-export const putAgentIdentity = (agentId: string, body: SetAgentIdentityInput) =>
-  apiPut<ApplyResult>(`/api/v1/agents/${agentId}/identity`, body)
+export const putAgentIdentity = (agentId: string, body: SetAgentIdentityInput, versionId: number) =>
+  apiPut<ApplyResult>(`/api/v1/agents/${agentId}/identity`, body, onConfigVersion(versionId))
 
 export type PromptVersion = {
   id: string
@@ -1786,8 +1823,11 @@ export type ConfigVersionSummary = {
 }
 
 export const getGatewayConfig = () => apiGet<GatewayConfigResponse>('/api/v1/gateway/config')
-export const putGatewayConfig = (rawText: string) =>
-  apiPut<ApplyResult>('/api/v1/gateway/config', { raw_text: rawText })
+export const putGatewayConfig = (rawText: string, versionId: number) =>
+  apiPut<ApplyResult>('/api/v1/gateway/config', { raw_text: rawText }, onConfigVersion(versionId))
+// Replaces the LLM fallback order and nothing else in the config
+export const putLlmProviderOrder = (order: string[], versionId: number) =>
+  apiPut<ApplyResult>('/api/v1/gateway/llm-provider-order', { order }, onConfigVersion(versionId))
 export const validateGatewayConfig = (rawText: string) =>
   apiPost<{ ok: boolean; errors: string[] }>('/api/v1/gateway/config/validate', { raw_text: rawText })
 export const listGatewayConfigVersions = () =>

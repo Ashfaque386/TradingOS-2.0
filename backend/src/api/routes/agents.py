@@ -27,7 +27,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.agents.graph import PipelineCancelledError, run_pipeline
+from src.agents.narration import HeartbeatFact, NarrationFacts, TaskFact, narrate
 from src.agents.roster import NO_DATA_SOURCE_AGENTS, capabilities_for
+from src.agents.skill_catalog import build_catalog
+from src.agents.tools.registry import SKILLS
+from src.api.gateway_http import api_source, config_version_from_if_match, gateway_edit_error
 from src.api.routes.gateway import ApplyResultResponse
 from src.api.routes.memory import memory_service_dependency
 from src.api.schemas import (
@@ -35,22 +39,34 @@ from src.api.schemas import (
     AgentAnalyticsSummaryRow,
     AgentAnalyticsTrendPoint,
     AgentHeartbeatEntryResponse,
+    AgentNarrationResponse,
     AgentPipelineEventResponse,
     AgentSummaryResponse,
     AgentTaskEntryResponse,
     CancelPipelineRunResponse,
     CreatePromptVersionRequest,
+    NarrationLineResponse,
     PromptVersionResponse,
     RunPipelineRequest,
     RunPipelineResponse,
     SetAgentIdentityRequest,
+    SkillCatalogEntryResponse,
+    UpdateAgentSettingsRequest,
+    UpdateAgentSettingsResponse,
 )
 from src.core.config import get_settings
 from src.core.db import get_db, get_session_factory
 from src.core.rbac import Role, register_policy, require_role
 from src.core.redis_client import get_redis
+from src.gateway.edits import AgentSettingsPatch, EditRefused
+from src.gateway.loader import ConfigLoadError
 from src.gateway.roster import ROSTER, ROSTER_BY_ID
-from src.gateway.service import ServiceError, set_identity
+from src.gateway.service import (
+    ServiceError,
+    StaleConfigError,
+    set_identity,
+    update_agent_settings,
+)
 from src.gateway.state import get_state
 from src.memory.service import MemoryService, get_pipeline_memory
 from src.models.agent_pipeline_event import AgentPipelineEvent
@@ -93,6 +109,9 @@ register_policy(
     roles=[Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER],
 )
 register_policy("PUT", "/api/v1/agents/{agent_id}/identity", roles=_WRITE_ROLES)
+register_policy("PATCH", "/api/v1/agents/{agent_id}", roles=_WRITE_ROLES)
+register_policy("GET", "/api/v1/agents/skills", roles=list(Role))
+register_policy("GET", "/api/v1/agents/{agent_id}/narration", roles=list(Role))
 register_policy("GET", "/api/v1/agents/{agent_id}/activity", roles=list(Role))
 register_policy("GET", "/api/v1/agents/analytics/summary", roles=list(Role))
 register_policy("GET", "/api/v1/agents/analytics/trend", roles=list(Role))
@@ -131,6 +150,7 @@ async def list_agents_endpoint(
     _current_user: User = Depends(require_role),
 ) -> list[AgentSummaryResponse]:
     effective_by_id = get_state().get_all_effective_agents()
+    version_id = get_state().get_version_id()
     result = []
     for agent in ROSTER:
         effective = effective_by_id.get(agent.agent_id)
@@ -150,19 +170,43 @@ async def list_agents_endpoint(
                 theme=effective.theme if effective else None,
                 voice=effective.voice if effective else None,
                 has_data_source=agent.agent_id not in NO_DATA_SOURCE_AGENTS,
+                config_version_id=version_id,
             )
         )
     return result
+
+
+@router.get("/skills")
+async def skill_catalog_endpoint(
+    _current_user: User = Depends(require_role),
+) -> list[SkillCatalogEntryResponse]:
+    """The skills the app ships with, whether each does anything yet, and which agents hold it. The
+    fixed set an agent can be granted: there is no way to add one, so a grant is a choice from this
+    list, not a typed id."""
+    return [
+        SkillCatalogEntryResponse(
+            skill_id=entry.info.skill_id,
+            summary=entry.info.summary,
+            effect=entry.info.effect,
+            working=entry.info.working,
+            granted_to=list(entry.granted_to),
+        )
+        for entry in build_catalog(get_state().get_all_effective_agents())
+    ]
 
 
 @router.put("/{agent_id}/identity")
 async def set_agent_identity_endpoint(
     agent_id: str,
     body: SetAgentIdentityRequest,
+    current_user: User = Depends(require_role),
+    version: int = Depends(config_version_from_if_match),
     db: AsyncSession = Depends(get_db),
     config_path: Path = Depends(_config_path),
-    current_user: User = Depends(require_role),
 ) -> ApplyResultResponse:
+    """Saves an agent's identity on the config version the editor read (a config that has moved on
+    is a 409). The audit trail names the person, `api:<email>`; it used to say `cli`."""
+    source, actor = api_source(current_user.email)
     try:
         result = await set_identity(
             db,
@@ -173,11 +217,130 @@ async def set_agent_identity_endpoint(
             avatar=body.avatar,
             theme=body.theme,
             voice=body.voice,
+            source=source,
+            actor=actor,
+            expected_version=version,
         )
-    except ServiceError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except (ServiceError, StaleConfigError, ConfigLoadError) as exc:
+        raise gateway_edit_error(exc) from exc
     return ApplyResultResponse(
         status=result.status.value, version_id=result.version_id, errors=result.errors
+    )
+
+
+@router.patch("/{agent_id}")
+async def update_agent_settings_endpoint(
+    agent_id: str,
+    body: UpdateAgentSettingsRequest,
+    current_user: User = Depends(require_role),
+    version: int = Depends(config_version_from_if_match),
+    db: AsyncSession = Depends(get_db),
+    config_path: Path = Depends(_config_path),
+) -> UpdateAgentSettingsResponse:
+    """Changes one agent's settings (switched on or off, heartbeat, skills) and nothing else in the
+    config. The edit is made on the server, on the config version the editor read: the console used
+    to fetch the whole config, change a piece and write the whole config back, so two editors
+    overwrote each other. A skill must be one the app ships with; a request that changes nothing is
+    refused, so it does not write a version and an audit row for something that did not happen."""
+    patch = AgentSettingsPatch(
+        enabled=body.enabled,
+        heartbeat_enabled=body.heartbeat_enabled,
+        heartbeat_interval_minutes=body.heartbeat_interval_minutes,
+        skills=tuple(body.skills) if body.skills is not None else None,
+    )
+    source, actor = api_source(current_user.email)
+    try:
+        result, changed = await update_agent_settings(
+            db,
+            config_path,
+            agent_id,
+            patch,
+            known_skills=SKILLS.keys(),
+            source=source,
+            actor=actor,
+            expected_version=version,
+        )
+    except (EditRefused, StaleConfigError, ConfigLoadError) as exc:
+        raise gateway_edit_error(exc) from exc
+    if result.status.value != "active":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(result.errors))
+    return UpdateAgentSettingsResponse(
+        status=result.status.value,
+        version_id=result.version_id,
+        errors=result.errors,
+        changed=changed,
+    )
+
+
+async def _recent_activity(
+    db: AsyncSession, agent_id: str
+) -> tuple[list[HeartbeatLog], list[Task]]:
+    """The agent's last 20 heartbeat self-checks and last 20 tasks claimed under its capabilities,
+    newest first: what the activity tab lists and what the narration is told."""
+    heartbeat_rows = list(
+        (
+            await db.execute(
+                select(HeartbeatLog)
+                .where(HeartbeatLog.agent_id == agent_id)
+                .order_by(HeartbeatLog.checked_at.desc())
+                .limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    capabilities = capabilities_for(agent_id)
+    task_rows: list[Task] = []
+    if capabilities:
+        task_rows = list(
+            (
+                await db.execute(
+                    select(Task)
+                    .where(Task.capability.in_(capabilities))
+                    .order_by(Task.created_at.desc())
+                    .limit(20)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return heartbeat_rows, task_rows
+
+
+@router.get("/{agent_id}/narration")
+async def agent_narration_endpoint(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role),
+) -> AgentNarrationResponse:
+    """What this agent is doing, in plain sentences, from its settings, heartbeat self-checks and
+    tasks, with what is missing said as plainly as what is there (see `src.agents.narration`)."""
+    _require_roster_agent_or_404(agent_id)
+    roster_agent = ROSTER_BY_ID[agent_id]
+    effective = get_state().get_effective_agent(agent_id)
+    heartbeat_rows, task_rows = await _recent_activity(db, agent_id)
+    now = datetime.now(UTC)
+    lines = narrate(
+        NarrationFacts(
+            display_name=effective.identity_name if effective else roster_agent.display_name,
+            enabled=effective.enabled if effective else True,
+            can_disable=roster_agent.can_disable,
+            heartbeat_enabled=effective.heartbeat_enabled if effective else False,
+            skills=tuple(sorted(effective.skills)) if effective else (),
+            has_data_source=agent_id not in NO_DATA_SOURCE_AGENTS,
+            capabilities=tuple(sorted(capabilities_for(agent_id))),
+            heartbeats=[HeartbeatFact(row.status.value, row.checked_at) for row in heartbeat_rows],
+            tasks=[
+                TaskFact(row.name, row.status.value, row.last_error, row.created_at)
+                for row in task_rows
+            ],
+            now=now,
+        )
+    )
+    return AgentNarrationResponse(
+        agent_id=agent_id,
+        as_of=now.isoformat(),
+        lines=[NarrationLineResponse(kind=line.kind, text=line.text) for line in lines],
     )
 
 
@@ -194,35 +357,7 @@ async def agent_activity_endpoint(
     registered capabilities (Task has no agent_id column, so capability
     is the real join key -- src.agents.roster.capabilities_for)."""
     _require_roster_agent_or_404(agent_id)
-
-    heartbeat_rows = (
-        (
-            await db.execute(
-                select(HeartbeatLog)
-                .where(HeartbeatLog.agent_id == agent_id)
-                .order_by(HeartbeatLog.checked_at.desc())
-                .limit(20)
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    capabilities = capabilities_for(agent_id)
-    task_rows: list[Task] = []
-    if capabilities:
-        task_rows = list(
-            (
-                await db.execute(
-                    select(Task)
-                    .where(Task.capability.in_(capabilities))
-                    .order_by(Task.created_at.desc())
-                    .limit(20)
-                )
-            )
-            .scalars()
-            .all()
-        )
+    heartbeat_rows, task_rows = await _recent_activity(db, agent_id)
 
     return AgentActivityResponse(
         agent_id=agent_id,

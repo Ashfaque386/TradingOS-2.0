@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `gateway-logic.spec.ts` -- what a lost race says, which skills may still be granted, how a saved change and a narration are
+  put in words. No browser or backend.
+- `gateway-edits.spec.ts` -- edits of the gateway config in Agent Fleet and Settings against a real backend: a lost race in Agent
+  Fleet, the LLM order and the raw editor (arranged by making the other editor's change when the page's request is sent), one
+  version per save, who the audit names, skills chosen from the shipped set, the narration.
 - `analysis-logic.spec.ts` -- the indicator parameters' bounds and wording, the Market Analysis address, the holiday wording, calendar
   days and India's date, the Markdown reader, the investor-report period rules, the Portfolio figures. No browser or backend.
 - `analysis-pages.spec.ts` -- Market Analysis against a real backend: the address, the holiday calendar, the indicator periods, the

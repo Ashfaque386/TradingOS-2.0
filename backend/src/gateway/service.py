@@ -14,8 +14,10 @@ file, its watcher will independently notice the same write and apply it
 again — a harmless extra version row, not a correctness issue.)
 """
 
+import asyncio
 import json
-from collections.abc import Callable
+import weakref
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,13 +25,18 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.gateway.apply import ApplyResult, apply_config_text
+from src.gateway.edits import AgentSettingsPatch, apply_agent_settings, apply_provider_order
 from src.gateway.loader import (
     ConfigLoadError,
     EffectiveAgentConfig,
     compute_effective_agents,
     load_and_validate,
+    parse_config_text,
+    validate_config_dict,
 )
 from src.gateway.roster import ROSTER_BY_ID
+from src.gateway.schema import LlmProvider
+from src.gateway.state import get_state
 from src.models.agent_config_version import AgentConfigVersion, ConfigVersionStatus
 
 
@@ -40,10 +47,65 @@ class ServiceError(Exception):
     """
 
 
+class StaleConfigError(Exception):
+    """The config changed after the person read it: they edited from version `expected`, and
+    `current` is what is running now. Nothing was written."""
+
+    def __init__(self, expected: int, current: int | None) -> None:
+        super().__init__(
+            f"The configuration changed since you read it (you edited version {expected}, "
+            f"version {current} is running now). Reload and make your change again."
+        )
+        self.expected = expected
+        self.current = current
+
+
+# One writer at a time, so two requests that both read version N cannot both be applied: the second
+# finds N has moved on. A lock belongs to the event loop that uses it, so there is one per loop (a
+# process has one; each test has its own).
+_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _config_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _LOCKS.get(loop)
+    if lock is None:
+        lock = _LOCKS[loop] = asyncio.Lock()
+    return lock
+
+
+def _check_version(expected: int | None) -> None:
+    """`expected` is the version the editor read; None means a caller (the CLI, which has no
+    running app to disagree with) that does not ask."""
+    if expected is None:
+        return
+    current = get_state().get_version_id()
+    if current != expected:
+        raise StaleConfigError(expected, current)
+
+
 def _atomic_write(path: Path, text: str) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(text, encoding="utf-8")
     tmp_path.replace(path)
+
+
+async def _write_and_apply(
+    db: AsyncSession, config_path: Path, text: str, *, source: str, actor: str | None = None
+) -> ApplyResult:
+    """Applies `text`, and writes it to the file only if it is a config the app will run on. A text
+    that fails validation is recorded as a rejected version (and audited) and the file is left as it
+    was, so a refused edit cannot leave a broken file on disk."""
+    try:
+        validate_config_dict(parse_config_text(text), raw_text=text)
+    except ConfigLoadError:
+        return await apply_config_text(db, text, source=source, actor=actor)
+    # The watcher will see this write; it must know the apply below is the one that counts.
+    get_state().note_self_write(text)
+    _atomic_write(config_path, text)
+    return await apply_config_text(db, text, source=source, actor=actor)
 
 
 def _require_roster_agent(agent_id: str) -> None:
@@ -52,14 +114,37 @@ def _require_roster_agent(agent_id: str) -> None:
 
 
 async def _mutate_and_apply(
-    db: AsyncSession, config_path: Path, mutate_fn: Callable[[dict[str, Any]], None], *, source: str
+    db: AsyncSession,
+    config_path: Path,
+    mutate_fn: Callable[[dict[str, Any]], None],
+    *,
+    source: str,
+    actor: str | None = None,
+    expected_version: int | None = None,
 ) -> ApplyResult:
-    config = load_and_validate(config_path)  # raises ConfigLoadError if already broken
-    data = config.model_dump(mode="json", by_alias=True, exclude_none=True)
-    mutate_fn(data)
-    new_text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    _atomic_write(config_path, new_text)
-    return await apply_config_text(db, new_text, source=source)
+    async with _config_lock():
+        _check_version(expected_version)
+        config = load_and_validate(config_path)  # raises ConfigLoadError if already broken
+        data = config.model_dump(mode="json", by_alias=True, exclude_none=True)
+        mutate_fn(data)
+        new_text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        return await _write_and_apply(db, config_path, new_text, source=source, actor=actor)
+
+
+async def put_config(
+    db: AsyncSession,
+    config_path: Path,
+    raw_text: str,
+    *,
+    source: str,
+    actor: str | None = None,
+    expected_version: int | None = None,
+) -> ApplyResult:
+    """Replaces the whole config with `raw_text` (the raw editor), if the person edited the version
+    that is running."""
+    async with _config_lock():
+        _check_version(expected_version)
+        return await _write_and_apply(db, config_path, raw_text, source=source, actor=actor)
 
 
 def list_agents(config_path: Path) -> list[EffectiveAgentConfig]:
@@ -82,6 +167,9 @@ async def set_identity(
     avatar: str | None = None,
     theme: str | None = None,
     voice: str | None = None,
+    source: str = "cli",
+    actor: str | None = None,
+    expected_version: int | None = None,
 ) -> ApplyResult:
     _require_roster_agent(agent_id)
 
@@ -101,7 +189,53 @@ async def set_identity(
             identity["voice"] = voice
         entry["identity"] = identity
 
-    return await _mutate_and_apply(db, config_path, mutate, source="cli")
+    return await _mutate_and_apply(
+        db, config_path, mutate, source=source, actor=actor, expected_version=expected_version
+    )
+
+
+async def update_agent_settings(
+    db: AsyncSession,
+    config_path: Path,
+    agent_id: str,
+    patch: AgentSettingsPatch,
+    *,
+    known_skills: Collection[str],
+    source: str,
+    actor: str | None = None,
+    expected_version: int,
+) -> tuple[ApplyResult, list[str]]:
+    """Changes one agent's settings in place and says which ones changed. Raises the refusals of
+    `src.gateway.edits` (unknown agent, invalid edit, nothing to change) and `StaleConfigError`."""
+    changed: list[str] = []
+
+    def mutate(data: dict[str, Any]) -> None:
+        changed.extend(apply_agent_settings(data, agent_id, patch, known_skills=known_skills))
+
+    result = await _mutate_and_apply(
+        db, config_path, mutate, source=source, actor=actor, expected_version=expected_version
+    )
+    return result, changed
+
+
+async def update_provider_order(
+    db: AsyncSession,
+    config_path: Path,
+    order: list[str],
+    *,
+    source: str,
+    actor: str | None = None,
+    expected_version: int,
+) -> ApplyResult:
+    """Replaces the LLM fallback order. Raises the refusals of `src.gateway.edits` and
+    `StaleConfigError`."""
+
+    def mutate(data: dict[str, Any]) -> None:
+        apply_provider_order(data, order, known_providers={p.value for p in LlmProvider})
+
+    return await _mutate_and_apply(
+        db, config_path, mutate, source=source, actor=actor, expected_version=expected_version
+    )
 
 
 async def bind_agent(
@@ -211,7 +345,14 @@ def validate_config(config_path: Path) -> ValidationResult:
     return ValidationResult(ok=True, errors=[])
 
 
-async def rollback_config(db: AsyncSession, config_path: Path, to_version: int) -> ApplyResult:
+async def rollback_config(
+    db: AsyncSession,
+    config_path: Path,
+    to_version: int,
+    *,
+    source: str = "cli-rollback",
+    actor: str | None = None,
+) -> ApplyResult:
     row = await db.get(AgentConfigVersion, to_version)
     if row is None:
         raise ServiceError(f"No config version {to_version} exists")
@@ -220,8 +361,8 @@ async def rollback_config(db: AsyncSession, config_path: Path, to_version: int) 
             f"Config version {to_version} was rejected, not active — nothing to roll back to"
         )
 
-    _atomic_write(config_path, row.raw_content)
-    return await apply_config_text(db, row.raw_content, source="cli-rollback")
+    async with _config_lock():
+        return await _write_and_apply(db, config_path, row.raw_content, source=source, actor=actor)
 
 
 @dataclass(frozen=True, slots=True)

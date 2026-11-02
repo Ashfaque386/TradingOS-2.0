@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDown,
@@ -36,6 +36,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorNotice } from '@/components/ui/error-notice'
 import { TabList } from '@/components/ui/tab-list'
 import { AlertmanagerStatus } from '@/components/settings/alertmanager-status'
@@ -43,6 +44,8 @@ import { BackupsSection } from '@/components/settings/backups-section'
 import { SignInPolicyCard } from '@/components/settings/sign-in-policy'
 import { UsersSection } from '@/components/settings/users-section'
 import { describeQuoteRefusals } from '@/lib/broker-quotes'
+import { editFailure, skillTags, skillsAfter } from '@/lib/gateway-edit'
+import { indiaStamp } from '@/lib/time'
 import { InboundSettings } from '@/components/settings/inbound-settings'
 import { RiskLimitsSection } from '@/components/settings/risk-limits-section'
 import { SigningKeyCard } from '@/components/settings/signing-key-card'
@@ -57,6 +60,7 @@ import {
   type LlmProviderName,
   type LlmProviderStatus,
   type NotificationChannelStatus,
+  type SkillCatalogEntry,
   ALERT_LEVELS,
   ApiError,
   LLM_PROVIDERS,
@@ -71,12 +75,15 @@ import {
   getAgents,
   getBrokerLoginUrl,
   getGatewayConfig,
+  getSkillCatalog,
   listBrokerCredentialStatus,
   listGatewayConfigVersions,
   listLlmProviderModels,
   listLlmProviderStatus,
   listNotificationChannels,
+  patchAgentSettings,
   putGatewayConfig,
+  putLlmProviderOrder,
   rollbackGatewayConfig,
   testLlmProvider,
   testNotificationChannel,
@@ -224,6 +231,7 @@ function GatewaySection() {
   const [validateErrors, setValidateErrors] = useState<string[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rollingBack, setRollingBack] = useState<ConfigVersionSummary | null>(null)
 
   async function reload() {
     const [cfg, vers] = await Promise.all([getGatewayConfig(), listGatewayConfigVersions()])
@@ -251,27 +259,26 @@ function GatewaySection() {
     setBusy(true)
     setError(null)
     try {
-      await putGatewayConfig(rawText)
+      if (config?.version_id == null) throw new Error('The configuration has not loaded yet, so nothing can be saved.')
+      const result = await putGatewayConfig(rawText, config.version_id)
       await reload()
-      setValidateErrors(null)
+      setValidateErrors(result.status === 'rejected' ? result.errors : null)
+      // A text the app cannot run on is recorded as a rejected version and the file is left as it was.
+      if (result.status === 'rejected') setError('That text was not applied: it is not a configuration the app can run on. The file and the running configuration are unchanged.')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Save failed')
+      const failure = editFailure(err, 'Save failed')
+      setError(failure.message)
+      // The editor still holds what the person typed over the version they read: show the current one.
+      if (failure.stale) await reload().catch(() => undefined)
     } finally {
       setBusy(false)
     }
   }
 
+  // Confirmed in the dialog below, which reports a failure by the error this throws.
   async function handleRollback(versionId: number) {
-    setBusy(true)
-    setError(null)
-    try {
-      await rollbackGatewayConfig(versionId)
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Rollback failed')
-    } finally {
-      setBusy(false)
-    }
+    await rollbackGatewayConfig(versionId)
+    await reload()
   }
 
   const parsed = config?.parsed as Record<string, any> | undefined
@@ -340,14 +347,24 @@ function GatewaySection() {
           {versions.map((cv) => (
             <li key={cv.id}>
               <span className="set-version-tag mono">v{cv.id}</span>
-              <span className="set-version-when mono">{new Date(cv.created_at).toLocaleString()}</span>
+              <span className="set-version-when mono">{indiaStamp(cv.created_at)}</span>
               <span className="set-version-author">{cv.source}</span>
               <span className="set-version-note">{cv.status}</span>
-              {cv.id === config?.version_id ? <span className="set-version-current">Current</span> : canEdit ? <button className="set-rollback" disabled={busy} onClick={() => handleRollback(cv.id)}><RotateCcw className="size-3" /> Rollback</button> : null}
+              {cv.id === config?.version_id ? <span className="set-version-current">Current</span> : canEdit ? <button className="set-rollback" disabled={busy} onClick={() => setRollingBack(cv)}><RotateCcw className="size-3" /> Rollback</button> : null}
             </li>
           ))}
         </ul>
       </div>
+      {rollingBack && (
+        <ConfirmDialog
+          title={`Roll back to v${rollingBack.id}?`}
+          description={`The configuration written as v${rollingBack.id} (${rollingBack.source}, ${indiaStamp(rollingBack.created_at)} India time) is applied again as a new version, in place of the one running now. Every agent, binding and provider order in it takes effect.`}
+          confirmLabel={`Roll back to v${rollingBack.id}`}
+          busyLabel="Rolling back…"
+          onConfirm={() => handleRollback(rollingBack.id)}
+          onClose={() => setRollingBack(null)}
+        />
+      )}
     </div>
   )
 }
@@ -356,17 +373,16 @@ function GatewaySection() {
 
 const LOCAL_PROVIDERS: LlmProviderName[] = ['ollama', 'custom']
 
-async function readGatewayOrder(): Promise<{ config: GatewayConfigResponse; parsed: Record<string, any>; order: string[] }> {
+async function readGatewayOrder(): Promise<{ versionId: number | null; order: string[] }> {
   const config = await getGatewayConfig()
-  const parsed = JSON.parse(JSON.stringify(config.parsed)) as Record<string, any>
-  const order: string[] = parsed?.infra?.llmProviders?.order ?? []
-  return { config, parsed, order }
+  const infra = config.parsed.infra as { llmProviders?: { order?: string[] } } | undefined
+  return { versionId: config.version_id, order: infra?.llmProviders?.order ?? [] }
 }
 
-async function writeGatewayOrder(parsed: Record<string, any>, order: string[]) {
-  parsed.infra = parsed.infra ?? {}
-  parsed.infra.llmProviders = { ...(parsed.infra.llmProviders ?? {}), order }
-  await putGatewayConfig(JSON.stringify(parsed))
+/** Replaces the fallback order and nothing else in the config, on the version the section read. */
+async function changeProviderOrder(next: string[], versionId: number | null) {
+  if (versionId === null) throw new Error('The configuration has not loaded yet, so the order cannot be changed.')
+  await putLlmProviderOrder(next, versionId)
 }
 
 // Providers with no universal default model: an agent's "auto" can't run on
@@ -377,17 +393,16 @@ const API_KEY_PLACEHOLDERS: Partial<Record<LlmProviderName, string>> = {
   huggingface: 'Access token (hf_…)',
 }
 
-async function setProviderInOrder(provider: string, include: boolean) {
-  const { parsed, order } = await readGatewayOrder()
+async function setProviderInOrder(provider: string, include: boolean, order: string[], versionId: number | null) {
   if (order.includes(provider) === include) return
-  await writeGatewayOrder(parsed, include ? [...order, provider] : order.filter((p) => p !== provider))
+  await changeProviderOrder(include ? [...order, provider] : order.filter((p) => p !== provider), versionId)
 }
 
 function effectiveDefaultModel(status: LlmProviderStatus): string | null {
   return status.default_model ?? status.builtin_default_model ?? null
 }
 
-function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderStatus; canEdit: boolean; onChanged: () => void }) {
+function LlmProviderCard({ status, canEdit, order, versionId, onChanged }: { status: LlmProviderStatus; canEdit: boolean; order: string[]; versionId: number | null; onChanged: () => void }) {
   const provider = status.provider as LlmProviderName
   const isLocal = LOCAL_PROVIDERS.includes(provider)
   const [apiKey, setApiKey] = useState('')
@@ -398,6 +413,7 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
   const [discovering, setDiscovering] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
   const defaultModel = effectiveDefaultModel(status)
   const missingDefault = status.configured && !defaultModel && NEEDS_DEFAULT_MODEL.includes(provider)
 
@@ -408,7 +424,9 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
       await action()
       onChanged()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : failure)
+      const failed = editFailure(err, failure)
+      setError(failed.message)
+      if (failed.stale) onChanged()
     } finally {
       setBusy(false)
     }
@@ -419,15 +437,17 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
     setApiKey('')
     // A newly configured provider joins the fallback chain; the switch
     // above can take it back out.
-    if (!status.configured) await setProviderInOrder(provider, true)
+    if (!status.configured) await setProviderInOrder(provider, true, order, versionId)
   }, 'Save failed')
 
-  const handleRemove = () => run(async () => {
+  // Out of the chain first: if that is refused (it is the last one), the key is still there.
+  const removeKey = async () => {
+    await setProviderInOrder(provider, false, order, versionId)
     await deleteLlmProviderCredentials(provider)
-    await setProviderInOrder(provider, false)
-  }, 'Remove failed')
+    onChanged()
+  }
 
-  const handleToggleOrder = () => run(() => setProviderInOrder(provider, !status.in_fallback_order), 'Failed to update fallback order')
+  const handleToggleOrder = () => run(() => setProviderInOrder(provider, !status.in_fallback_order, order, versionId), 'Failed to update fallback order')
 
   const handleSaveDefault = () => run(() => setLlmProviderDefaultModel(provider, selectedModel || null), 'Could not save the default model')
 
@@ -487,9 +507,21 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
           {provider === 'huggingface' && <p className="set-redirect-hint">Uses Hugging Face Inference Providers (<code>router.huggingface.co</code>). Create a fine-grained token with the &quot;Make calls to Inference Providers&quot; permission.</p>}
           <div className="set-cred-actions">
             <button className="set-btn set-btn-ghost" disabled={busy || (isLocal ? !baseUrl : !apiKey)} onClick={handleSave}>Save</button>
-            {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleRemove}>Remove</button>}
+            {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={() => setRemoving(true)}>Remove</button>}
           </div>
         </>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title={`Remove the ${LLM_PROVIDER_LABELS[provider] ?? provider} key?`}
+          description={`${LLM_PROVIDER_LABELS[provider] ?? provider} is taken out of the fallback chain and its saved key or address is deleted. Agents stop using it from their next call, and the key cannot be read back, so it has to be entered again to use it.`}
+          tone="danger"
+          confirmLabel="Remove"
+          busyLabel="Removing…"
+          onConfirm={removeKey}
+          onClose={() => setRemoving(false)}
+        />
       )}
 
       <div className={`set-llm-default ${missingDefault ? 'warn' : ''}`}>
@@ -524,7 +556,7 @@ function LlmProviderCard({ status, canEdit, onChanged }: { status: LlmProviderSt
   )
 }
 
-function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit: boolean; order: string[]; statuses: LlmProviderStatus[]; onChanged: () => void }) {
+function FallbackPriorityList({ canEdit, order, versionId, statuses, onChanged }: { canEdit: boolean; order: string[]; versionId: number | null; statuses: LlmProviderStatus[]; onChanged: () => void }) {
   // The order is owned by LlmProvidersSection and reloaded after every
   // change anywhere on this page. A private copy loaded once went stale
   // after a card's toggle, and the next drag wrote that stale copy back,
@@ -537,10 +569,9 @@ function FallbackPriorityList({ canEdit, order, statuses, onChanged }: { canEdit
     setBusy(true)
     setError(null)
     try {
-      const { parsed } = await readGatewayOrder()
-      await writeGatewayOrder(parsed, next)
+      await changeProviderOrder(next, versionId)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to reorder')
+      setError(editFailure(err, 'Failed to reorder').message)
     } finally {
       setBusy(false)
       onChanged()
@@ -606,13 +637,15 @@ function LlmProvidersSection({ onStatusChanged }: { onStatusChanged: () => void 
   const canEdit = can(role, 'POST /api/v1/settings/llm-providers/{provider}')
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([])
   const [order, setOrder] = useState<string[]>([])
+  const [versionId, setVersionId] = useState<number | null>(null)
   const load = useSectionLoad()
 
   async function reload() {
     await load.track(async () => {
-      const [nextStatuses, { order: nextOrder }] = await Promise.all([listLlmProviderStatus(), readGatewayOrder()])
+      const [nextStatuses, { order: nextOrder, versionId: nextVersion }] = await Promise.all([listLlmProviderStatus(), readGatewayOrder()])
       setStatuses(nextStatuses)
       setOrder(nextOrder)
+      setVersionId(nextVersion)
       onStatusChanged()
     })
   }
@@ -624,10 +657,10 @@ function LlmProvidersSection({ onStatusChanged }: { onStatusChanged: () => void 
     <div className="set-block">
       <div className="set-block-head"><div><h2>LLM Providers</h2><p>API keys are write-only. Fallback priority here is the exact same infra.llmProviders.order the Agent Gateway routes on — this is a UI over that config, not a separate store. Agents ask for model &quot;auto&quot;, which runs each provider&apos;s default model.</p></div></div>
       <SectionStatus load={load} what="the LLM providers" onRetry={reload} />
-      {load.loaded && <><div className="set-llm-grid">{LLM_PROVIDERS.map((p) => <LlmProviderCard key={p} status={byProvider(p)} canEdit={canEdit} onChanged={reload} />)}</div>
+      {load.loaded && <><div className="set-llm-grid">{LLM_PROVIDERS.map((p) => <LlmProviderCard key={p} status={byProvider(p)} canEdit={canEdit} order={order} versionId={versionId} onChanged={reload} />)}</div>
 
       <p className="set-group-label">Fallback priority</p>
-      <FallbackPriorityList canEdit={canEdit} order={order} statuses={statuses} onChanged={reload} /></>}
+      <FallbackPriorityList canEdit={canEdit} order={order} versionId={versionId} statuses={statuses} onChanged={reload} /></>}
     </div>
   )
 }
@@ -874,38 +907,34 @@ function initials(name: string) {
   return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase()
 }
 
-async function patchAgentSkills(agentId: string, skills: string[]) {
-  const config = await getGatewayConfig()
-  const parsed = JSON.parse(JSON.stringify(config.parsed)) as Record<string, any>
-  const agentsSection = parsed.agents ?? { entries: {} }
-  const existing = agentsSection.entries[agentId] ?? {}
-  agentsSection.entries[agentId] = { ...existing, skills }
-  parsed.agents = agentsSection
-  await putGatewayConfig(JSON.stringify(parsed))
-}
-
 function SkillsSection() {
   const { role } = useAuth()
-  const canEdit = can(role, 'PUT /api/v1/gateway/config')
+  const canEdit = can(role, 'PATCH /api/v1/agents/{agent_id}')
   const [agents, setAgents] = useState<AgentSummary[]>([])
+  const [catalog, setCatalog] = useState<SkillCatalogEntry[]>([])
   const [query, setQuery] = useState('')
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
-  const [newSkillId, setNewSkillId] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const load = useSectionLoad()
-  async function reload() { await load.track(async () => { setAgents(await getAgents()) }) }
+  async function reload() { await load.track(async () => { const [nextAgents, nextCatalog] = await Promise.all([getAgents(), getSkillCatalog()]); setAgents(nextAgents); setCatalog(nextCatalog) }) }
   useEffect(() => { reload() }, [])
 
-  const skills = useMemo(() => Array.from(new Set(agents.flatMap((a) => a.skills))).sort(), [agents])
-  const filteredSkills = skills.filter((s) => s.toLowerCase().includes(query.toLowerCase()))
+  const filteredSkills = catalog.filter((s) => s.skill_id.toLowerCase().includes(query.toLowerCase()) || s.summary.toLowerCase().includes(query.toLowerCase()))
+  const selected = catalog.find((s) => s.skill_id === selectedSkill) ?? null
 
   async function toggleGrant(skillId: string, agent: AgentSummary) {
     setBusy(true)
+    setError(null)
     try {
-      const has = agent.skills.includes(skillId)
-      await patchAgentSkills(agent.agent_id, has ? agent.skills.filter((s) => s !== skillId) : [...agent.skills, skillId])
+      if (agent.config_version_id === null) throw new Error('The configuration has not loaded yet, so nothing can be changed.')
+      await patchAgentSettings(agent.agent_id, { skills: skillsAfter(agent.skills, skillId, !agent.skills.includes(skillId)) }, agent.config_version_id)
       await reload()
+    } catch (err) {
+      const failure = editFailure(err, 'Could not change that grant')
+      setError(failure.message)
+      if (failure.stale) await reload()
     } finally {
       setBusy(false)
     }
@@ -914,31 +943,31 @@ function SkillsSection() {
   return (
     <div className="set-block">
       <div className="set-block-head">
-        <div><h2>Skill Marketplace</h2><p>Skills granted to agents via the Agent Gateway config — the same source Agent Fleet's per-agent Skills tab edits.</p></div>
-        <label className="set-search"><Search className="size-3.5" /><input placeholder="Search skills..." value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+        <div><h2>Skill Marketplace</h2><p>The skills the app ships with, who holds each, and whether it does anything yet. Granting is a choice from this fixed set, on the same configuration Agent Fleet&apos;s per-agent Skills tab edits.</p></div>
+        <label className="set-search"><Search className="size-3.5" /><input placeholder="Search skills..." aria-label="Search skills" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
       </div>
       <SectionStatus load={load} what="the skills" onRetry={reload} />
       <div className="set-skill-grid">
         {filteredSkills.map((s) => {
-          const granted = agents.filter((a) => a.skills.includes(s))
+          const granted = agents.filter((a) => a.skills.includes(s.skill_id))
           return (
-            <button key={s} className="set-skill-card" onClick={() => setSelectedSkill(s)}>
-              <div className="set-skill-card-top"><code>{s}</code></div>
+            <button key={s.skill_id} className="set-skill-card" onClick={() => { setError(null); setSelectedSkill(s.skill_id) }}>
+              <div className="set-skill-card-top"><code>{s.skill_id}</code>{skillTags(s).map((tag) => <small key={tag} className="skill-tag">{tag}</small>)}</div>
+              <p className="set-skill-summary">{s.summary}</p>
               <div className="set-skill-card-foot"><div className="avatar-stack">{granted.slice(0, 4).map((a) => <span key={a.agent_id} title={a.display_name}>{initials(a.display_name)}</span>)}</div><small>{granted.length} agent{granted.length === 1 ? '' : 's'} granted</small></div>
             </button>
           )
         })}
-        {load.loaded && filteredSkills.length === 0 && <p className="text-xs text-muted-foreground">No skills granted yet.</p>}
+        {load.loaded && filteredSkills.length === 0 && <p className="text-xs text-muted-foreground">{catalog.length === 0 ? 'The app lists no skills.' : 'No skill matches that search.'}</p>}
       </div>
 
-      {canEdit && <div className="mt-3 flex gap-2"><input value={newSkillId} onChange={(e) => setNewSkillId(e.target.value)} placeholder="new-skill-id" className="rounded border border-white/10 bg-black/20 px-2 py-1 text-xs" /><button disabled={!newSkillId.trim()} onClick={() => setSelectedSkill(newSkillId.trim())} className="text-button">Open grant matrix</button></div>}
-
-      {selectedSkill && (
+      {selected && (
         <div className="set-modal-scrim" onClick={() => setSelectedSkill(null)}>
-          <div className="set-detail" onClick={(e) => e.stopPropagation()}>
-            <div className="set-detail-head"><div><code>{selectedSkill}</code></div><button className="set-icon-btn" onClick={() => setSelectedSkill(null)} aria-label="Close"><X className="size-4" /></button></div>
-            <p className="set-matrix-title">Per-agent grant matrix</p>
-            <div className="set-matrix"><table><thead><tr><th>Agent</th><th>{selectedSkill}</th></tr></thead><tbody>{agents.map((a) => <tr key={a.agent_id}><td>{a.display_name}</td><td><button className={`set-check ${a.skills.includes(selectedSkill) ? 'on' : ''}`} disabled={!canEdit || busy} onClick={() => toggleGrant(selectedSkill, a)} aria-label={`${a.skills.includes(selectedSkill) ? 'Revoke' : 'Grant'} ${selectedSkill} for ${a.display_name}`}>{a.skills.includes(selectedSkill) && <Check className="size-3.5" />}</button></td></tr>)}</tbody></table></div>
+          <div className="set-detail" role="dialog" aria-modal="true" aria-label={`Grants of ${selected.skill_id}`} onClick={(e) => e.stopPropagation()}>
+            <div className="set-detail-head"><div><code>{selected.skill_id}</code></div><button className="set-icon-btn" onClick={() => setSelectedSkill(null)} aria-label="Close"><X className="size-4" /></button></div>
+            <p className="set-matrix-title">{selected.summary}</p>
+            {error && <ErrorNotice className="mb-2" message={error} />}
+            <div className="set-matrix"><table><thead><tr><th>Agent</th><th>{selected.skill_id}</th></tr></thead><tbody>{agents.map((a) => <tr key={a.agent_id}><td>{a.display_name}</td><td><button className={`set-check ${a.skills.includes(selected.skill_id) ? 'on' : ''}`} disabled={!canEdit || busy} onClick={() => toggleGrant(selected.skill_id, a)} aria-label={`${a.skills.includes(selected.skill_id) ? 'Revoke' : 'Grant'} ${selected.skill_id} for ${a.display_name}`}>{a.skills.includes(selected.skill_id) && <Check className="size-3.5" />}</button></td></tr>)}</tbody></table></div>
           </div>
         </div>
       )}

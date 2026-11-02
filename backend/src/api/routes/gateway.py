@@ -27,12 +27,20 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.gateway_http import api_source, config_version_from_if_match, gateway_edit_error
+from src.api.schemas import UpdateLlmProviderOrderRequest
 from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
-from src.gateway.apply import apply_config_text
+from src.gateway.edits import EditRefused
 from src.gateway.loader import ConfigLoadError, parse_config_text, validate_config_dict
-from src.gateway.service import ServiceError, _atomic_write, rollback_config
+from src.gateway.service import (
+    ServiceError,
+    StaleConfigError,
+    put_config,
+    rollback_config,
+    update_provider_order,
+)
 from src.gateway.state import get_state
 from src.models.agent_config_version import AgentConfigVersion
 from src.models.user import User
@@ -43,6 +51,7 @@ _WRITE_ROLES = [Role.SYSTEM_ADMINISTRATOR]
 
 register_policy("GET", "/api/v1/gateway/config", roles=list(Role))
 register_policy("PUT", "/api/v1/gateway/config", roles=_WRITE_ROLES)
+register_policy("PUT", "/api/v1/gateway/llm-provider-order", roles=_WRITE_ROLES)
 register_policy("POST", "/api/v1/gateway/config/validate", roles=_WRITE_ROLES)
 register_policy("GET", "/api/v1/gateway/config/versions", roles=list(Role))
 register_policy("POST", "/api/v1/gateway/config/versions/{version_id}/rollback", roles=_WRITE_ROLES)
@@ -118,11 +127,54 @@ async def get_gateway_config_endpoint(
 @router.put("/config")
 async def put_gateway_config_endpoint(
     body: WriteGatewayConfigRequest,
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
+    version: int = Depends(config_version_from_if_match),
+    db: AsyncSession = Depends(get_db),
 ) -> ApplyResultResponse:
-    _atomic_write(_config_path(), body.raw_text)
-    result = await apply_config_text(db, body.raw_text, source=f"api:{current_user.email}")
+    """Replaces the whole config. `If-Match` names the version the editor read: a config that has
+    changed since is a 409 and nothing is written. Text that fails validation is recorded as a
+    rejected version and the file is left as it was."""
+    source, actor = api_source(current_user.email)
+    try:
+        result = await put_config(
+            db,
+            _config_path(),
+            body.raw_text,
+            source=source,
+            actor=actor,
+            expected_version=version,
+        )
+    except StaleConfigError as exc:
+        raise gateway_edit_error(exc) from exc
+    return ApplyResultResponse(
+        status=result.status.value, version_id=result.version_id, errors=result.errors
+    )
+
+
+@router.put("/llm-provider-order")
+async def put_llm_provider_order_endpoint(
+    body: UpdateLlmProviderOrderRequest,
+    current_user: User = Depends(require_role),
+    version: int = Depends(config_version_from_if_match),
+    db: AsyncSession = Depends(get_db),
+) -> ApplyResultResponse:
+    """Replaces the LLM fallback order (`infra.llmProviders.order`) and nothing else, on the version
+    the editor read. The console used to read the whole config, change this list and write the whole
+    config back."""
+    source, actor = api_source(current_user.email)
+    try:
+        result = await update_provider_order(
+            db,
+            _config_path(),
+            body.order,
+            source=source,
+            actor=actor,
+            expected_version=version,
+        )
+    except (EditRefused, StaleConfigError, ConfigLoadError) as exc:
+        raise gateway_edit_error(exc) from exc
+    if result.status.value != "active":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(result.errors))
     return ApplyResultResponse(
         status=result.status.value, version_id=result.version_id, errors=result.errors
     )
@@ -171,10 +223,11 @@ async def list_gateway_config_versions_endpoint(
 async def rollback_gateway_config_endpoint(
     version_id: int,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role),
+    current_user: User = Depends(require_role),
 ) -> ApplyResultResponse:
     try:
-        result = await rollback_config(db, _config_path(), version_id)
+        source, actor = api_source(current_user.email, kind="rollback")
+        result = await rollback_config(db, _config_path(), version_id, source=source, actor=actor)
     except ServiceError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return ApplyResultResponse(

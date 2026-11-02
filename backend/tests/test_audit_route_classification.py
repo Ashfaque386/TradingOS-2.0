@@ -86,6 +86,11 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         "answers revoked_count; revoking is an incident-response step that ran",
     ),
     ("PUT", "/agents/{agent_id}/identity"): (S, "saves an identity"),
+    ("PATCH", "/agents/{agent_id}"): (
+        X,
+        "tests/test_gateway_concurrency.py::"
+        "test_an_edit_that_cannot_be_made_is_refused_with_its_reason_and_writes_nothing",
+    ),
     ("POST", "/agents/{agent_id}/prompt-versions"): (N, "creates a draft version"),
     ("POST", "/agents/{agent_id}/prompt-versions/{version_id}/activate"): (
         X,
@@ -134,6 +139,11 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/chat/sessions/{session_id}/messages"): (N, "adds a message"),
     ("POST", "/chat/sessions/{session_id}/abort"): (R, "sets a fire-and-forget abort flag"),
     ("PUT", "/gateway/config"): (S, "applies a config"),
+    ("PUT", "/gateway/llm-provider-order"): (
+        X,
+        "tests/test_gateway_concurrency.py::"
+        "test_the_order_already_in_place_and_a_stale_order_are_refused",
+    ),
     ("POST", "/gateway/config/validate"): (N, "compute-only"),
     ("POST", "/gateway/config/versions/{version_id}/rollback"): (
         N,
