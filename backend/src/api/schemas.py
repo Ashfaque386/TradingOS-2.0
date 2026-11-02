@@ -1577,6 +1577,16 @@ class AuditActorSummaryResponse(BaseModel):
     actions: dict[str, int]
 
 
+class AuditFacetsResponse(BaseModel):
+    """The values the audit filters can be set to. `truncated` is true when any list was cut at the
+    server's limit, so the console can say the list is not complete."""
+
+    actors: list[str]
+    entity_types: list[str]
+    actions: list[str]
+    truncated: bool
+
+
 # --- Phase 12: Notifications & Omni-Channel (Build Spec §18) ----------------
 
 

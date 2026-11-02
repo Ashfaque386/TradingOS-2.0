@@ -1,5 +1,5 @@
 """Audit log read/export API (Build Spec §19): list, CSV/NDJSON export
-filtered by entity/actor, and an on-demand chain-verification trigger.
+filtered by entity/actor/action/text/time, and an on-demand chain-verification trigger.
 Read access (list + export) is role-restricted to exactly
 SystemAdministrator/ReadOnlyAuditor, per the spec's explicit wording --
 neither PortfolioManager nor RiskManager can read the audit trail, even
@@ -12,17 +12,21 @@ docstring), so this is not a pure read despite living under `/audit`.
 import csv
 import io
 import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import Select, func, select
+from sqlalchemy import ColumnElement, Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.paging import set_total_count
 from src.api.schemas import (
     AuditActorSummaryResponse,
     AuditChainVerifyResponse,
+    AuditFacetsResponse,
     AuditLogEntryResponse,
     AuditTradeTraceResponse,
 )
@@ -39,6 +43,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 _READ_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.READ_ONLY_AUDITOR]
 
 register_policy("GET", "/api/v1/audit/entries", roles=_READ_ROLES)
+register_policy("GET", "/api/v1/audit/facets", roles=_READ_ROLES)
 register_policy("GET", "/api/v1/audit/export", roles=_READ_ROLES)
 register_policy("POST", "/api/v1/audit/verify", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("GET", "/api/v1/audit/trades/{entity_id}/trace", roles=_READ_ROLES)
@@ -65,37 +70,125 @@ def _entry_response(row: AuditLog) -> AuditLogEntryResponse:
     )
 
 
-def _apply_filters(
-    stmt: Select[tuple[AuditLog]],
-    *,
-    entity_type: str | None,
-    entity_id: str | None,
-    actor: str | None,
-) -> Select[tuple[AuditLog]]:
-    if entity_type is not None:
-        stmt = stmt.where(AuditLog.entity_type == entity_type)
-    if entity_id is not None:
-        stmt = stmt.where(AuditLog.entity_id == entity_id)
-    if actor is not None:
-        stmt = stmt.where(AuditLog.actor == actor)
+# The most distinct values of one column that /facets lists. The console offers them as choices in a
+# filter; past this many it says the list is cut, and the person types the value instead.
+_FACET_LIMIT = 500
+
+
+@dataclass(frozen=True)
+class AuditFilter:
+    """What narrows the log. Every field is optional and they combine with AND; `search` is a
+    case-insensitive "contains" over actor, action and entity id."""
+
+    entity_type: str | None = None
+    entity_id: str | None = None
+    actor: str | None = None
+    action: str | None = None
+    search: str | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+
+
+def _as_utc(moment: datetime | None) -> datetime | None:
+    """A time given without a zone is read as UTC, the zone the log is stored in."""
+    if moment is None or moment.tzinfo is not None:
+        return moment
+    return moment.replace(tzinfo=UTC)
+
+
+def audit_filter(
+    entity_type: str | None = Query(default=None, max_length=64),
+    entity_id: str | None = Query(default=None, max_length=128),
+    actor: str | None = Query(default=None, max_length=64),
+    action: str | None = Query(default=None, max_length=128),
+    search: str | None = Query(default=None, max_length=128),
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> AuditFilter:
+    return AuditFilter(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        actor=actor,
+        action=action,
+        search=search or None,
+        since=_as_utc(since),
+        until=_as_utc(until),
+    )
+
+
+def _apply_filters(stmt: Select[Any], filters: AuditFilter) -> Select[Any]:
+    if filters.entity_type is not None:
+        stmt = stmt.where(AuditLog.entity_type == filters.entity_type)
+    if filters.entity_id is not None:
+        stmt = stmt.where(AuditLog.entity_id == filters.entity_id)
+    if filters.actor is not None:
+        stmt = stmt.where(AuditLog.actor == filters.actor)
+    if filters.action is not None:
+        stmt = stmt.where(AuditLog.action == filters.action)
+    if filters.search is not None:
+        # autoescape: a "%" or "_" typed into the search box is looked for, not read as a wildcard
+        contains: list[ColumnElement[bool]] = [
+            AuditLog.actor.icontains(filters.search, autoescape=True),
+            AuditLog.action.icontains(filters.search, autoescape=True),
+            AuditLog.entity_id.icontains(filters.search, autoescape=True),
+        ]
+        stmt = stmt.where(or_(*contains))
+    if filters.since is not None:
+        stmt = stmt.where(AuditLog.created_at >= filters.since)
+    if filters.until is not None:
+        stmt = stmt.where(AuditLog.created_at <= filters.until)
     return stmt
 
 
 @router.get("/entries")
 async def list_audit_entries(
-    entity_type: str | None = None,
-    entity_id: str | None = None,
-    actor: str | None = None,
+    response: Response,
+    filters: AuditFilter = Depends(audit_filter),
     limit: int = Query(default=100, le=1000, gt=0),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> list[AuditLogEntryResponse]:
-    stmt = select(AuditLog)
-    stmt = _apply_filters(stmt, entity_type=entity_type, entity_id=entity_id, actor=actor)
+    """One page, newest first. `X-Total-Count` is how many entries the filters match in all, so a
+    person can page through all of them and not only the newest `limit`."""
+    total = (
+        await db.execute(_apply_filters(select(func.count(AuditLog.id)), filters))
+    ).scalar_one()
+    set_total_count(response, total)
+    stmt = _apply_filters(select(AuditLog), filters)
     stmt = stmt.order_by(AuditLog.sequence.desc()).offset(offset).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [_entry_response(row) for row in rows]
+
+
+async def _distinct_values(db: AsyncSession, column: Any) -> tuple[list[str], bool]:
+    stmt = (
+        select(column)
+        .where(column.is_not(None))
+        .distinct()
+        .order_by(column)
+        .limit(_FACET_LIMIT + 1)
+    )
+    values = list((await db.execute(stmt)).scalars().all())
+    return values[:_FACET_LIMIT], len(values) > _FACET_LIMIT
+
+
+@router.get("/facets")
+async def get_audit_facets(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> AuditFacetsResponse:
+    """The values the log's filters can be set to, for the console's drop-downs. Read once when the
+    page opens, not polled: it reads the whole table."""
+    actors, actors_cut = await _distinct_values(db, AuditLog.actor)
+    entity_types, entity_types_cut = await _distinct_values(db, AuditLog.entity_type)
+    actions, actions_cut = await _distinct_values(db, AuditLog.action)
+    return AuditFacetsResponse(
+        actors=actors,
+        entity_types=entity_types,
+        actions=actions,
+        truncated=actors_cut or entity_types_cut or actions_cut,
+    )
 
 
 @router.get("/trades/{entity_id}/trace")
@@ -158,14 +251,12 @@ async def get_actor_audit_summary(
 @router.get("/export")
 async def export_audit_entries(
     format: Literal["csv", "ndjson"] = "ndjson",
-    entity_type: str | None = None,
-    entity_id: str | None = None,
-    actor: str | None = None,
+    filters: AuditFilter = Depends(audit_filter),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> Response:
-    stmt = select(AuditLog)
-    stmt = _apply_filters(stmt, entity_type=entity_type, entity_id=entity_id, actor=actor)
+    """The same filters as the list, so "export what I am looking at" is what comes back."""
+    stmt = _apply_filters(select(AuditLog), filters)
     stmt = stmt.order_by(AuditLog.sequence)
     rows = (await db.execute(stmt)).scalars().all()
 

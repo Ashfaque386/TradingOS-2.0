@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.agents.scheduler import start_heartbeat_loop
+from src.api.paging import TOTAL_COUNT_HEADER
 from src.api.router import api_router
 from src.api.routes.health import router as health_router
 from src.brokers.factory import get_live_adapter
@@ -306,8 +307,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     # Readable by the console (a browser hides other headers from a cross-origin page): how long to
-    # wait after a 429 (the rate limiter sets the same on its own responses).
-    expose_headers=["Retry-After"],
+    # wait after a 429 (the rate limiter sets the same on its own responses), and how many rows a
+    # paged list matches in all.
+    expose_headers=["Retry-After", TOTAL_COUNT_HEADER],
 )
 # Middleware wraps in reverse registration order -- CorrelationIdMiddleware
 # (added last) is outermost, so a correlation ID is bound before anything

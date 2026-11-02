@@ -80,6 +80,10 @@
     "ReadOnlyAuditor",
     "SystemAdministrator"
   ],
+  "GET /api/v1/audit/facets": [
+    "ReadOnlyAuditor",
+    "SystemAdministrator"
+  ],
   "GET /api/v1/audit/trades/{entity_id}/trace": [
     "ReadOnlyAuditor",
     "SystemAdministrator"

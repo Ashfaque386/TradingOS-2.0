@@ -26,6 +26,7 @@ CLIENT_FILES = [REPO / "lib" / "api.ts"]
 
 _HELPER_METHODS = {
     "apiGet": "GET",
+    "apiGetPage": "GET",
     "apiPost": "POST",
     "apiPut": "PUT",
     "apiPatch": "PATCH",
@@ -76,8 +77,6 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ): "the subscriptions list carries the same row",
     ("GET", "/api/v1/paper-trading/subscriptions/{}/position"): "the positions endpoint covers it",
     # ---- no screen yet: the phase of the gap analysis that adds it ----
-    ("GET", "/api/v1/audit/actors/{}/summary"): "Phase 9: Audit drill-downs",
-    ("GET", "/api/v1/audit/trades/{}/trace"): "Phase 9: Audit drill-downs",
     (
         "GET",
         "/api/v1/live-trading/orders/{}/trades",
@@ -142,7 +141,7 @@ def _method_for(text: str, literal_start: int, literal_end: int) -> str:
         text.rfind("\nexport ", 0, literal_start), text.rfind("\nasync function ", 0, literal_start)
     )
     before = text[statement_start + 1 : literal_start]
-    helper = list(re.finditer(r"\b(apiGet|apiPost|apiPut|apiPatch|apiDelete)\b", before))
+    helper = list(re.finditer(r"\b(apiGetPage|apiGet|apiPost|apiPut|apiPatch|apiDelete)\b", before))
     if helper:
         return _HELPER_METHODS[helper[-1].group(1)]
     following = re.search(r"\n(?:export |async function |function )", text[literal_end:])

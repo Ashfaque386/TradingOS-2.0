@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `audit-logic.spec.ts` -- what the Audit page decides: India time to UTC, the request and the address for each filter,
+  page windows, the wording of a verification, an actor's action shares. No browser or backend.
+- `audit.spec.ts` -- the Audit Log against a real backend: paging to the last entry, server-side filters, a link that
+  opens it narrowed, an entity's trace, an actor's summary, filtered exports, the verification result. It signs in many
+  times and creates an account to have entries of its own to look for.
 - `csp-logic.spec.ts`, `users-logic.spec.ts` -- the Content-Security-Policy builder and the wording of Settings > Users.
   No browser or backend.
 - `access-control.spec.ts` -- closed registration, accounts made by an administrator, the lock after wrong passwords and

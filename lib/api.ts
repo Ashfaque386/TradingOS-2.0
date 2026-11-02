@@ -113,7 +113,11 @@ export function isTransientError(err: unknown): boolean {
   return err instanceof TypeError
 }
 
-async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
+async function requestWithResponse<T>(
+  path: string,
+  init: RequestInit = {},
+  allowRefresh = true,
+): Promise<{ data: T; res: Response }> {
   const token = getAccessToken()
   const headers = new Headers(init.headers)
   if (!headers.has('Content-Type') && init.body !== undefined) {
@@ -125,7 +129,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
 
   if (res.status === 401 && allowRefresh && token) {
     const refreshed = await refreshSession()
-    if (refreshed.kind === 'ok') return request<T>(path, init, false)
+    if (refreshed.kind === 'ok') return requestWithResponse<T>(path, init, false)
     // The token expired but the refresh couldn't even be judged: surface
     // that as the transient failure it is, not as the original 401 (which
     // would read as "your session is over").
@@ -145,12 +149,26 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
     throw new ApiError(res.status, typeof detail === 'string' ? detail : JSON.stringify(detail), retryAfterOf(res))
   }
 
-  if (res.status === 204) return undefined as T
+  if (res.status === 204) return { data: undefined as T, res }
   const text = await res.text()
-  return (text ? JSON.parse(text) : undefined) as T
+  return { data: (text ? JSON.parse(text) : undefined) as T, res }
+}
+
+async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
+  return (await requestWithResponse<T>(path, init, allowRefresh)).data
 }
 
 export const apiGet = <T>(path: string) => request<T>(path, { method: 'GET' })
+
+/** One page of a list, and how many rows match in all (the server's `X-Total-Count`; the page's own
+ * length when the server did not say, which is the case for a list that is not paged). */
+export type Page<T> = { items: T[]; total: number }
+export async function apiGetPage<T>(path: string): Promise<Page<T>> {
+  const { data, res } = await requestWithResponse<T[]>(path, { method: 'GET' })
+  const header = res.headers.get('X-Total-Count')
+  const total = header === null ? Number.NaN : Number(header)
+  return { items: data, total: Number.isFinite(total) ? total : data.length }
+}
 export const apiPost = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined })
 export const apiPut = <T>(path: string, body?: unknown) =>
@@ -1343,15 +1361,56 @@ export type AuditChainVerifyResult = {
   db_chain_reason: string | null
 }
 
-export const listAuditEntries = (params: { entityType?: string; entityId?: string; actor?: string; limit?: number; offset?: number } = {}) => {
-  const query = new URLSearchParams()
-  if (params.entityType) query.set('entity_type', params.entityType)
-  if (params.entityId) query.set('entity_id', params.entityId)
-  if (params.actor) query.set('actor', params.actor)
-  query.set('limit', String(params.limit ?? 200))
-  query.set('offset', String(params.offset ?? 0))
-  return apiGet<AuditLogEntry[]>(`/api/v1/audit/entries?${query.toString()}`)
+/** What narrows the log; each field is optional and they combine. `since` and `until` are ISO times. */
+export type AuditQuery = {
+  entityType?: string
+  entityId?: string
+  actor?: string
+  action?: string
+  search?: string
+  since?: string
+  until?: string
 }
+
+function auditQueryString(query: AuditQuery): URLSearchParams {
+  const params = new URLSearchParams()
+  if (query.entityType) params.set('entity_type', query.entityType)
+  if (query.entityId) params.set('entity_id', query.entityId)
+  if (query.actor) params.set('actor', query.actor)
+  if (query.action) params.set('action', query.action)
+  if (query.search) params.set('search', query.search)
+  if (query.since) params.set('since', query.since)
+  if (query.until) params.set('until', query.until)
+  return params
+}
+
+export const listAuditEntries = (query: AuditQuery & { limit?: number; offset?: number } = {}) => {
+  const params = auditQueryString(query)
+  params.set('limit', String(query.limit ?? 100))
+  params.set('offset', String(query.offset ?? 0))
+  return apiGetPage<AuditLogEntry>(`/api/v1/audit/entries?${params.toString()}`)
+}
+
+/** The values the log's filters can be set to; `truncated` when a list was cut at the server's limit. */
+export type AuditFacets = { actors: string[]; entity_types: string[]; actions: string[]; truncated: boolean }
+export const getAuditFacets = () => apiGet<AuditFacets>('/api/v1/audit/facets')
+
+/** Everything recorded about one entity, oldest first. 404 when nothing was. */
+export type AuditTrace = { entity_id: string; entry_count: number; entries: AuditLogEntry[] }
+export const getAuditTrace = (entityId: string) =>
+  apiGet<AuditTrace>(`/api/v1/audit/trades/${encodeURIComponent(entityId)}/trace`)
+
+/** What one actor has done: counts per action and when they were first and last seen. 404 when nothing. */
+export type AuditActorSummary = {
+  actor: string
+  action_count: number
+  first_seen: string | null
+  last_seen: string | null
+  actions: Record<string, number>
+}
+export const getAuditActorSummary = (actor: string) =>
+  apiGet<AuditActorSummary>(`/api/v1/audit/actors/${encodeURIComponent(actor)}/summary`)
+
 export const verifyAuditChain = () => apiPost<AuditChainVerifyResult>('/api/v1/audit/verify')
 
 // A file the server only hands to a signed-in user. A plain <a href> cannot carry the Bearer token,
@@ -1384,11 +1443,12 @@ export async function downloadAuthenticated(path: string, fallbackFilename: stri
   URL.revokeObjectURL(url)
 }
 
-export const downloadAuditExport = (format: 'csv' | 'ndjson') =>
-  downloadAuthenticated(
-    `/api/v1/audit/export?format=${format}`,
-    `audit_log_export.${format === 'ndjson' ? 'ndjson' : 'csv'}`
-  )
+/** The log as a file; with a query, only the entries it matches (what the page is showing). */
+export const downloadAuditExport = (format: 'csv' | 'ndjson', query: AuditQuery = {}) => {
+  const params = auditQueryString(query)
+  params.set('format', format)
+  return downloadAuthenticated(`/api/v1/audit/export?${params.toString()}`, `audit_log_export.${format === 'ndjson' ? 'ndjson' : 'csv'}`)
+}
 
 // ---- Unified orders (paper + live) ----
 export type UnifiedExecution = {

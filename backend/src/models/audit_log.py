@@ -61,10 +61,10 @@ class AuditLog(Base):
     sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     previous_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    entity_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -105,6 +105,12 @@ this is where it stands.
 
 **Still open from this phase:** TLS and HSTS (put a proxy in front before exposing the stack, then set `TRUSTED_PROXIES`/`HSTS_ENABLED`); an XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock); the live stack has not been rebuilt, and rebuilding signs everyone out once.
 
+**Closed in phase 9 (page completion), so far:**
+
+| Gap | What changed |
+|---|---|
+| W12 (Audit), and the two Audit routes with no screen | The log is paged and filtered by the server (actor, entity type, action, entity id, text, an India-time range) with the match count in `X-Total-Count`, so every entry can be reached, not the newest 200; an entity id opens its whole trace and an actor opens a summary; both hashes are shown whole; a verification lists its three checks; exports follow the filters. |
+
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
 - The paper desk's "needs attention" logic exists only in the browser (`lib/paper-trading.ts`); there is no server-side version.
