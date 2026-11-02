@@ -490,6 +490,22 @@
   .order-trades-row td { padding: 0; background: rgba(2,8,23,.35); }
   .order-trades { min-width: 0; }
   .order-trades th:first-child, .order-trades td:first-child { padding-left: 1rem; }
+  /* Backtests: the run's own line, Monte Carlo facts, the ledger's summary, dialog results */
+  .bt-stack { margin-bottom: 1rem; }
+  .bt-run-strip { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; margin-bottom: .9rem; color: #94a3b8; font-size: .72rem; }
+  .bt-run-strip strong { color: #f8fafc; font-size: .95rem; }
+  .bt-config { color: #94a3b8; font-size: .66rem; }
+  .bt-facts { display: grid; gap: .6rem; padding: 1rem; }
+  .bt-facts > div { display: grid; grid-template-columns: 1fr auto; gap: 0 1rem; align-items: baseline; border-bottom: 1px solid rgba(255,255,255,.06); padding-bottom: .5rem; }
+  .bt-facts dt { color: #cbd5e1; font-size: .7rem; }
+  .bt-facts dd { color: #f8fafc; font: 600 .78rem 'JetBrains Mono', monospace; text-align: right; }
+  .bt-facts small { grid-column: 1 / -1; margin-top: .15rem; color: #64748b; font-size: .6rem; }
+  .bt-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .75rem 1rem 1rem; }
+  .bt-path-pick { display: inline-flex; align-items: center; gap: .4rem; color: #94a3b8; font-size: .65rem; }
+  .bt-path-pick select { border: 1px solid rgba(148,163,184,.2); border-radius: .4rem; background: rgba(2,8,23,.55); padding: .35rem .5rem; color: #e2e8f0; font-size: .65rem; }
+  .bt-ledger-summary { padding: .75rem 1rem; border-bottom: 1px solid rgba(255,255,255,.06); color: #94a3b8; font-size: .66rem; line-height: 1.5; }
+  .bt-result { border: 1px solid rgba(52,211,153,.28); border-radius: .6rem; background: rgba(6,78,59,.18); padding: .7rem .85rem; color: #a7f3d0; font-size: .68rem; line-height: 1.5; }
+  .bt-result small { display: block; margin-top: .35rem; color: #6ee7b7; font-size: .6rem; }
   .ui-pager { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem .9rem; border-top: 1px solid rgba(255,255,255,.07); padding: .7rem .9rem; color: #64748b; font: .58rem 'JetBrains Mono', monospace; }
   .ui-pager-note { flex: 1; text-align: center; }
   .ui-pager-btns { display: flex; align-items: center; gap: .35rem; }

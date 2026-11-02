@@ -3,7 +3,7 @@ from datetime import date as date_type
 from datetime import datetime as datetime_type
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from src.core.roles import Role
 from src.engine.backtest.signals import BuiltinStrategy as EngineBuiltinStrategy
@@ -524,6 +524,26 @@ class RunBacktestRequest(BaseModel):
     initial_capital: float = Field(default=100_000.0, gt=0)
 
 
+class RunBacktestFromLakeRequest(BaseModel):
+    """A backtest on the daily prices the data lake already holds, between two dates. The caller
+    names the strategy and the window; no prices travel with the request."""
+
+    strategy_version_id: uuid.UUID
+    symbol: str = Field(min_length=1, max_length=32)
+    start_date: date_type
+    end_date: date_type
+    strategy: BuiltinStrategy = "sma_crossover"
+    sma_window: int = Field(default=15, gt=0)
+    is_delivery: bool = True
+    initial_capital: float = Field(default=100_000.0, gt=0)
+
+    @model_validator(mode="after")
+    def _dates_in_order(self) -> "RunBacktestFromLakeRequest":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date is before start_date")
+        return self
+
+
 class BacktestRunResponse(BaseModel):
     id: uuid.UUID
     strategy_version_id: uuid.UUID
@@ -540,16 +560,23 @@ class BacktestRunResponse(BaseModel):
     # Where the bars came from (see src.models.data_source): a run posted by a caller is
     # `supplied` -- this system cannot say whether the bars were real.
     data_source: str = "unknown"
+    # Each trade with its dates, prices, size, costs and net result; null for a run from before
+    # they were kept.
+    trades: list[dict[str, Any]] | None = None
+    # How the signals were made: strategy, sma_window, is_delivery, initial_capital, source.
+    signal_config: dict[str, Any] | None = None
     created_at: datetime_type
 
 
 class WalkForwardRequest(BaseModel):
-    bars: list[OHLCVBar] = Field(min_length=2)
+    # Omitted: the run's own symbol and dates are read from the data lake.
+    bars: list[OHLCVBar] | None = Field(default=None, min_length=2)
     train_bars: int = Field(gt=0)
     test_bars: int = Field(gt=0)
     step_bars: int | None = Field(default=None, gt=0)
-    strategy: BuiltinStrategy = "sma_crossover"
-    sma_window: int = Field(default=15, gt=0)
+    # Omitted: what the run itself was made with (else the defaults, sma_crossover and 15).
+    strategy: BuiltinStrategy | None = None
+    sma_window: int | None = Field(default=None, gt=0)
 
 
 class MonteCarloRequest(BaseModel):
@@ -570,12 +597,27 @@ class ComparisonResponse(BaseModel):
 
 class OptimizeRequest(BaseModel):
     strategy_version_id: uuid.UUID
-    bars: list[OHLCVBar] = Field(min_length=2)
+    # Either the prices themselves, or a symbol and dates to read from the data lake.
+    bars: list[OHLCVBar] | None = Field(default=None, min_length=2)
+    symbol: str | None = Field(default=None, min_length=1, max_length=32)
+    start_date: date_type | None = None
+    end_date: date_type | None = None
     n_trials: int = Field(default=30, gt=0, le=200)
     objective_metric: Literal["sharpe", "total_return", "cagr"] = "sharpe"
     sma_window_min: int = Field(default=5, gt=0)
     sma_window_max: int = Field(default=50, gt=0)
     seed: int | None = None
+
+    @model_validator(mode="after")
+    def _prices_or_a_lake_window(self) -> "OptimizeRequest":
+        if self.bars is None:
+            if self.symbol is None or self.start_date is None or self.end_date is None:
+                raise ValueError("give the bars, or a symbol with start_date and end_date")
+            if self.end_date < self.start_date:
+                raise ValueError("end_date is before start_date")
+        if self.sma_window_max < self.sma_window_min:
+            raise ValueError("sma_window_max is below sma_window_min")
+        return self
 
 
 class OptimizationRunResponse(BaseModel):

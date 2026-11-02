@@ -1350,6 +1350,29 @@ export const checkGoLiveReadiness = (body: GoLiveReadinessInput) =>
   apiPost<GoLiveReadinessResult>('/api/v1/risk/go-live-readiness', body)
 
 // ---- Backtests ----
+export type BuiltinStrategy = 'sma_crossover' | 'always_long'
+
+/** One trade of a run: when it opened and closed, at what, how many shares, and what it earned and cost. */
+export type BacktestTrade = {
+  entry_date: string
+  exit_date: string
+  entry_price: number
+  exit_price: number
+  quantity: number
+  gross_pnl: number
+  costs: number
+  net_pnl: number
+}
+
+/** How a run's signals were made; `source` says whether the prices came from the data lake or a caller. */
+export type BacktestSignalConfig = {
+  strategy: BuiltinStrategy
+  sma_window: number
+  is_delivery: boolean
+  initial_capital: number
+  source: 'lake' | 'supplied'
+}
+
 export type BacktestMetrics = {
   total_return: number | null
   cagr: number | null
@@ -1393,6 +1416,9 @@ export type BacktestRun = {
   // Where the bars came from: 'supplied' means the caller posted them, so nobody here can
   // vouch they are real market data. 'unknown' for runs from before this was recorded.
   data_source?: 'real' | 'synthetic' | 'supplied' | 'mixed' | 'unknown'
+  // Each trade with its dates; null for a run from before they were kept.
+  trades: BacktestTrade[] | null
+  signal_config: BacktestSignalConfig | null
   created_at: string
 }
 
@@ -1407,6 +1433,53 @@ export const runMonteCarlo = (runId: string, nPaths = 1000, seed?: number) =>
   apiPost<BacktestRun>(`/api/v1/backtests/${runId}/monte-carlo`, { n_paths: nPaths, seed })
 export const compareBacktests = (runIds: string[]) =>
   apiPost<ComparisonResult>('/api/v1/backtests/compare', { run_ids: runIds })
+
+/** A backtest on the daily prices the data lake holds, between two dates. */
+export type LakeBacktestRequest = {
+  strategy_version_id: string
+  symbol: string
+  start_date: string
+  end_date: string
+  strategy?: BuiltinStrategy
+  sma_window?: number
+  is_delivery?: boolean
+  initial_capital?: number
+}
+export const createBacktestFromLake = (body: LakeBacktestRequest) =>
+  apiPost<BacktestRun>('/api/v1/backtests/from-lake', body)
+
+/** A walk-forward on a run's own window, read from the lake. Strategy and average default to the run's. */
+export type WalkForwardRequest = {
+  train_bars: number
+  test_bars: number
+  step_bars?: number
+  strategy?: BuiltinStrategy
+  sma_window?: number
+}
+export const runWalkForward = (runId: string, body: WalkForwardRequest) =>
+  apiPost<BacktestRun>(`/api/v1/backtests/${runId}/walk-forward`, body)
+
+/** A search for the best moving-average length on a symbol's history in the lake. */
+export type OptimizeRequest = {
+  strategy_version_id: string
+  symbol: string
+  start_date: string
+  end_date: string
+  n_trials?: number
+  objective_metric?: 'sharpe' | 'total_return' | 'cagr'
+  sma_window_min?: number
+  sma_window_max?: number
+  seed?: number
+}
+export type OptimizationResult = {
+  id: string
+  n_trials: number
+  best_params: Record<string, number | string> | null
+  best_value: number | null
+  param_importance: Record<string, number> | null
+}
+export const optimizeBacktest = (body: OptimizeRequest) =>
+  apiPost<OptimizationResult>('/api/v1/backtests/optimize', body)
 
 // ---- Audit log ----
 export type AuditLogEntry = {

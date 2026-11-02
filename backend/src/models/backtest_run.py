@@ -63,6 +63,14 @@ class BacktestRun(Base):
     # Per-trade net P&L, in trade order -- the resampling population for
     # src.engine.optimization.monte_carlo.run_monte_carlo.
     trade_pnls: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    # Each trade with its dates, prices, size, costs and net result ({entry_date, exit_date,
+    # entry_price, exit_price, quantity, gross_pnl, costs, net_pnl}), in the same order as
+    # `trade_pnls`. Null for a run from before the dates were kept.
+    trades: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    # How the signals were made, so the same run can be analysed again the same way:
+    # {strategy, sma_window, is_delivery, initial_capital, source} -- `source` is "lake" when the
+    # bars were read from the data lake and "supplied" when the caller posted them.
+    signal_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     walk_forward_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     monte_carlo_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

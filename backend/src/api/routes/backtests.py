@@ -6,6 +6,8 @@ walk-forward and Monte Carlo validated, and compared against another run.
 from __future__ import annotations
 
 import uuid
+from datetime import date
+from pathlib import Path
 from typing import Any
 
 import optuna
@@ -22,11 +24,14 @@ from src.api.schemas import (
     OHLCVBar,
     OptimizationRunResponse,
     OptimizeRequest,
+    RunBacktestFromLakeRequest,
     RunBacktestRequest,
     WalkForwardRequest,
 )
+from src.core.config import get_settings
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
+from src.data import lake
 from src.data.freshness_snapshot import DataLakeFreshnessSnapshot, load_freshness_snapshot
 from src.engine.backtest.signals import generate_builtin_signals
 from src.models.backtest_run import BacktestRun
@@ -40,6 +45,7 @@ router = APIRouter(prefix="/backtests", tags=["backtests"])
 _OPERATOR_ROLES = [Role.SYSTEM_ADMINISTRATOR, Role.PORTFOLIO_MANAGER]
 
 register_policy("POST", "/api/v1/backtests", roles=_OPERATOR_ROLES)
+register_policy("POST", "/api/v1/backtests/from-lake", roles=_OPERATOR_ROLES)
 register_policy("GET", "/api/v1/backtests", roles=list(Role))
 register_policy("GET", "/api/v1/backtests/{run_id}", roles=list(Role))
 register_policy("POST", "/api/v1/backtests/{run_id}/walk-forward", roles=_OPERATOR_ROLES)
@@ -62,6 +68,33 @@ def _bars_to_df(bars: list[OHLCVBar]) -> pd.DataFrame:
     ).sort_index()
 
 
+# Fewer daily bars than this is not a history to test a strategy on.
+MIN_LAKE_BARS = 30
+
+
+def _lake_prices(symbol: str, start: date, end: date) -> tuple[pd.DataFrame, str]:
+    """The daily bars the data lake holds for `symbol` between two dates, and what they rest on.
+    Only bars with a recorded real source, unless the synthetic demo/test mode is on (then the lake
+    may hold generated bars too, and the run says `mixed`). Too few bars is a 422 that says how many
+    there are, not a run on next to nothing."""
+    settings = get_settings()
+    real_only = not settings.paper_trading_synthetic
+    prices = lake.read_daily_bars(
+        Path(settings.data_lake_path), symbol, start, end, real_only=real_only
+    )
+    if len(prices) < MIN_LAKE_BARS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"The data lake holds {len(prices)} daily "
+                f"{'bar' if len(prices) == 1 else 'bars'} of {symbol} between {start} and {end}"
+                f"{' with a recorded real source' if real_only else ''}; a backtest needs at least "
+                f"{MIN_LAKE_BARS}. Fetch the symbol's history first."
+            ),
+        )
+    return prices, (DataSource.REAL if real_only else DataSource.MIXED)
+
+
 def _run_response(run: BacktestRun) -> BacktestRunResponse:
     return BacktestRunResponse(
         id=run.id,
@@ -77,6 +110,8 @@ def _run_response(run: BacktestRun) -> BacktestRunResponse:
         walk_forward_result=run.walk_forward_result,
         monte_carlo_result=run.monte_carlo_result,
         data_source=run.data_source,
+        trades=run.trades,
+        signal_config=run.signal_config,
         created_at=run.created_at,
     )
 
@@ -114,6 +149,51 @@ async def run_backtest_endpoint(
         initial_capital=body.initial_capital,
         created_by=str(current_user.id),
         data_source=DataSource.SUPPLIED,  # the caller posted the bars
+        signal_config={
+            "strategy": body.strategy,
+            "sma_window": body.sma_window,
+            "is_delivery": body.is_delivery,
+            "initial_capital": body.initial_capital,
+            "source": "supplied",
+        },
+    )
+    return _run_response(run)
+
+
+@router.post("/from-lake", status_code=status.HTTP_201_CREATED)
+async def run_backtest_from_lake_endpoint(
+    body: RunBacktestFromLakeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role),
+) -> BacktestRunResponse:
+    """A backtest on the daily prices the data lake holds. A window the lake cannot cover up to the
+    day before `end_date` is recorded as a refused run with its reason, like any stale-data run."""
+    prices, data_source = _lake_prices(body.symbol, body.start_date, body.end_date)
+    signals = generate_builtin_signals(prices, body.strategy, body.sma_window)
+    # The lake's own bars are the freshness evidence: the gate asks whether the day before the end
+    # of the window is among them.
+    data_lake = DataLakeFreshnessSnapshot(
+        available_dates={body.symbol: frozenset(ts.date() for ts in prices.index)}
+    )
+    run = await backtests_orch.run_backtest(
+        db,
+        strategy_version_id=body.strategy_version_id,
+        symbol=body.symbol,
+        prices=prices,
+        signals=signals,
+        as_of=body.end_date,
+        data_lake=data_lake,
+        is_delivery=body.is_delivery,
+        initial_capital=body.initial_capital,
+        created_by=str(current_user.id),
+        data_source=data_source,
+        signal_config={
+            "strategy": body.strategy,
+            "sma_window": body.sma_window,
+            "is_delivery": body.is_delivery,
+            "initial_capital": body.initial_capital,
+            "source": "lake",
+        },
     )
     return _run_response(run)
 
@@ -150,10 +230,21 @@ async def walk_forward_endpoint(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> BacktestRunResponse:
-    prices = _bars_to_df(body.bars)
+    existing = await db.get(BacktestRun, run_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"no such backtest run: {run_id}"
+        )
+    if body.bars is not None:
+        prices = _bars_to_df(body.bars)
+    else:
+        prices, _source = _lake_prices(existing.symbol, existing.start_date, existing.end_date)
+    config = existing.signal_config or {}
+    strategy = body.strategy or config.get("strategy") or "sma_crossover"
+    sma_window = body.sma_window or config.get("sma_window") or 15
 
     def strategy_fn(_train: pd.DataFrame, test: pd.DataFrame) -> pd.Series[Any]:
-        return generate_builtin_signals(test, body.strategy, body.sma_window)
+        return generate_builtin_signals(test, strategy, sma_window)
 
     try:
         run = await backtests_orch.run_walk_forward_for_run(
@@ -207,7 +298,16 @@ async def optimize_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role),
 ) -> OptimizationRunResponse:
-    prices = _bars_to_df(body.bars)
+    if body.bars is not None:
+        prices = _bars_to_df(body.bars)
+    else:
+        if body.symbol is None or body.start_date is None or body.end_date is None:
+            # the request's validator already refuses this; the check is for the types
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="give the bars, or a symbol with its dates",
+            )
+        prices, _source = _lake_prices(body.symbol, body.start_date, body.end_date)
 
     def param_space_fn(trial: optuna.Trial) -> dict[str, Any]:
         return {"window": trial.suggest_int("window", body.sma_window_min, body.sma_window_max)}

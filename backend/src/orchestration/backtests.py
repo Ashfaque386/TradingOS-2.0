@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.backtest.comparison import ComparisonMatrix, compare_runs
-from src.engine.backtest.engine import run_vectorized_backtest
+from src.engine.backtest.engine import Trade, run_vectorized_backtest
 from src.engine.backtest.freshness import DataLakeFreshnessCheck, check_data_freshness
 from src.engine.backtest.friction import FrictionModel
 from src.engine.optimization.hyperparameter_sweep import (
@@ -52,6 +52,19 @@ class BacktestRunNotCompletedError(Exception):
     """
 
 
+def _trade_row(trade: Trade) -> dict[str, Any]:
+    return {
+        "entry_date": trade.entry_date.date().isoformat(),
+        "exit_date": trade.exit_date.date().isoformat(),
+        "entry_price": float(trade.entry_price),
+        "exit_price": float(trade.exit_price),
+        "quantity": int(trade.quantity),
+        "gross_pnl": float(trade.gross_pnl),
+        "costs": float(trade.costs),
+        "net_pnl": float(trade.net_pnl),
+    }
+
+
 async def run_backtest(
     db: AsyncSession,
     *,
@@ -66,6 +79,7 @@ async def run_backtest(
     is_delivery: bool = True,
     created_by: str | None = None,
     data_source: str = DataSource.UNKNOWN,
+    signal_config: dict[str, Any] | None = None,
 ) -> BacktestRun:
     freshness = check_data_freshness(symbol=symbol, as_of=as_of, data_lake=data_lake)
     if not freshness.fresh:
@@ -78,6 +92,7 @@ async def run_backtest(
             refusal_reason=freshness.reason,
             created_by=created_by,
             data_source=data_source,
+            signal_config=signal_config,
         )
         db.add(run)
         await db.commit()
@@ -109,6 +124,8 @@ async def run_backtest(
             [cast(pd.Timestamp, ts).isoformat(), float(v)] for ts, v in result.daily_returns.items()
         ],
         trade_pnls=[float(t.net_pnl) for t in result.trades],
+        trades=[_trade_row(t) for t in result.trades],
+        signal_config=signal_config,
         created_by=created_by,
         data_source=data_source,
     )

@@ -82,9 +82,10 @@ NOT_CALLED_BY_THE_CONSOLE: dict[tuple[str, str], str] = {
     ): "one position only; `GET /orders/positions` lists every symbol, live and paper",
     # ---- no screen yet: the phase of the gap analysis that adds it ----
     ("GET", "/api/v1/market-data/holidays"): "Phase 9: holiday calendar on Market Analysis",
-    ("POST", "/api/v1/backtests"): "Phase 9: create a backtest from the lake",
-    ("POST", "/api/v1/backtests/optimize"): "Phase 9: optimise from the Backtests page",
-    ("POST", "/api/v1/backtests/{}/walk-forward"): "Phase 9: walk-forward from the Backtests page",
+    (
+        "POST",
+        "/api/v1/backtests",
+    ): "the caller posts the bars; the console runs `/backtests/from-lake` on the lake's own",
 }
 
 

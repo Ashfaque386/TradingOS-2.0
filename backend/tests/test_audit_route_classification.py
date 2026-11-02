@@ -114,6 +114,7 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
         "a one-time ticket per WebSocket connection; the sign-in is what is recorded",
     ),
     ("POST", "/backtests"): (N, "runs and records a backtest"),
+    ("POST", "/backtests/from-lake"): (N, "runs and records a backtest on the lake's bars"),
     ("POST", "/backtests/{run_id}/walk-forward"): (N, "compute-only"),
     ("POST", "/backtests/{run_id}/monte-carlo"): (N, "compute-only"),
     ("POST", "/backtests/compare"): (N, "compute-only"),

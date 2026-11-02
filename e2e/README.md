@@ -59,6 +59,11 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `backtests-logic.spec.ts` -- what the Backtests page decides: the form rules, the requests, a run's description, walk-forward
+  windows, the optimisation's wording, Monte Carlo rows, the ledger's summary. No browser or backend.
+- `backtests-lake.spec.ts` -- backtests on the data lake against a real backend: a run from a share and two dates, its ledger,
+  refusals, a walk-forward, the search for the best length, the Monte Carlo choices. It seeds a share with
+  `scripts/seed_e2e_lake.py` (a new symbol each run).
 - `paper-desk-history-logic.spec.ts` -- what the Paper Desk says about fetching price history, daily signals and the fills
   file, the order window, and how the desk is read when part of it fails. No browser or backend.
 - `paper-desk-history.spec.ts` -- the Paper Desk's history against a real backend: the fetch offered and refused, the
