@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, mo
 
 from src.core.roles import Role
 from src.engine.backtest.signals import BuiltinStrategy as EngineBuiltinStrategy
+from src.gateway.schema import LlmProvider
 from src.models.organization_run import FailureClass, RunSource, RunStatus, RunType
 from src.models.task import TaskStatus
 
@@ -1930,16 +1931,33 @@ class LlmProviderModelsResponse(BaseModel):
 # --- Phase 12: In-app chat (Build Spec §18) ---------------------------------
 
 
+def _chat_title(value: str | None) -> str | None:
+    """A title without the spaces around it, and not blank: a chat the list shows as an empty row
+    cannot be found or opened."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("A chat needs a title.")
+    return stripped
+
+
 class CreateChatSessionRequest(BaseModel):
     title: str = Field(default="New chat", max_length=200)
-    model: str | None = None
+    # Which LLM provider answers, or none for the configured fallback order ("auto"). It used to
+    # accept any text, and a session holding a name that is not a provider failed every message.
+    model: LlmProvider | None = None
+
+    _title = field_validator("title")(_chat_title)
 
 
 class UpdateChatSessionRequest(BaseModel):
-    title: str | None = None
-    model: str | None = None
+    title: str | None = Field(default=None, max_length=200)
+    model: LlmProvider | None = None
     clear_model: bool = False
     pinned: bool | None = None
+
+    _title = field_validator("title")(_chat_title)
 
 
 class ChatSessionResponse(BaseModel):

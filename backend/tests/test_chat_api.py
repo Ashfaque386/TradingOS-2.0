@@ -260,3 +260,76 @@ async def test_export_unknown_format_is_400(client, make_user):
         headers=_auth(token),
     )
     assert resp.status_code == 400
+
+
+async def test_a_title_is_trimmed_and_a_blank_or_oversized_one_is_refused(client, make_user):
+    token = await _make_token(client, make_user)
+    created = await client.post(
+        "/api/v1/chat/sessions", json={"title": "  Morning check  "}, headers=_auth(token)
+    )
+    assert created.status_code == 201 and created.json()["title"] == "Morning check"
+    session_id = created.json()["id"]
+
+    renamed = await client.patch(
+        f"/api/v1/chat/sessions/{session_id}", json={"title": "\tRenamed \n"}, headers=_auth(token)
+    )
+    assert renamed.status_code == 200 and renamed.json()["title"] == "Renamed"
+
+    for bad in ("", "   ", "x" * 201):
+        refused_rename = await client.patch(
+            f"/api/v1/chat/sessions/{session_id}", json={"title": bad}, headers=_auth(token)
+        )
+        refused_create = await client.post(
+            "/api/v1/chat/sessions", json={"title": bad}, headers=_auth(token)
+        )
+        assert refused_rename.status_code == 422, repr(bad)
+        assert refused_create.status_code == 422, repr(bad)
+    kept = await client.get(f"/api/v1/chat/sessions/{session_id}", headers=_auth(token))
+    assert kept.json()["title"] == "Renamed"  # a refused rename changed nothing
+
+
+async def test_a_model_that_is_not_a_provider_is_refused_on_create_and_on_switch(client, make_user):
+    token = await _make_token(client, make_user)
+    created = await client.post(
+        "/api/v1/chat/sessions", json={"model": "anthropic"}, headers=_auth(token)
+    )
+    session_id = created.json()["id"]
+
+    refused_create = await client.post(
+        "/api/v1/chat/sessions", json={"model": "gpt-9000"}, headers=_auth(token)
+    )
+    refused_switch = await client.patch(
+        f"/api/v1/chat/sessions/{session_id}", json={"model": "gpt-9000"}, headers=_auth(token)
+    )
+
+    assert refused_create.status_code == 422 and refused_switch.status_code == 422
+    kept = await client.get(f"/api/v1/chat/sessions/{session_id}", headers=_auth(token))
+    assert kept.json()["model"] == "anthropic"
+    for provider in ("openai", "gemini", "deepseek", "ollama", "custom", "huggingface"):
+        switched = await client.patch(
+            f"/api/v1/chat/sessions/{session_id}", json={"model": provider}, headers=_auth(token)
+        )
+        assert switched.status_code == 200 and switched.json()["model"] == provider
+
+
+async def test_a_session_that_holds_a_value_that_is_not_a_provider_still_answers_as_auto(
+    client, make_user, db_session_factory
+):
+    """Rows written before the API refused such a value must not fail every message."""
+    from src.models.chat_session import ChatSession
+
+    token = await _make_token(client, make_user)
+    async with db_session_factory() as db:
+        old = ChatSession(created_by="op@example.com", title="old", model="gpt-9000")
+        db.add(old)
+        await db.commit()
+        session_id = old.id
+
+    resp = await client.post(
+        f"/api/v1/chat/sessions/{session_id}/messages",
+        json={"content": "still there?"},
+        headers=_auth(token),
+    )
+
+    assert resp.status_code == 200
+    assert "No LLM provider is currently configured" in resp.text

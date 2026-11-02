@@ -17,8 +17,6 @@ from typing import Any, cast
 
 from apscheduler.job import Job
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from redis.asyncio import Redis
@@ -52,6 +50,14 @@ from src.models.user import User
 from src.observability.scheduler_registry import get_all_schedulers
 from src.observability.vitals import build_system_vitals
 from src.orchestration.backup_scheduler import BackupAlreadyRunningError, run_postgres_backup
+from src.orchestration.job_schedule import (
+    ScheduleRefused,
+    ScheduleSpec,
+    default_for,
+    remember_default,
+    trigger_for,
+)
+from src.orchestration.job_schedule_store import delete_override, overrides_by_job, save_override
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -70,6 +76,11 @@ register_policy(
     "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule",
     roles=[Role.SYSTEM_ADMINISTRATOR],
 )
+register_policy(
+    "DELETE",
+    "/api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule",
+    roles=[Role.SYSTEM_ADMINISTRATOR],
+)
 register_policy("GET", "/api/v1/system/backups", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("POST", "/api/v1/system/postgres-backup", roles=[Role.SYSTEM_ADMINISTRATOR])
 register_policy("GET", "/api/v1/system/jwt-signing-key", roles=[Role.SYSTEM_ADMINISTRATOR])
@@ -81,6 +92,10 @@ class ScheduledJobResponse(BaseModel):
     job_id: str
     trigger: str
     next_run_time: str | None
+    # An administrator chose this schedule: it is kept across a restart, and `default_trigger` is
+    # the one the code registered the job with, which "restore the default" puts back.
+    overridden: bool = False
+    default_trigger: str | None = None
 
 
 class ScheduledJobsResponse(BaseModel):
@@ -95,21 +110,27 @@ class ScheduledJobsResponse(BaseModel):
 
 @router.get("/scheduled-jobs")
 async def scheduled_jobs_endpoint(
+    db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role),
 ) -> ScheduledJobsResponse:
     """Phase 19 (docs/phase19-audit.md Part 1.2): every real scheduled job
     this app runs, with its real live next-run time -- read straight off
     the running APScheduler instances (`src.observability.scheduler_registry`),
     never a hardcoded cadence string."""
+    stored = await overrides_by_job(db)
     jobs: list[ScheduledJobResponse] = []
     for scheduler_name, scheduler in sorted(get_all_schedulers().items()):
         for job in scheduler.get_jobs():
+            overridden = (scheduler_name, job.id) in stored
+            default = default_for(scheduler_name, job.id)
             jobs.append(
                 ScheduledJobResponse(
                     scheduler=scheduler_name,
                     job_id=job.id,
                     trigger=str(job.trigger),
                     next_run_time=job.next_run_time.isoformat() if job.next_run_time else None,
+                    overridden=overridden,
+                    default_trigger=str(default) if overridden and default is not None else None,
                 )
             )
     return ScheduledJobsResponse(
@@ -203,49 +224,67 @@ async def update_scheduled_job_schedule_endpoint(
     current_user: User = Depends(require_role),
     db: AsyncSession = Depends(get_db),
 ) -> UpdateScheduledJobResponse:
-    """Reschedules a live job in place (`Job.reschedule`). Only the fields
-    that make sense for the job's actual trigger type are accepted -- an
-    interval job's `seconds`, or a cron job's `hour`/`minute` -- and every
-    other field of a cron job's expression (day_of_week, day, month, ...)
-    is read off its CURRENT trigger and carried over unchanged, so e.g.
-    investor_reporting's `day_of_week="mon"` can't be silently dropped by
-    an edit that only meant to change the hour."""
+    """Reschedules a live job in place (`Job.reschedule`) and keeps the choice, so a restart applies
+    it again instead of putting the code's schedule back. Only the fields that make sense for the
+    job's actual trigger type are accepted -- an interval job's `seconds`, or a cron job's
+    `hour`/`minute` -- and every other field of a cron job's expression (day_of_week, day, month,
+    ...) is read off its CURRENT trigger and carried over unchanged, so e.g. investor_reporting's
+    `day_of_week="mon"` can't be silently dropped by an edit that only meant to change the hour."""
     _scheduler, job = _get_scheduler_and_job(scheduler_name, job_id)
     old_trigger = str(job.trigger)
+    spec = ScheduleSpec(seconds=payload.seconds, hour=payload.hour, minute=payload.minute)
+    try:
+        new_trigger = trigger_for(job.trigger, spec)
+    except ScheduleRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if isinstance(job.trigger, IntervalTrigger):
-        if payload.hour is not None or payload.minute is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="This job runs on a fixed interval; supply 'seconds', not hour/minute.",
-            )
-        if payload.seconds is None or payload.seconds < 1:
-            raise HTTPException(status_code=400, detail="seconds must be a positive integer")
-        new_trigger = IntervalTrigger(seconds=payload.seconds)
-    elif isinstance(job.trigger, CronTrigger):
-        if payload.seconds is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="This job runs on a cron schedule; supply hour/minute, not seconds.",
-            )
-        if payload.hour is None or payload.minute is None:
-            raise HTTPException(status_code=400, detail="Both hour and minute are required")
-        if not (0 <= payload.hour <= 23) or not (0 <= payload.minute <= 59):
-            raise HTTPException(status_code=400, detail="hour must be 0-23 and minute must be 0-59")
-        cron_kwargs: dict[str, str | int] = {field.name: str(field) for field in job.trigger.fields}
-        cron_kwargs["hour"] = payload.hour
-        cron_kwargs["minute"] = payload.minute
-        new_trigger = CronTrigger(**cron_kwargs, timezone=job.trigger.timezone)
-    else:
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported trigger type: {type(job.trigger).__name__}"
-        )
-
+    # The code's own schedule, before the first change replaces it: what "restore" puts back.
+    remember_default(scheduler_name, job_id, job.trigger)
     job.reschedule(trigger=new_trigger)
+    await save_override(db, scheduler_name, job_id, spec, updated_by=current_user.email[:64])
     await write_audit_entry(
         db,
         actor=current_user.email,
         action="scheduled_job.reschedule",
+        entity_type="scheduled_job",
+        entity_id=f"{scheduler_name}/{job_id}",
+        details={"old_trigger": old_trigger, "new_trigger": str(job.trigger), "kept": True},
+    )
+    await db.commit()
+    return UpdateScheduledJobResponse(
+        scheduler=scheduler_name,
+        job_id=job_id,
+        trigger=str(job.trigger),
+        next_run_time=job.next_run_time.isoformat() if job.next_run_time else None,
+    )
+
+
+@router.delete("/scheduled-jobs/{scheduler_name}/{job_id}/schedule")
+async def restore_scheduled_job_schedule_endpoint(
+    scheduler_name: str,
+    job_id: str,
+    current_user: User = Depends(require_role),
+    db: AsyncSession = Depends(get_db),
+) -> UpdateScheduledJobResponse:
+    """Puts the job back on the schedule the code registered it with and forgets the stored choice.
+    A job that is already on its own schedule is a 409: there is nothing to restore."""
+    _scheduler, job = _get_scheduler_and_job(scheduler_name, job_id)
+    stored = await overrides_by_job(db)
+    default = default_for(scheduler_name, job_id)
+    if (scheduler_name, job_id) not in stored or default is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This job is already on the schedule the code gave it; there is nothing to restore."
+            ),
+        )
+    old_trigger = str(job.trigger)
+    job.reschedule(trigger=default)
+    await delete_override(db, scheduler_name, job_id)
+    await write_audit_entry(
+        db,
+        actor=current_user.email,
+        action="scheduled_job.restore_schedule",
         entity_type="scheduled_job",
         entity_id=f"{scheduler_name}/{job_id}",
         details={"old_trigger": old_trigger, "new_trigger": str(job.trigger)},

@@ -143,6 +143,18 @@ def _disable_ambient_rate_limit():
     del app.state.login_rate_limit_per_minute
 
 
+@pytest.fixture(autouse=True)
+def _forget_job_default_schedules():
+    """The schedule each scheduled job was registered with is remembered process-wide (so a
+    restore has something to restore). Tests register their own jobs under the same ids with
+    different triggers, so each starts with none remembered."""
+    from src.orchestration.job_schedule import forget_defaults
+
+    forget_defaults()
+    yield
+    forget_defaults()
+
+
 @pytest_asyncio.fixture
 async def client(
     db_session_factory: async_sessionmaker[AsyncSession],

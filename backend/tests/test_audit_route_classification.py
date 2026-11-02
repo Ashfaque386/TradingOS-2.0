@@ -314,6 +314,11 @@ CLASSIFICATION: dict[tuple[str, str], tuple[str, str]] = {
     ),
     ("POST", "/system/scheduled-jobs/{scheduler_name}/{job_id}/run-now"): (N, "triggers a job"),
     ("PUT", "/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule"): (S, "saves a schedule"),
+    ("DELETE", "/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule"): (
+        X,
+        "tests/test_job_schedule.py::"
+        "test_a_job_already_on_its_own_schedule_is_refused_a_restore_and_nothing_is_audited",
+    ),
     ("POST", "/system/jwt-signing-key/rotate"): (N, "always rotates"),
     ("POST", "/system/postgres-backup"): (N, "makes a new backup every time"),
     ("POST", "/webhooks/telegram"): (N, "inbound webhook"),

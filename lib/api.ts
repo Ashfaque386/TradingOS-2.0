@@ -1148,6 +1148,10 @@ export type ScheduledJob = {
   job_id: string
   trigger: string
   next_run_time: string | null
+  // An administrator chose this schedule: it is kept across a restart. `default_trigger` is the
+  // one the code registered the job with, which restoring puts back.
+  overridden: boolean
+  default_trigger: string | null
 }
 export type ScheduledJobsResponse = {
   jobs: ScheduledJob[]
@@ -1189,6 +1193,12 @@ export const updateScheduledJobSchedule = (
   apiPut<UpdateScheduledJobResponse>(
     `/api/v1/system/scheduled-jobs/${encodeURIComponent(scheduler)}/${encodeURIComponent(jobId)}/schedule`,
     payload
+  )
+
+// Puts the job back on the schedule the code registered it with and forgets the kept choice
+export const restoreScheduledJobSchedule = (scheduler: string, jobId: string) =>
+  apiDelete<UpdateScheduledJobResponse>(
+    `/api/v1/system/scheduled-jobs/${encodeURIComponent(scheduler)}/${encodeURIComponent(jobId)}/schedule`
   )
 
 export type ScheduledJobRunHistoryEntry = {

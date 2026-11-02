@@ -39,6 +39,7 @@ import {
   pauseRun,
   retryRun,
   rerunRun,
+  restoreScheduledJobSchedule,
   runScheduledJobNow,
   updateScheduledJobSchedule,
 } from '@/lib/api'
@@ -161,6 +162,7 @@ function ScheduledJobRow({
   const [minute, setMinute] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [history, setHistory] = useState<ScheduledJobRunHistoryEntry[] | null>(null)
+  const [restoring, setRestoring] = useState(false)
 
   const handleRunNow = async () => {
     setBusy(true)
@@ -221,6 +223,11 @@ function ScheduledJobRow({
         <div className="min-w-0">
           <p className="truncate text-foreground">{schedulerLabel(job.scheduler)} <span className="text-muted-foreground">· {job.job_id}</span></p>
           <p className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">{job.trigger}</p>
+          {job.overridden && (
+            <p className="mt-0.5 text-[10px] text-amber-200" data-testid={`customised-${key}`}>
+              Chosen by an administrator and kept across restarts. The code&apos;s own schedule is <span className="font-mono">{job.default_trigger ?? 'unknown'}</span>.
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className="font-mono text-[10px] text-cyan-200">{nextRunLabel(job.next_run_time)}</span>
@@ -232,14 +239,29 @@ function ScheduledJobRow({
               <button type="button" onClick={handleRunNow} disabled={busy} title="Run now" className="rounded p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground disabled:opacity-40">
                 <Play className="size-3" />
               </button>
-              <button type="button" onClick={() => setEditing((v) => !v)} title="Edit schedule" className="rounded p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground">
+              <button type="button" onClick={() => setEditing((v) => !v)} title="Edit schedule" aria-label={`Edit schedule of ${job.job_id}`} className="rounded p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground">
                 <TimerReset className="size-3" />
               </button>
+              {job.overridden && (
+                <button type="button" onClick={() => setRestoring(true)} title="Restore the code's schedule" aria-label={`Restore the default schedule of ${job.job_id}`} className="rounded p-1 text-amber-200 hover:bg-white/10">
+                  <RotateCcw className="size-3" />
+                </button>
+              )}
             </>
           )}
         </div>
       </div>
       {error && <p className="mt-1 text-[10px] text-rose-300">{error}</p>}
+      {restoring && (
+        <ConfirmDialog
+          title={`Restore the default schedule of ${job.job_id}?`}
+          description={`The schedule an administrator chose is forgotten and the job goes back to the one the code gave it: ${job.default_trigger ?? 'its own'}. This applies at once and after every restart.`}
+          confirmLabel="Restore default"
+          busyLabel="Restoring…"
+          onConfirm={async () => { await restoreScheduledJobSchedule(job.scheduler, job.job_id); onChanged() }}
+          onClose={() => setRestoring(false)}
+        />
+      )}
       {editing && (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-white/8 bg-black/20 p-2">
           {isInterval ? (
@@ -260,6 +282,7 @@ function ScheduledJobRow({
             </>
           )}
           <button type="button" onClick={handleSaveSchedule} disabled={busy} className="button-primary px-2 py-1 text-[10px]">Save</button>
+          <span className="text-[10px] text-muted-foreground">Kept across restarts.</span>
           <button type="button" onClick={() => setEditing(false)} className="button-secondary px-2 py-1 text-[10px]">Cancel</button>
         </div>
       )}

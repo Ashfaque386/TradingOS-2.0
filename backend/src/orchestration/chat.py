@@ -59,6 +59,15 @@ _FALLBACK_REPLY = (
 _MAX_HISTORY_TURNS = 20
 
 
+def _provider_or_none(model: str | None) -> LlmProvider | None:
+    """The provider a session asks for. A value that is not a provider (a row written before the
+    API refused one) means "auto", not an error that fails every message of the session."""
+    try:
+        return LlmProvider(model) if model else None
+    except ValueError:
+        return None
+
+
 async def create_session(
     db: AsyncSession, *, created_by: str, model: str | None = None, title: str = "New chat"
 ) -> ChatSession:
@@ -221,7 +230,7 @@ async def stream_assistant_reply(
     await _clear_abort(redis, session_id)
 
     prompt = _build_prompt(history, user_message)
-    preferred_provider = LlmProvider(session.model) if session.model else None
+    preferred_provider = _provider_or_none(session.model)
     router = llm_router if llm_router is not None else get_llm_router()
 
     accumulated = ""

@@ -20,6 +20,9 @@
   "DELETE /api/v1/settings/llm-providers/{provider}": [
     "SystemAdministrator"
   ],
+  "DELETE /api/v1/system/scheduled-jobs/{scheduler_name}/{job_id}/schedule": [
+    "SystemAdministrator"
+  ],
   "GET /api/v1/admin/ping": [
     "SystemAdministrator"
   ],

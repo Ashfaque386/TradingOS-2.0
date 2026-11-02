@@ -32,12 +32,17 @@ from src.observability.logging import configure_logging
 from src.observability.metrics import trading_holiday_gauge_updater
 from src.observability.rate_limit_middleware import RateLimitMiddleware
 from src.observability.scheduled_job_history import attach_run_history_listener
-from src.observability.scheduler_registry import register_scheduler, unregister_all
+from src.observability.scheduler_registry import (
+    get_all_schedulers,
+    register_scheduler,
+    unregister_all,
+)
 from src.observability.security_headers import SecurityHeadersMiddleware
 from src.orchestration.audit_scheduler import start_audit_scheduler
 from src.orchestration.backup_scheduler import backup_gauge_updater, start_backup_scheduler
 from src.orchestration.engine_alert_watcher import start_engine_alert_watcher
 from src.orchestration.investor_reporting_scheduler import start_investor_reporting_scheduler
+from src.orchestration.job_schedule_store import apply_stored_overrides
 from src.orchestration.live_trading_scheduler import start_live_trading_scheduler
 from src.orchestration.market_data_scheduler import start_market_data_scheduler
 from src.orchestration.notification_scheduler import start_notification_scheduler
@@ -255,6 +260,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # durable record of each job's real firings, since APScheduler
         # itself keeps none once a firing completes.
         attach_run_history_listener(scheduler, name, AsyncSessionLocal)
+
+    # A schedule an administrator chose in the console is kept, and applied here on top of the
+    # code's own (which is remembered first, so "restore the default" has something to restore). It
+    # must never stop the app starting: the jobs then run on the code's schedule, and the log says
+    # why.
+    try:
+        applied_schedules = await apply_stored_overrides(AsyncSessionLocal, get_all_schedulers())
+        if applied_schedules:
+            logger.info("scheduled_job_overrides.applied", jobs=applied_schedules)
+    except Exception:  # noqa: BLE001 - the jobs run on the code's schedule instead
+        logger.exception("scheduled_job_overrides.not_applied")
 
     yield
 

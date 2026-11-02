@@ -1,30 +1,40 @@
 'use client'
 
 import { FormEvent, useEffect, useRef, useState } from 'react'
-import { Download, MessageSquare, Pin, PinOff, Plus, Search, Send, Square, Trash2 } from 'lucide-react'
+import { Check, Download, MessageSquare, Pencil, Pin, PinOff, Plus, Search, Send, Square, Trash2, X } from 'lucide-react'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { ErrorNotice } from '@/components/ui/error-notice'
 import {
   type ChatMessage,
   type ChatSession,
-  ApiError,
+  type LlmProviderStatus,
   abortChatMessage,
-  downloadChatExport,
   createChatSession,
   deleteChatSession,
+  downloadChatExport,
   listChatMessages,
   listChatSessions,
+  listLlmProviderStatus,
   streamChatMessage,
   updateChatSession,
 } from '@/lib/api'
+import { providerChoices, titleProblem } from '@/lib/chat-view'
+import { messageOf } from '@/lib/errors'
+import { indiaStamp } from '@/lib/time'
 
 // Phase 22 (docs/phase20-old-vs-new-comparison.md item 16): a pure
 // frontend build over src/api/routes/chat.py, which has been real since
 // well before this page existed -- session CRUD, search, pin, a
 // per-session model switch, streaming replies, abort, and export.
+// Phase 9 slice 7b: rename, the model switch, a confirmation before a delete, a JSON export, a
+// failed list said as such, and a conversation a screen reader is told about as it grows.
 
 let pendingIdCounter = 0
 
 export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [search, setSearch] = useState('')
   const [pinnedOnly, setPinnedOnly] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -33,16 +43,19 @@ export default function ChatPage() {
   const [streamingText, setStreamingText] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [deleting, setDeleting] = useState<ChatSession | null>(null)
+  const [providers, setProviders] = useState<LlmProviderStatus[] | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  const messageOf = (err: unknown, fallback: string) =>
-    err instanceof ApiError ? err.message : fallback
 
   async function reloadSessions() {
     try {
       setSessions(await listChatSessions({ search: search || undefined, pinnedOnly }))
+      setSessionsError(null)
+      setSessionsLoaded(true)
     } catch (err) {
-      setError(messageOf(err, 'Could not load your chats'))
+      setSessionsError(messageOf(err, 'the request failed'))
     }
   }
 
@@ -50,6 +63,12 @@ export default function ChatPage() {
     reloadSessions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, pinnedOnly])
+
+  // Which providers have a key saved, to mark the ones a chat pinned to them would skip. Only a hint:
+  // when it cannot be read, the list is the same without the marks.
+  useEffect(() => {
+    listLlmProviderStatus().then(setProviders).catch(() => setProviders(null))
+  }, [])
 
   useEffect(() => {
     if (!activeId) {
@@ -117,7 +136,7 @@ export default function ChatPage() {
         setStreamingText((prev) => (prev ?? '') + chunk.text)
       })
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to send message')
+      setError(messageOf(err, 'Failed to send message'))
     } finally {
       setStreaming(false)
       setStreamingText(null)
@@ -149,26 +168,51 @@ export default function ChatPage() {
     reloadSessions()
   }
 
-  async function handleDelete(session: ChatSession) {
-    try {
-      await deleteChatSession(session.id)
-      if (activeId === session.id) setActiveId(null)
-    } catch (err) {
-      setError(messageOf(err, 'Could not delete that chat'))
-    }
-    reloadSessions()
+  // Confirmed in the dialog, which reports a failure by the error this throws.
+  async function confirmDelete(session: ChatSession) {
+    await deleteChatSession(session.id)
+    if (activeId === session.id) setActiveId(null)
+    await reloadSessions()
   }
 
-  async function handleExport(session: ChatSession) {
+  async function handleExport(session: ChatSession, format: 'markdown' | 'json') {
     setError(null)
     try {
-      await downloadChatExport(session.id)
+      await downloadChatExport(session.id, format)
     } catch (err) {
       setError(messageOf(err, 'Could not export that chat'))
     }
   }
 
   const active = sessions.find((s) => s.id === activeId) ?? null
+  const titleError = renaming ? titleProblem(titleDraft) : null
+
+  function startRename(session: ChatSession) {
+    setTitleDraft(session.title)
+    setRenaming(true)
+  }
+
+  async function saveTitle(event: FormEvent) {
+    event.preventDefault()
+    if (!active || titleProblem(titleDraft)) return
+    try {
+      await updateChatSession(active.id, { title: titleDraft.trim() })
+      setRenaming(false)
+      await reloadSessions()
+    } catch (err) {
+      setError(messageOf(err, 'Could not rename that chat'))
+    }
+  }
+
+  async function switchModel(session: ChatSession, value: string) {
+    setError(null)
+    try {
+      await updateChatSession(session.id, value === '' ? { clear_model: true } : { model: value })
+    } catch (err) {
+      setError(messageOf(err, 'Could not change which provider answers'))
+    }
+    await reloadSessions()
+  }
 
   return (
     <>
@@ -214,9 +258,10 @@ export default function ChatPage() {
               </label>
             </div>
             <div className="flex max-h-[65vh] flex-col overflow-y-auto p-2">
-              {sessions.length === 0 && (
+              {sessionsError && <ErrorNotice className="m-1" message={`Could not load your chats: ${sessionsError}`} onRetry={() => void reloadSessions()} />}
+              {!sessionsError && sessionsLoaded && sessions.length === 0 && (
                 <p className="p-3 text-xs text-muted-foreground">
-                  No chat sessions yet. Start one above.
+                  {search || pinnedOnly ? 'No chat matches that.' : 'No chat sessions yet. Start one above.'}
                 </p>
               )}
               {sessions.map((s) => (
@@ -224,10 +269,10 @@ export default function ChatPage() {
                   key={s.id}
                   className={`group flex items-center gap-1 rounded-lg px-2 py-2 text-xs transition-colors ${activeId === s.id ? 'bg-cyan-400/10 text-cyan-100' : 'text-muted-foreground hover:bg-white/[.03]'}`}
                 >
-                  <button onClick={() => setActiveId(s.id)} className="flex-1 truncate text-left">
+                  <button onClick={() => { setRenaming(false); setActiveId(s.id) }} className="flex-1 truncate text-left">
                     <strong className="block truncate text-foreground">{s.title}</strong>
                     <span className="font-mono text-[10px] uppercase tracking-wide">
-                      {s.model ?? 'auto'} · {new Date(s.updated_at).toLocaleString()}
+                      {s.model ?? 'auto'} · {indiaStamp(s.updated_at)}
                     </span>
                   </button>
                   <button
@@ -242,7 +287,7 @@ export default function ChatPage() {
                     )}
                   </button>
                   <button
-                    onClick={() => handleDelete(s)}
+                    onClick={() => setDeleting(s)}
                     className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
                     aria-label="Delete session"
                   >
@@ -254,25 +299,72 @@ export default function ChatPage() {
           </section>
 
           <section className="pulse-panel flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-white/8 p-4">
-              <div>
-                <p className="eyebrow">{active ? active.title : 'NEW CHAT'}</p>
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4">
+              <div className="min-w-0">
+                {renaming && active ? (
+                  <form onSubmit={saveTitle} className="flex items-center gap-2">
+                    <input
+                      autoFocus
+                      aria-label="Chat title"
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Escape') setRenaming(false) }}
+                      className="w-72 max-w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-sm text-foreground"
+                    />
+                    <button type="submit" disabled={titleError !== null} aria-label="Save title" className="button-primary px-2 py-1"><Check className="size-3.5" /></button>
+                    <button type="button" onClick={() => setRenaming(false)} aria-label="Cancel rename" className="button-secondary px-2 py-1"><X className="size-3.5" /></button>
+                  </form>
+                ) : (
+                  <p className="eyebrow flex items-center gap-2">
+                    {active ? active.title : 'NEW CHAT'}
+                    {active && (
+                      <button type="button" onClick={() => startRename(active)} aria-label="Rename chat" className="text-muted-foreground hover:text-foreground">
+                        <Pencil className="size-3" />
+                      </button>
+                    )}
+                  </p>
+                )}
+                {titleError && <p role="alert" className="mt-1 text-xs text-rose-300">{titleError}</p>}
                 {active && (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Model: {active.model ?? 'auto'} · created by {active.created_by}
+                    Created by {active.created_by} · {indiaStamp(active.created_at)} India time
                   </p>
                 )}
               </div>
               {active && (
-                <button type="button" onClick={() => handleExport(active)} className="button-secondary">
-                  <Download className="size-3" />
-                  Export
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    Answer with
+                    <select
+                      aria-label="Answer with"
+                      value={active.model ?? ''}
+                      onChange={(e) => void switchModel(active, e.target.value)}
+                      className="rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-foreground"
+                    >
+                      {providerChoices(providers).map((choice) => (
+                        <option key={choice.value} value={choice.value}>{choice.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => handleExport(active, 'markdown')} className="button-secondary">
+                    <Download className="size-3" />
+                    Export
+                  </button>
+                  <button type="button" onClick={() => handleExport(active, 'json')} className="button-secondary">
+                    <Download className="size-3" />
+                    Export JSON
+                  </button>
+                </div>
               )}
             </div>
 
             <div
               ref={scrollRef}
+              role="log"
+              aria-label="Conversation"
+              aria-live="polite"
+              aria-relevant="additions text"
+              aria-busy={streaming}
               className="flex min-h-[50vh] max-h-[60vh] flex-1 flex-col gap-4 overflow-y-auto p-5"
             >
               {messages.length === 0 && !streamingText && (
@@ -300,7 +392,7 @@ export default function ChatPage() {
                 <div className="max-w-[80%] self-start rounded-xl bg-white/[.04] px-4 py-3 text-sm leading-relaxed text-foreground">
                   <p className="whitespace-pre-wrap break-words">
                     {streamingText}
-                    <span className="animate-pulse">▍</span>
+                    <span className="animate-pulse" aria-hidden="true">▍</span>
                   </p>
                 </div>
               )}
@@ -319,6 +411,7 @@ export default function ChatPage() {
                   }
                 }}
                 placeholder="Message the CEO Agent..."
+                aria-label="Message"
                 rows={2}
                 className="flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
               />
@@ -337,6 +430,17 @@ export default function ChatPage() {
           </section>
         </div>
       </div>
+      {deleting && (
+        <ConfirmDialog
+          title="Delete this chat?"
+          description={`“${deleting.title}” and every message in it are deleted, for everyone who can see chats. This cannot be undone: export it first if you want a copy.`}
+          tone="danger"
+          confirmLabel="Delete"
+          busyLabel="Deleting…"
+          onConfirm={() => confirmDelete(deleting)}
+          onClose={() => setDeleting(null)}
+        />
+      )}
     </>
   )
 }

@@ -59,6 +59,12 @@ flows named in that pass and has grown since:
 - `quote-freshness.spec.ts` -- a lane's Price section against the real backend, and the Providers tab
   and broker card reporting refused quotes. `backend/scripts/seed_e2e_quote_freshness.py` writes the
   ticks the tick source would have left (fresh with limits, quiet, unstamped, refused).
+- `chat-settings-logic.spec.ts` -- a chat title's rule, the provider choices and their marks, the export file name, the Settings
+  address. No browser or backend.
+- `settings-sections.spec.ts` -- the Settings section in the address, and removing a broker's credentials or an LLM key asking
+  first (the keys are stated by stubbed routes, so none is touched).
+- `scheduled-jobs.spec.ts` -- a schedule edited in Mission Control saying it is kept, and the restore. (That a restart applies it is
+  in the backend tests: this run cannot restart the app.)
 - `gateway-logic.spec.ts` -- what a lost race says, which skills may still be granted, how a saved change and a narration are
   put in words. No browser or backend.
 - `gateway-edits.spec.ts` -- edits of the gateway config in Agent Fleet and Settings against a real backend: a lost race in Agent

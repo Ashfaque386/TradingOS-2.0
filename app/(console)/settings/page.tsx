@@ -95,8 +95,7 @@ import {
   writeNotificationChannel,
 } from '@/lib/api'
 import { can } from '@/lib/permissions'
-
-type SectionId = 'gateway' | 'llm' | 'broker' | 'notifications' | 'skills' | 'risk' | 'users' | 'security' | 'backups'
+import { type SectionId, sectionFromQuery, sectionToUrl } from '@/lib/settings-view'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Braces; desc: string }[] = [
   { id: 'gateway', label: 'Agent Gateway Config', icon: Braces, desc: 'Infra & agent defaults' },
@@ -771,6 +770,7 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
   const [duration, setDuration] = useState<'standard' | 'extended'>('standard')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
 
   async function handleSave() {
     setBusy(true)
@@ -786,17 +786,10 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
     }
   }
 
-  async function handleDelete() {
-    setBusy(true)
-    setError(null)
-    try {
-      await deleteBrokerCredentials(status.broker)
-      onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Delete failed')
-    } finally {
-      setBusy(false)
-    }
+  // Confirmed in the dialog below, which reports a failure by the error this throws.
+  async function removeCredentials() {
+    await deleteBrokerCredentials(status.broker)
+    onChanged()
   }
 
   async function handleConnect() {
@@ -852,8 +845,19 @@ function BrokerConfigCard({ status, canEdit, onChanged }: { status: BrokerCreden
         <div className="set-cred-field"><Lock className="size-3.5" /><input type="password" placeholder="API secret" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} /></div>
         <div className="set-cred-actions">
           <button className="set-btn set-btn-ghost" disabled={!apiKey || busy} onClick={handleSave}>Save (write-only)</button>
-          {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={handleDelete}>Remove</button>}
+          {status.configured && <button className="set-btn set-btn-secondary" disabled={busy} onClick={() => setRemoving(true)}>Remove</button>}
         </div>
+        {removing && (
+          <ConfirmDialog
+            title={`Remove the ${status.broker} credentials?`}
+            description={`The saved key, secret and token for ${status.broker} are deleted and cannot be read back. Live quotes and orders through it stop until the key and secret are entered again and the broker is reconnected.`}
+            tone="danger"
+            confirmLabel="Remove"
+            busyLabel="Removing…"
+            onConfirm={removeCredentials}
+            onClose={() => setRemoving(false)}
+          />
+        )}
 
         {status.broker === 'upstox' && (
           <label className="set-field"><span>Token duration</span>
@@ -1118,21 +1122,19 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
   const [prefs, setPrefs] = useState<Record<string, boolean>>(() => Object.fromEntries(ALERT_LEVELS.map((l) => [l, status.alert_levels.includes(l)])))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [disconnecting, setDisconnecting] = useState(false)
 
+  // Confirmed in the dialog below, which reports a failure by the error this throws.
   async function handleDisconnect() {
-    setBusy(true)
-    setError(null)
     try {
       await deleteNotificationChannel(channel)
-      onChanged()
     } catch (err) {
-      // 404 means it was already disconnected (another tab, a double click):
-      // say so, and refresh so the card shows the real state.
-      setError(err instanceof ApiError ? err.message : 'Disconnect failed')
+      // 404 means it was already disconnected (another tab, a double click): the dialog says so,
+      // and the card refreshes to show the real state.
       onChanged()
-    } finally {
-      setBusy(false)
+      throw err
     }
+    onChanged()
   }
 
   async function toggleAlertLevel(level: AlertLevel) {
@@ -1156,8 +1158,19 @@ function ChannelWizardCard({ channel, status, canEdit, onChanged }: { channel: '
     <div className={`set-channel ${status.configured && status.enabled ? 'connected' : ''}`}>
       <div className="set-channel-head">
         <div><strong className="capitalize">{channel}</strong><small>{status.configured ? (status.enabled ? 'active' : 'saved, disabled') : 'not configured'}</small></div>
-        {canEdit && status.configured && <button className="set-btn set-btn-danger" disabled={busy} onClick={handleDisconnect}><Plug className="size-3.5" /> Disconnect</button>}
+        {canEdit && status.configured && <button className="set-btn set-btn-danger" disabled={busy} onClick={() => setDisconnecting(true)}><Plug className="size-3.5" /> Disconnect</button>}
       </div>
+      {disconnecting && (
+        <ConfirmDialog
+          title={`Disconnect ${channel}?`}
+          description={`The saved credentials and settings for ${channel} are deleted. Alerts stop going to it, including kill-switch trips, until it is set up again.`}
+          tone="danger"
+          confirmLabel="Disconnect"
+          busyLabel="Disconnecting…"
+          onConfirm={handleDisconnect}
+          onClose={() => setDisconnecting(false)}
+        />
+      )}
       {error && <p className="text-xs text-rose-300" role="alert">{error}</p>}
 
       <div className="px-0 pb-1">
@@ -1206,6 +1219,7 @@ function NotificationsSection({ onStatusChanged }: { onStatusChanged: () => void
 
 export default function SettingsPage() {
   const [section, setSection] = useState<SectionId>('gateway')
+  const [urlRead, setUrlRead] = useState(false)
   const [oauthBanner, setOauthBanner] = useState<{ broker: string; ok: boolean; error?: string } | null>(null)
   // Bumped by whichever of the three status-strip-backing sections
   // (broker/LLM/notifications) just reloaded its own data, so the strip
@@ -1217,13 +1231,20 @@ export default function SettingsPage() {
     const params = new URLSearchParams(window.location.search)
     const oauth = params.get('oauth')
     const broker = params.get('broker')
-    const sectionParam = params.get('section') as SectionId | null
-    if (sectionParam && SECTIONS.some((s) => s.id === sectionParam)) setSection(sectionParam)
+    const fromAddress = sectionFromQuery(window.location.search)
+    if (fromAddress) setSection(fromAddress)
     if (oauth && broker) {
       setOauthBanner({ broker, ok: oauth === 'success', error: params.get('error') ?? undefined })
       window.history.replaceState(null, '', '/settings')
     }
+    setUrlRead(true)
   }, [])
+
+  // The address follows the section, so a reload or a shared link opens the same one.
+  useEffect(() => {
+    if (!urlRead) return
+    window.history.replaceState(null, '', sectionToUrl(section))
+  }, [section, urlRead])
 
   return (
     <>
@@ -1242,7 +1263,7 @@ export default function SettingsPage() {
               const Icon = s.icon
               const active = section === s.id
               return (
-                <button key={s.id} className={active ? 'active' : ''} onClick={() => setSection(s.id)}>
+                <button key={s.id} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined} onClick={() => setSection(s.id)}>
                   <Icon className="size-4" />
                   <span className="set-subnav-text"><strong>{s.label}</strong><small>{s.desc}</small></span>
                   <ChevronRight className="set-subnav-caret size-3.5" />

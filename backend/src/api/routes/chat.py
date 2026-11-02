@@ -52,7 +52,10 @@ async def create_session_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionResponse:
     session = await chat_orchestration.create_session(
-        db, created_by=current_user.email, model=body.model, title=body.title
+        db,
+        created_by=current_user.email,
+        model=body.model.value if body.model else None,
+        title=body.title,
     )
     return ChatSessionResponse.model_validate(session)
 
@@ -102,7 +105,7 @@ async def update_session_endpoint(
     model_update = (
         None
         if body.clear_model
-        else (body.model if body.model is not None else chat_orchestration.UNSET)
+        else (body.model.value if body.model is not None else chat_orchestration.UNSET)
     )
     session = await chat_orchestration.update_session(
         db, session_id, title=body.title, model=model_update, pinned=body.pinned

@@ -56,8 +56,11 @@ test('a Disconnect the server refuses says why, and the card is refreshed', asyn
     })
 
     await slackCard(page).getByRole('button', { name: 'Disconnect' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Disconnect slack?' })
+    await dialog.getByRole('button', { name: 'Disconnect', exact: true }).click()
 
-    await expect(slackCard(page).getByRole('alert')).toHaveText('the slack channel is not configured')
+    // the refusal stays in the confirmation, with the server's reason
+    await expect(dialog.getByRole('alert')).toHaveText('the slack channel is not configured')
   } finally {
     await removeSlack(token)
   }
@@ -145,6 +148,47 @@ test('an alert-level change is saved without losing the channel', async ({ page 
         return slack ? { configured: slack.configured, levels: slack.alert_levels.length } : null
       })
       .toEqual({ configured: true, levels: 1 })
+  } finally {
+    await removeSlack(token)
+  }
+})
+
+test('a Disconnect asks first, names the channel, and cancelling keeps it', async ({ page }) => {
+  const token = await adminToken()
+  await removeSlack(token)
+  await configureSlack(token)
+  try {
+    await login(page, E2E_USERS.admin)
+    await page.goto('/settings?section=notifications')
+
+    await slackCard(page).getByRole('button', { name: 'Disconnect' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Disconnect slack?' })
+    await expect(dialog).toContainText('Alerts stop going to it')
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+
+    await expect(dialog).toHaveCount(0)
+    await expect(slackCard(page).getByRole('button', { name: 'Disconnect' })).toBeVisible() // still connected
+    const status = await fetch(`${API_BASE_URL}/api/v1/notification-channels`, { headers: { Authorization: `Bearer ${token}` } })
+    const channels = (await status.json()) as { channel: string; configured: boolean }[]
+    expect(channels.find((c) => c.channel === 'slack')?.configured).toBe(true)
+  } finally {
+    await removeSlack(token)
+  }
+})
+
+test('confirming a Disconnect removes the channel', async ({ page }) => {
+  const token = await adminToken()
+  await removeSlack(token)
+  await configureSlack(token)
+  try {
+    await login(page, E2E_USERS.admin)
+    await page.goto('/settings?section=notifications')
+
+    await slackCard(page).getByRole('button', { name: 'Disconnect' }).click()
+    await page.getByRole('dialog', { name: 'Disconnect slack?' }).getByRole('button', { name: 'Disconnect', exact: true }).click()
+
+    await expect(slackCard(page).getByRole('button', { name: 'Disconnect' })).toHaveCount(0)
+    await expect(slackCard(page)).toContainText('not configured')
   } finally {
     await removeSlack(token)
   }
