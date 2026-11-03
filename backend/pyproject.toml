@@ -11,7 +11,9 @@ dependencies = [
     # the version whose own pin resolves a fixed starlette.
     "fastapi>=0.141,<0.142",
     "uvicorn[standard]>=0.32,<0.33",
-    "sqlalchemy>=2.0.36,<2.1",
+    # [asyncio] is the extra that installs greenlet, which the async engine needs. SQLAlchemy 2.0
+    # brought it unasked; 2.1 does not, so a bump to 2.1 failed every import of the async engine.
+    "sqlalchemy[asyncio]>=2.0.36,<2.1",
     "asyncpg>=0.30,<0.31",
     "psycopg2-binary>=2.9,<3.0",
     "alembic>=1.13,<1.14",

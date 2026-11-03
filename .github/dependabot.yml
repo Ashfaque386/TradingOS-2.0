@@ -53,6 +53,10 @@ updates:
       - dependency-name: "nexus-rpc" # exact pin owned by temporalio: raise it with temporalio
       - dependency-name: "scipy" # 1.18 needs numpy 2; pyproject.toml holds numpy below 2
         versions: [">=1.18"]
+      # Below 1.0 every minor release may change what the linter reports (0.7 to 0.17 added four
+      # findings to this codebase), so a "minor" bump is a breaking one: raised by hand together
+      # with the code changes it needs, in one reviewed change.
+      - dependency-name: "ruff"
 
   - package-ecosystem: npm
     directory: /
