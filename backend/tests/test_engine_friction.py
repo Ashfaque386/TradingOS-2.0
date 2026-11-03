@@ -13,16 +13,17 @@ from src.engine.backtest.friction import (
 
 
 def test_delivery_buy_hand_calculation():
-    # turnover=100,000: brokerage free; STT 0.1%=100; exchange 0.00297%=2.97;
-    # SEBI 0.0001%=0.1; stamp duty (buy) 0.015%=15; GST 18%*(0+2.97)=0.5346.
+    # turnover=100,000: brokerage free; STT 0.1%=100; exchange 0.00307%=3.07 plus IPFT
+    # Rs 0.01 a crore=0.0001 -> 3.0701; SEBI 0.0001%=0.1; stamp duty (buy) 0.015%=15;
+    # GST 18%*(0+0.1+3.0701)=0.570618.
     costs = compute_leg_costs(turnover=100_000, is_buy=True, is_delivery=True)
     assert costs.brokerage == pytest.approx(0.0)
     assert costs.stt == pytest.approx(100.0)
-    assert costs.exchange_txn_charges == pytest.approx(2.97)
+    assert costs.exchange_txn_charges == pytest.approx(3.0701)
     assert costs.sebi_fee == pytest.approx(0.1)
     assert costs.stamp_duty == pytest.approx(15.0)
-    assert costs.gst == pytest.approx(0.5346)
-    assert costs.total == pytest.approx(118.6046)
+    assert costs.gst == pytest.approx(0.570618)
+    assert costs.total == pytest.approx(118.740718)
 
 
 def test_delivery_sell_has_no_stamp_duty_but_same_stt():
@@ -34,16 +35,16 @@ def test_delivery_sell_has_no_stamp_duty_but_same_stt():
 
 def test_intraday_sell_hand_calculation():
     # turnover=50,000: brokerage min(0.03%, cap 20)=15; STT (sell only)
-    # 0.025%=12.5; exchange 0.00297%=1.485; SEBI 0.0001%=0.05; no stamp
-    # duty (sell leg); GST 18%*(15+1.485)=2.9673.
+    # 0.025%=12.5; exchange 0.00307%=1.535 plus IPFT 0.00005 -> 1.53505; SEBI 0.0001%=0.05;
+    # no stamp duty (sell leg); GST 18%*(15+0.05+1.53505)=2.985309.
     costs = compute_leg_costs(turnover=50_000, is_buy=False, is_delivery=False)
     assert costs.brokerage == pytest.approx(15.0)
     assert costs.stt == pytest.approx(12.5)
-    assert costs.exchange_txn_charges == pytest.approx(1.485)
+    assert costs.exchange_txn_charges == pytest.approx(1.53505)
     assert costs.sebi_fee == pytest.approx(0.05)
     assert costs.stamp_duty == pytest.approx(0.0)
-    assert costs.gst == pytest.approx(2.9673)
-    assert costs.total == pytest.approx(32.0023)
+    assert costs.gst == pytest.approx(2.985309)
+    assert costs.total == pytest.approx(32.070359)
 
 
 def test_intraday_buy_has_no_stt_but_has_stamp_duty():
@@ -64,14 +65,31 @@ def test_small_intraday_trade_brokerage_is_uncapped_percentage():
     assert costs.brokerage == pytest.approx(3.0)
 
 
-def test_gst_applies_only_to_brokerage_and_exchange_charges():
+def test_gst_applies_to_brokerage_the_sebi_fee_and_exchange_charges_but_not_stt_or_stamp_duty():
     model = FrictionModel(
         stt_delivery_pct=0.01, sebi_fee_pct=0.01, stamp_duty_delivery_buy_pct=0.01
     )
     costs = compute_leg_costs(turnover=100_000, is_buy=True, is_delivery=True, model=model)
-    # STT/SEBI/stamp duty inflated to 1000 each above -- GST must still
-    # only apply to brokerage (0, delivery is free) + exchange charges.
-    assert costs.gst == pytest.approx(0.18 * costs.exchange_txn_charges)
+    # STT and stamp duty inflated to 1000 each above: GST must ignore them. The SEBI fee (inflated
+    # to 1000 too) is in the base, as the broker publishes it for every segment: brokerage (0,
+    # delivery is free) + SEBI fee + exchange charges.
+    assert costs.gst == pytest.approx(
+        0.18 * (costs.brokerage + costs.sebi_fee + costs.exchange_txn_charges)
+    )
+    assert costs.gst > 0.18 * costs.exchange_txn_charges
+
+
+def test_ipft_is_carried_in_the_exchange_line_and_bears_gst():
+    # Rs 0.01 a crore is a paisa on a crore: immaterial today, but the rate was Rs 10 a crore until
+    # February 2026, so it must be a rate that can be set, and the exchange line must carry it.
+    base = FrictionModel(ipft_pct=0.0)
+    old_rate = FrictionModel(ipft_pct=0.000001)  # Rs 10 a crore
+    one = compute_leg_costs(turnover=10_000_000, is_buy=True, is_delivery=True, model=base)
+    other = compute_leg_costs(turnover=10_000_000, is_buy=True, is_delivery=True, model=old_rate)
+
+    assert other.exchange_txn_charges - one.exchange_txn_charges == pytest.approx(10.0)
+    assert other.gst - one.gst == pytest.approx(0.18 * 10.0)
+    assert FrictionModel().ipft_pct == pytest.approx(0.01 / 10_000_000)
 
 
 def test_slippage_hand_calculation():

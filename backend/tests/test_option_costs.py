@@ -23,11 +23,11 @@ def test_a_buy_leg_pays_the_flat_brokerage_exchange_charge_stamp_duty_and_no_stt
 
     assert costs.brokerage == 20.0
     assert costs.stt == 0.0
-    assert costs.exchange_txn_charges == pytest.approx(35.53)  # 0.03553%
+    assert costs.exchange_txn_charges == pytest.approx(35.5301)  # 0.03553% + IPFT Rs 0.01 a crore
     assert costs.sebi_fee == pytest.approx(0.1)  # Rs 10 a crore
     assert costs.stamp_duty == pytest.approx(3.0)  # 0.003%
-    assert costs.gst == pytest.approx(0.18 * (20.0 + 0.1 + 35.53))
-    assert costs.total == pytest.approx(68.6434)
+    assert costs.gst == pytest.approx(0.18 * (20.0 + 0.1 + 35.5301))
+    assert costs.total == pytest.approx(68.643518)
 
 
 def test_a_sell_leg_pays_stt_and_no_stamp_duty():
@@ -35,7 +35,7 @@ def test_a_sell_leg_pays_stt_and_no_stamp_duty():
 
     assert costs.stt == pytest.approx(150.0)  # 0.15% of the premium
     assert costs.stamp_duty == 0.0
-    assert costs.total == pytest.approx(215.6434)
+    assert costs.total == pytest.approx(215.643518)
 
 
 def test_brokerage_is_flat_whatever_the_size_of_the_trade():

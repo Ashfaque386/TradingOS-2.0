@@ -93,7 +93,7 @@ Each entry: what the old app did · why it matters to a real operator · effort 
 | 18 | Agents/Memory | Vector/long-term agent memory | MISSING | L | none | Built (after Phase 26); the local sentence-transformers provider is an optional extra, not in the images |
 | 19 | Agents | Live Canvas | MISSING | M | Phase 19 (if resumed) | Built (Phase 22) |
 | 20 | Agents | User-facing scheduled jobs | MISSING | M | none | Built (Phase 22) |
-| 21 | Agents | Run pause/resume/retry/rerun + analytics | REGRESSED (unconfirmed depth) | M | Phase 19 (if resumed) | Built (Phase 22; cancel added later); per-agent narration not found |
+| 21 | Agents | Run pause/resume/retry/rerun + analytics | REGRESSED (unconfirmed depth) | M | Phase 19 (if resumed) | Built (Phase 22; cancel added later); per-agent narration built later (`src/agents/narration.py`, gap-closing plan phase 9) |
 | 22 | Portfolio | Allocation recommendations | MISSING | M | none | Built (Phase 24) |
 | 23 | Portfolio | Cross-broker dashboard | MISSING | S–M | none | Built, narrowed (Phase 24); by-broker endpoints deferred |
 | 24 | Ops | General API rate limiting | MISSING | S | none | Built (Phase 21) |

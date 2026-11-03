@@ -23,11 +23,11 @@ def test_a_buy_leg_pays_stamp_duty_and_no_stt():
 
     assert costs.brokerage == 20.0  # 0.03% would be Rs 300: the Rs 20 cap applies
     assert costs.stt == 0.0
-    assert costs.exchange_txn_charges == pytest.approx(18.3)  # 0.00183%
+    assert costs.exchange_txn_charges == pytest.approx(18.301)  # 0.00183% + IPFT Rs 0.01 a crore
     assert costs.sebi_fee == pytest.approx(1.0)  # Rs 10 a crore
     assert costs.stamp_duty == pytest.approx(20.0)  # 0.002%
-    assert costs.gst == pytest.approx(0.18 * (20.0 + 1.0 + 18.3))  # on brokerage + SEBI + exchange
-    assert costs.total == pytest.approx(66.374)
+    assert costs.gst == pytest.approx(0.18 * (20.0 + 1.0 + 18.301))  # brokerage + SEBI + exchange
+    assert costs.total == pytest.approx(66.37518)
 
 
 def test_a_sell_leg_pays_stt_and_no_stamp_duty():
@@ -35,7 +35,7 @@ def test_a_sell_leg_pays_stt_and_no_stamp_duty():
 
     assert costs.stt == pytest.approx(500.0)  # 0.05%
     assert costs.stamp_duty == 0.0
-    assert costs.total == pytest.approx(546.374)
+    assert costs.total == pytest.approx(546.37518)
 
 
 def test_brokerage_is_a_percentage_below_the_cap():
@@ -102,7 +102,7 @@ def test_a_fill_on_a_future_is_charged_the_futures_schedule(monkeypatch, setting
 
     total, breakdown = fill_costs("sell", fill, instrument_kind="future")
 
-    assert total == pytest.approx(546.374)
+    assert total == pytest.approx(546.37518)
     assert breakdown["segment"] == "future" and breakdown["product"] == "nrml"
     assert breakdown["stt"] == pytest.approx(500.0)
 

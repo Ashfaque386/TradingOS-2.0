@@ -289,7 +289,9 @@ async def test_a_futures_buy_pays_stamp_duty_and_no_stt(db_session_factory, redi
     assert costs["brokerage"] == 20.0  # the Rs 20 cap: 0.03% would be ~Rs 468
     assert costs["stt"] == 0.0
     assert costs["stamp_duty"] == pytest.approx(turnover * 0.00002)
-    assert costs["exchange_txn_charges"] == pytest.approx(turnover * 0.0000183)
+    assert costs["exchange_txn_charges"] == pytest.approx(
+        turnover * (0.0000183 + 0.000000001)
+    )  # + IPFT
     assert costs["gst"] == pytest.approx(
         0.18 * (costs["brokerage"] + costs["sebi_fee"] + costs["exchange_txn_charges"])
     )

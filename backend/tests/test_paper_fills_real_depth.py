@@ -237,7 +237,7 @@ async def test_a_delivery_buy_is_charged_stt_stamp_duty_exchange_fee_sebi_fee_an
     fill = await _tick(db_session_factory, redis, subscription)
 
     turnover = fill.filled_quantity * fill.avg_fill_price
-    exchange = turnover * 0.0000297
+    exchange = turnover * (0.0000307 + 0.000000001)  # NSE cash charge + IPFT
     breakdown = fill.costs_breakdown
     assert breakdown["product"] == "cnc"
     assert breakdown["turnover"] == pytest.approx(turnover)
@@ -246,7 +246,7 @@ async def test_a_delivery_buy_is_charged_stt_stamp_duty_exchange_fee_sebi_fee_an
     assert breakdown["stamp_duty"] == pytest.approx(turnover * 0.00015)
     assert breakdown["exchange_txn_charges"] == pytest.approx(exchange)
     assert breakdown["sebi_fee"] == pytest.approx(turnover * 0.000001)
-    assert breakdown["gst"] == pytest.approx(0.18 * exchange)
+    assert breakdown["gst"] == pytest.approx(0.18 * (exchange + turnover * 0.000001))  # + SEBI fee
     assert fill.costs_total == pytest.approx(
         sum(
             breakdown[k]

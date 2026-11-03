@@ -346,7 +346,9 @@ async def test_an_entry_is_charged_the_option_schedule_on_the_premium(db_session
     assert (costs["segment"], costs["product"]) == ("option", "nrml")
     assert costs["turnover"] == pytest.approx(premium)  # the premium, not the strike value
     assert costs["brokerage"] == 20.0 and costs["stt"] == 0.0  # flat fee, no STT on a buy
-    assert costs["exchange_txn_charges"] == pytest.approx(premium * 0.0003553)
+    assert costs["exchange_txn_charges"] == pytest.approx(
+        premium * (0.0003553 + 0.000000001)
+    )  # + IPFT
     assert costs["stamp_duty"] == pytest.approx(premium * 0.00003)
     legs = await _legs(db_session_factory, subscription)
     assert legs[CALL_24500].costs_total == pytest.approx(fill.costs_total)

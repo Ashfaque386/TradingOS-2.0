@@ -122,6 +122,7 @@ this is where it stands.
 | Settings and scheduled jobs (W19) | A schedule chosen in Mission Control is kept across restarts and can be restored to the code's own; the open Settings section is in the address; disconnecting a channel and removing a broker's credentials ask first. |
 | W20 (the heavy lists) | Runs, strategies and the instrument master are read a page at a time with the total; the runs' tasks and the strategies' versions are read in one query for the page, not one per row; Mission Control always shows the open runs, whatever page of history is open; a strategy in the list carries a summary of its versions, not their code; the instruments are searched on the server and an underlying's contracts shown 100 at a time. |
 | G13 and G27 (supply chain) | Dependabot watches pip, npm, the Dockerfiles and the compose file (grouped, weekly, no majors); `pnpm audit --prod` and a Trivy scan of each image (a fixable CRITICAL fails the job) run in CI, and published images carry an SBOM and provenance; the Prometheus, Grafana and Temporal images are named by version; `backend/requirements.txt` pins all 141 Python packages for CI and both images. The first audit and scan found, and this phase fixed, three critical advisories in Next 16.3.3 and eight in `temporalio` 1.7's Rust crates. |
+| G17 (data quality), the part that did not need a broker | The cash-equity cost schedule was out of date and inconsistent with the other two: NSE's cash transaction charge is **0.00307%** from 1 March 2026 (the code had 0.00297%, the rate before NSE moved 0.0001% out of the IPFT contribution), and GST was charged on brokerage and the exchange charge only for cash equity while futures and options charged it on brokerage, the SEBI fee and the exchange charge, which is the broker's published base for every segment; both fixed. The IPFT contribution (Rs 0.01 a crore from 1 March 2026, Rs 10 a crore before) is now a rate that can be set, carried in the exchange line. Futures and options rates were checked against the broker's current schedule and are right. The local `sentence-transformers` provider and per-agent narration, listed as unbuilt here, were built in later phases. |
 
 **Corrections to what this document first said:**
 - Fixed-date holidays were generated for 2020-2030 only (not "any year"), and the calendar file is re-read on every call.
@@ -296,11 +297,7 @@ failed once real time moved 120 days past it (CI #70). Another, earlier, built "
 where the code judges IST. There has been no sweep for the pattern. *Fix:* grep for fixed dates
 against a `datetime.now()` window, and inject a clock. *Effort: S.*
 
-**G17. Smaller data-quality items.** Upstox's exchange timestamp is unread (its documented fields
-disagree). Two brokers' adjusted prices differ by about 2% on some symbols (INFY); the cause is
-unconfirmed and the system pins each symbol to one broker's history instead. Zerodha's F&O cost
-schedule needs checking against the current published rates. The local `sentence-transformers`
-embedding provider and per-agent narration, both from the Phase 20 backlog, were not built.
+**G17. Smaller data-quality items.** *Open, both need a connected broker account.* Upstox's exchange timestamp is unread: its documented fields disagree, so `_exchange_time` returns nothing for Upstox until a real response settles which field it is (a quote with no stamp is never refused as stale, so this fails open on Upstox only). `scripts/record_broker_quote.py` records the raw answer; two recordings (market open, and after the close) are what is needed. Two brokers' adjusted prices differ by about 2% on some symbols (INFY); the cause is unconfirmed and the system pins each symbol to one broker's history instead. *Closed:* Zerodha's cost schedule (checked 2026-11-03, see the progress table), the `sentence-transformers` provider and per-agent narration.
 
 ### P3 — known limits, already documented
 
@@ -319,6 +316,8 @@ MFA, multi-tenancy, Vault, Kubernetes, a Casbin-style policy engine.
 - Run the real-data acceptance session and the Phase 17 live checks; read the results off the
   tick-age, quote-call and exchange-lag panels.
 - Supply NSE's 2026 and 2027 holiday dates for `config/nse_holidays.json`.
+- Record Upstox's quote answer twice, so its exchange stamp can be read: with Upstox connected, in the backend container, `python -m scripts.record_broker_quote /tmp/upstox-open.json INFY RELIANCE` while the market is open and again after the close, and keep both files (they hold no credentials).
+- Settle the INFY adjusted-price gap: fetch INFY's daily bars from both brokers across a corporate action (Zerodha's historical data, Upstox's historical candles), compare them with NSE's adjusted close, and note the ex-date and which broker is right; until then each symbol stays pinned to one broker's history.
 - Keep the browser pane signed in to GitHub if CI is to be read from there: the Actions page was readable for some of the session and returned "Page not found" at other times, which is what a private repository does to a signed-out visitor.
 
 ## 4. Suggested order

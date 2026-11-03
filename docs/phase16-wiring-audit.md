@@ -273,6 +273,12 @@ A below — this reconciliation job reuses the existing single
 trading scheduler, so it inherits that same "only one broker configured at a
 time" constraint rather than solving it.
 
+*Correction (checked 2026-11-03, gap-closing plan phase 11):* the adapter is no longer fixed when the app starts. The scheduler takes an
+`adapter_factory` (`get_live_adapter`, a `RefreshingConfiguredAdapter` in `src/brokers/factory.py`) and calls it on every firing, building
+a new adapter only when the stored credentials change, so a broker connected, re-authenticated or removed in Settings takes effect on the
+job's next pass. What is still true: one broker is used at a time (the first with stored credentials, Zerodha before Upstox), and the
+reconciliation reads the bulk order book, not one order's status.
+
 **C. Technical Indicators tab has no backend — RESOLVED (post-audit follow-up).**
 (`app/analysis/page.tsx`, was labeled `NOT AVAILABLE`). No endpoint computed
 SMA/EMA/RSI/MACD/Bollinger Bands for arbitrary symbols; only the backtest

@@ -234,6 +234,15 @@ class UpstoxAdapter:
         )
         return quote_from_row(symbol, row, broker="upstox")
 
+    async def raw_quote(self, symbol: str) -> tuple[str, dict[str, Any]]:
+        """The instrument key `symbol` resolves to and the quotes endpoint's answer for it, exactly
+        as Upstox sent it -- not parsed into a `BrokerQuote`. For recording a fixture
+        (`scripts/record_broker_quote.py`), which is how the exchange-stamp field gets settled."""
+        key = await self._instruments.resolve(symbol)
+        return key, await self._request(
+            "GET", "/market-quote/quotes", params={"instrument_key": key}
+        )
+
     async def get_quotes(self, symbols: Sequence[str]) -> dict[str, BrokerQuote]:
         """Many quotes per `/market-quote/quotes` call. A symbol Upstox does not list, or has no
         price for, is absent from the result. Rows are matched on the `instrument_token` they

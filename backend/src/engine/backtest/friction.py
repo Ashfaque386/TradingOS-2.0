@@ -16,14 +16,22 @@ checking a total.
   per executed leg; delivery is free (0%).
 - **STT** (Securities Transaction Tax): delivery charges 0.1% on *both*
   the buy and sell leg; intraday charges 0.025% on the sell leg only.
-- **Exchange transaction charges**: 0.00297% of turnover on both legs
-  (NSE's published cash-segment rate).
+- **Exchange transaction charges**: 0.00307% of turnover on both legs
+  (NSE's published cash-segment rate from 1 March 2026; it was 0.00297%
+  before, when NSE moved the same 0.0001% out of the IPFT contribution --
+  circular NSE/FA/73061). The IPFT contribution (Investor Protection Fund
+  Trust, ₹0.01 per crore from the same date; it was ₹10 per crore, ₹50 on
+  option premium, from April 2023) is levied by the same exchange and is
+  carried in this line (`ipft_pct`), so the cost breakdown keeps its shape.
 - **SEBI turnover fee**: ₹10 per crore of turnover (0.0001%) on both legs.
 - **Stamp duty**: charged on the buy leg only (SEBI's post-July-2020
   standardized schedule) -- 0.015% for delivery, 0.003% for intraday.
-- **GST**: 18% on (brokerage + exchange transaction charges) only -- STT,
-  the SEBI fee, and stamp duty are statutory levies GST is not charged on
-  top of.
+- **GST**: 18% on (brokerage + SEBI fee + exchange transaction charges,
+  IPFT included) -- the base the broker publishes for every segment. STT and
+  stamp duty are statutory levies GST is not charged on top of. (This module
+  used to leave the SEBI fee out for cash equity while the futures and
+  options schedules below included it; the broker's published formula is the
+  same for all three.)
 
 Slippage is modeled as a per-share price adjustment with two additive
 components, both configurable: an ATR-based component
@@ -50,8 +58,12 @@ class FrictionModel:
     stt_delivery_pct: float = 0.001
     stt_intraday_sell_pct: float = 0.00025
 
-    exchange_txn_pct: float = 0.0000297
+    exchange_txn_pct: float = 0.0000307  # NSE cash, 0.00307% (read 2026-11-03, zerodha.com/charges)
     sebi_fee_pct: float = 0.000001
+    # NSE's Investor Protection Fund Trust contribution, every segment (on the premium for options):
+    # Rs 0.01 a crore from 2026-03-01. It was Rs 10 a crore (Rs 50 on premium) from April 2023, so
+    # the rate has moved twice in three years: confirm it with the exchange transaction charge.
+    ipft_pct: float = 0.000000001
 
     stamp_duty_delivery_buy_pct: float = 0.00015
     stamp_duty_intraday_buy_pct: float = 0.00003
@@ -122,9 +134,9 @@ def compute_leg_costs(
         stt = 0.0 if is_buy else turnover * model.stt_intraday_sell_pct
         stamp_duty = turnover * model.stamp_duty_intraday_buy_pct if is_buy else 0.0
 
-    exchange_txn_charges = turnover * model.exchange_txn_pct
+    exchange_txn_charges = turnover * (model.exchange_txn_pct + model.ipft_pct)
     sebi_fee = turnover * model.sebi_fee_pct
-    gst = model.gst_pct * (brokerage + exchange_txn_charges)
+    gst = model.gst_pct * (brokerage + sebi_fee + exchange_txn_charges)
 
     return LegCosts(
         brokerage=brokerage,
@@ -156,13 +168,13 @@ def compute_slippage_per_share(
 def compute_futures_leg_costs(
     *, turnover: float, is_buy: bool, model: FrictionModel = FrictionModel()
 ) -> LegCosts:
-    """The costs of one leg of an equity-futures trade. Unlike the cash-equity schedule above,
-    GST (18%) is charged on brokerage + the SEBI fee + the exchange transaction charges, as
-    Zerodha states it for futures; STT is on the sell side only and stamp duty on the buy side
-    only. `turnover` = price * quantity (lots * lot size) for this leg."""
+    """The costs of one leg of an equity-futures trade. GST (18%) is charged on brokerage + the
+    SEBI fee + the exchange transaction charges, as for every segment; STT is on the sell side
+    only and stamp duty on the buy side only. `turnover` = price * quantity (lots * lot size)
+    for this leg."""
     brokerage = _brokerage(turnover, model.futures_brokerage_pct, model.futures_brokerage_cap)
     stt = 0.0 if is_buy else turnover * model.futures_stt_sell_pct
-    exchange_txn_charges = turnover * model.futures_exchange_txn_pct
+    exchange_txn_charges = turnover * (model.futures_exchange_txn_pct + model.ipft_pct)
     sebi_fee = turnover * model.sebi_fee_pct
     stamp_duty = turnover * model.futures_stamp_buy_pct if is_buy else 0.0
     gst = model.gst_pct * (brokerage + sebi_fee + exchange_txn_charges)
@@ -185,7 +197,7 @@ def compute_option_leg_costs(
     the sell side only and stamp duty on the buy side only."""
     brokerage = model.option_brokerage_flat
     stt = 0.0 if is_buy else turnover * model.option_stt_sell_pct
-    exchange_txn_charges = turnover * model.option_exchange_txn_pct
+    exchange_txn_charges = turnover * (model.option_exchange_txn_pct + model.ipft_pct)
     sebi_fee = turnover * model.sebi_fee_pct
     stamp_duty = turnover * model.option_stamp_buy_pct if is_buy else 0.0
     gst = model.gst_pct * (brokerage + sebi_fee + exchange_txn_charges)
