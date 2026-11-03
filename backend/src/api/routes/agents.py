@@ -19,6 +19,7 @@ mutation path.
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -482,7 +483,8 @@ async def agent_analytics_trend_endpoint(
     for day, task_status, count in rows:
         day_key = day.isoformat() if hasattr(day, "isoformat") else str(day)
         by_date.setdefault(day_key, {"succeeded": 0, "failed": 0})
-        by_date[day_key]["succeeded" if task_status == TaskStatus.SUCCEEDED else "failed"] = count
+        outcome = "succeeded" if task_status == TaskStatus.SUCCEEDED else "failed"
+        by_date[day_key][outcome] = cast("int", count)
 
     return [
         AgentAnalyticsTrendPoint(

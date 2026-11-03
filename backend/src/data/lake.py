@@ -92,7 +92,10 @@ def _write_partitioned(
     partitions_written: list[Path] = []
     rows_added = 0
     for (year, month), group in df.groupby([parsed.dt.year, parsed.dt.month]):
-        path = _partition_path(root, subdir, symbol, int(year), int(month))
+        # groupby keys are typed as Hashable; here they are the year and month it grouped on.
+        path = _partition_path(
+            root, subdir, symbol, int(cast("int", year)), int(cast("int", month))
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         con = duckdb.connect(":memory:")
         try:
@@ -116,8 +119,10 @@ def _write_partitioned(
             merged = merged.sort_values(key_column).reset_index(drop=True)
             if SOURCE_COLUMN in merged.columns:
                 # Rows written before sources existed come back NaN: store them as NULL.
-                merged[SOURCE_COLUMN] = (
-                    merged[SOURCE_COLUMN].astype(object).where(merged[SOURCE_COLUMN].notna(), None)
+                merged[SOURCE_COLUMN] = pd.Series(
+                    [None if pd.isna(value) else value for value in merged[SOURCE_COLUMN]],
+                    index=merged.index,
+                    dtype=object,
                 )
             con.register("merged_view", merged)
             con.execute("COPY merged_view TO ? (FORMAT PARQUET)", [str(path)])

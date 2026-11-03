@@ -90,8 +90,10 @@ class UnifiedExecutionResponse(BaseModel):
 
 
 def _live_rows() -> Select[Any]:
+    # SQLAlchemy 2.1 types a select by its columns and will not call thirteen of them `Select[Any]`
+    # unasked; 2.0 did, so under 2.0 this ignore is unused (which is why it says so).
     return (
-        select(
+        select(  # type: ignore[return-value, unused-ignore]
             Trade.id.label("id"),
             literal("live", String).label("mode"),
             Trade.executed_at.label("time"),

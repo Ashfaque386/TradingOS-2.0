@@ -169,7 +169,7 @@ async def _distinct_values(db: AsyncSession, column: Any) -> tuple[list[str], bo
         .order_by(column)
         .limit(_FACET_LIMIT + 1)
     )
-    values = list((await db.execute(stmt)).scalars().all())
+    values: list[str] = list((await db.execute(stmt)).scalars().all())
     return values[:_FACET_LIMIT], len(values) > _FACET_LIMIT
 
 

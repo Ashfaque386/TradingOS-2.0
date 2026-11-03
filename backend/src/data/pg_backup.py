@@ -282,7 +282,7 @@ async def create_postgres_backup(
         async with session_factory() as db:
             # One snapshot for the facts and the dump, so the manifest describes the dump exactly.
             await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
-            snapshot = (await db.execute(text("SELECT pg_export_snapshot()"))).scalar_one()
+            snapshot: str = (await db.execute(text("SELECT pg_export_snapshot()"))).scalar_one()
             facts = await _read_facts(db)
             await _run(
                 [
