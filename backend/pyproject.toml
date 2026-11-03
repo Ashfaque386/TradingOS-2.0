@@ -9,12 +9,12 @@ dependencies = [
     # starlette>=1.3.1) -- closed in Phase 26's dependency-CVE pass,
     # docs/phase20-old-vs-new-comparison.md item 28, by bumping FastAPI to
     # the version whose own pin resolves a fixed starlette.
-    "fastapi>=0.141,<0.142",
-    "uvicorn[standard]>=0.32,<0.33",
-    "sqlalchemy>=2.0.36,<2.1",
-    "asyncpg>=0.30,<0.31",
+    "fastapi>=0.141,<0.163",
+    "uvicorn[standard]>=0.32,<0.55",
+    "sqlalchemy>=2.0.36,<2.2",
+    "asyncpg>=0.30,<0.33",
     "psycopg2-binary>=2.9,<3.0",
-    "alembic>=1.13,<1.14",
+    "alembic>=1.13,<1.21",
     "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.6,<3.0",
     # JWT signing/verification (src/core/security.py). Replaced python-jose
@@ -31,7 +31,7 @@ dependencies = [
     "email-validator>=2.2,<3.0",
     "structlog>=24.4,<25.0",
     "watchdog>=5.0,<6.0",
-    "json5>=0.9,<0.10",
+    "json5>=0.9,<0.18",
     "click>=8.1,<9.0",
     "redis>=5.1,<6.0",
     # >=1.2,<1.3: 0.2.76 had 2 real CVEs (PYSEC-2026-83, only fixed in
@@ -43,10 +43,10 @@ dependencies = [
     # Runtime dependency, not just a dev tool, as of Phase 4: src/engine/validation.py
     # shells out to it for static validation of every LLM-generated strategy module
     # before anything reaches the sandbox.
-    "ruff>=0.7,<0.8",
+    "ruff>=0.7,<0.18",
     # Phase 5 (Build Spec §10): the vectorized backtest engine and
     # optimization suite.
-    "pandas>=2.2,<2.3",
+    "pandas>=2.2,<2.4",
     "numpy>=1.26,<2.0",
     "optuna>=3.6,<3.7",
     # optuna.importance.FanovaImportanceEvaluator (the real fANOVA
@@ -54,13 +54,13 @@ dependencies = [
     # internally.
     # >=1.5: 1.4.2 has PYSEC-2024-110 (a real CVE, closed in Phase 26's
     # dependency-CVE pass, docs/phase20-old-vs-new-comparison.md item 28).
-    "scikit-learn>=1.5,<1.6",
+    "scikit-learn>=1.5,<1.10",
     # >=1.35: the Rust core compiled into 1.7 carried crates with published advisories (zip, quinn-proto,
     # rustls-webpki, pyo3: Trivy reports them from the wheel's Cargo.lock); 1.35 ships fixed ones.
     "temporalio>=1.35,<1.36",
     # Phase 7 (Build Spec §11): autonomous daily-cron + intraday-interval
     # scheduling for the paper trading engine.
-    "apscheduler>=3.10,<3.11",
+    "apscheduler>=3.10,<3.12",
     # zoneinfo's IANA database isn't guaranteed to be present on every base
     # image -- this package bundles it so "Asia/Kolkata" resolves the same
     # everywhere regardless of OS tzdata.
@@ -68,7 +68,7 @@ dependencies = [
     # Phase 8 (Build Spec §13): real httpx-calling broker adapters
     # (Zerodha Kite Connect, Upstox) -- moved out of dev-only now that
     # it's exercised by non-test code, not just FastAPI's TestClient.
-    "httpx>=0.27,<0.28",
+    "httpx>=0.27,<0.29",
     # Phase 8 (Build Spec §3, §20): the encrypted local secrets store for
     # broker credentials. src/security/secrets_store.py imports
     # cryptography.fernet directly, so it is a direct dependency, not
@@ -86,7 +86,7 @@ dependencies = [
     # so no separate pyarrow dependency is needed just for storage.
     "duckdb>=1.1,<2.0",
     # Phase 11 (Build Spec §19): Prometheus metrics (src/observability/metrics.py).
-    "prometheus-client>=0.20,<0.21",
+    "prometheus-client>=0.20,<0.27",
     # Phase 17 real-world testing pass: real host CPU/memory gauges for
     # GET /api/v1/system/vitals (src/observability/vitals.py) -- read
     # directly from the API process's own OS view, not derived from any
@@ -130,7 +130,7 @@ dev = [
     # `apscheduler` has no published stub package (checked: no
     # `APScheduler-stubs`/`types-apscheduler` on PyPI) -- handled instead via
     # `[[tool.mypy.overrides]]` below.
-    "pandas-stubs>=2.2,<2.3",
+    "pandas-stubs>=2.2,<2.4",
     "types-passlib>=1.7,<2.0",
     "types-psutil>=6.0,<7.0",
 ]
