@@ -82,6 +82,24 @@ test('the log is paged on the server: every page, in order, to the very last ent
   await expect.poll(() => page.locator('.audit-table tbody tr:not(.audit-diff-row)').count()).toBeGreaterThan(25)
 })
 
+test('Next, clicked as the page opens, is not undone when the search box settles', async ({ page }) => {
+  for (let i = 0; i < 30; i += 1) await tokenFor(E2E_USERS.auditor) // more than one page of entries
+  await login(page, E2E_USERS.auditor)
+  // The search box applies 300 ms after the page opens even when nothing was typed. Holding the page's
+  // timers makes "the click came first" the order every time, which on a fast machine is chance.
+  const now = new Date()
+  await page.clock.install({ time: now })
+  await page.clock.pauseAt(new Date(now.getTime() + 1_000))
+  await page.goto('/audit')
+  await expect(page.getByText(/^Showing 1–25 of [\d,]+$/)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect(page.getByText(/^Showing 26–50 of [\d,]+$/)).toBeVisible()
+
+  await page.clock.runFor(1_000)
+  await expect(page.getByText(/^Showing 26–50 of [\d,]+$/)).toBeVisible()
+})
+
 test('a filter is applied by the server: only that actor’s entries, counted, and kept in the address', async ({ page }) => {
   await seedEntity()
   const token = await tokenFor(E2E_USERS.auditor)

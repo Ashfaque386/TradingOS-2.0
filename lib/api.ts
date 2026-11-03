@@ -94,9 +94,11 @@ async function postRefresh(): Promise<RefreshOutcome> {
  * first just received. */
 export function refreshSession(): Promise<RefreshOutcome> {
   if (!refreshPromise) {
-    const run =
+    // `async` because TypeScript 5.9 types the lock's result as a promise of the callback's own promise;
+    // an async function flattens it, and runs the same under 5.7.
+    const run: () => Promise<RefreshOutcome> =
       typeof navigator !== 'undefined' && navigator.locks
-        ? () => navigator.locks.request('tradingos-session-refresh', postRefresh)
+        ? async () => navigator.locks.request('tradingos-session-refresh', postRefresh)
         : postRefresh
     refreshPromise = run().finally(() => {
       refreshPromise = null

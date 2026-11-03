@@ -46,6 +46,13 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # requirements.txt pins every package, including ones another package holds to an exact version,
+      # and Dependabot raises each pin on its own, so one of these makes the whole group fail to
+      # install (the first grouped pull request did: "temporalio 1.35.0 depends on nexus-rpc==1.4.0").
+      # Each is moved by hand, together with its owner.
+      - dependency-name: "nexus-rpc" # exact pin owned by temporalio: raise it with temporalio
+      - dependency-name: "scipy" # 1.18 needs numpy 2; pyproject.toml holds numpy below 2
+        versions: [">=1.18"]
 
   - package-ecosystem: npm
     directory: /

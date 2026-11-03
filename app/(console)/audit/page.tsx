@@ -111,14 +111,17 @@ export default function AuditLogPage() {
     window.history.replaceState(null, '', `${window.location.pathname}${filterToUrl(filter)}`)
   }, [filter, urlRead])
 
-  // The search box applies a moment after typing stops, so each keystroke is not a request.
+  // The search box applies a moment after typing stops, so each keystroke is not a request. Nothing is
+  // armed while the box already says what is applied: the timer used to run on every load and send a
+  // reader who had just pressed Next back to the first page.
   useEffect(() => {
+    if (typedSearch === filter.search) return
     const id = setTimeout(() => {
-      setFilter((current) => (current.search === typedSearch ? current : { ...current, search: typedSearch }))
+      setFilter((current) => ({ ...current, search: typedSearch }))
       setPage(1)
     }, 300)
     return () => clearTimeout(id)
-  }, [typedSearch])
+  }, [typedSearch, filter.search])
 
   const problem = rangeProblem(filter)
   const query = queryFor(filter)
