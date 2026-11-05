@@ -264,7 +264,7 @@ services:
     # same minor as the qdrant-client in backend/pyproject.toml. Not
     # published to the host: only the backend talks to it, over the internal
     # Docker network -- same rule as Redis and Postgres.
-    image: qdrant/qdrant:v1.19.1
+    image: qdrant/qdrant:v1.19.2
     container_name: TradingOS-2.0-Qdrant
     restart: unless-stopped
     volumes:
@@ -310,7 +310,7 @@ services:
     # egress policy, confirmed live via the identical `docker pull`
     # failure pattern seen on `temporalio/temporal:latest` in Phase 5.
     # Please confirm `docker compose up` once in a normal environment.
-    image: prom/prometheus:v3.15.0
+    image: prom/prometheus:v3.15.1
     container_name: TradingOS-2.0-Prometheus
     restart: unless-stopped
     depends_on:
@@ -342,7 +342,7 @@ services:
     # channels subscribed to the `engine` alert level. Not published to the host: nothing outside
     # the stack needs to reach it, and Prometheus and the backend do so over the internal network.
     # The tag is pinned (the other images here still float on `latest`).
-    image: prom/alertmanager:v0.28.1
+    image: prom/alertmanager:v0.34.2
     container_name: TradingOS-2.0-Alertmanager
     restart: unless-stopped
     command:
@@ -365,7 +365,7 @@ services:
   grafana:
     # Dashboard + alert visualization (Build Spec §19, item 5). Same
     # unverified-in-this-sandbox posture as `prometheus`/`temporal` above.
-    image: grafana/grafana:13.2.2
+    image: grafana/grafana:13.3.0
     container_name: TradingOS-2.0-Grafana
     restart: unless-stopped
     depends_on:
