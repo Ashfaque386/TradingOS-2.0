@@ -20,7 +20,7 @@ from typing import Any
 import structlog
 
 from src.notifications.channel_store import get_notification_channel_store
-from src.notifications.senders import SendResult, send_to_channel
+from src.notifications.senders import SendResult, describe_error, send_to_channel
 from src.notifications.types import AlertLevel
 
 logger = structlog.get_logger(__name__)
@@ -36,7 +36,7 @@ async def notify(
     try:
         store = get_notification_channel_store()
     except Exception:  # noqa: BLE001 - no encryption key configured yet is a valid, silent no-op
-        logger.warning("notifications.store_unavailable", level=level.value)
+        logger.warning("notifications.store_unavailable", alert_level=level.value)
         return []
 
     channels = store.channels_subscribed_to(level)
@@ -48,16 +48,20 @@ async def notify(
         try:
             result = await send_to_channel(channel, config, text)
         except Exception as exc:  # noqa: BLE001 - one channel's failure must never block another
-            logger.exception("notifications.send_crashed", channel=channel.value, level=level.value)
-            result = SendResult(channel, False, None, str(exc))
+            logger.exception(
+                "notifications.send_crashed", channel=channel.value, alert_level=level.value
+            )
+            result = SendResult(channel, False, None, describe_error(exc))
         results.append(result)
+        # `alert_level`, not `level`: structlog's own `level` key (the log's severity) would
+        # replace it.
         if result.ok:
-            logger.info("notifications.alert_sent", channel=channel.value, level=level.value)
+            logger.info("notifications.alert_sent", channel=channel.value, alert_level=level.value)
         else:
             logger.warning(
                 "notifications.alert_failed",
                 channel=channel.value,
-                level=level.value,
+                alert_level=level.value,
                 error=result.error,
             )
 

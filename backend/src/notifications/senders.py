@@ -37,6 +37,14 @@ class SendResult:
     error: str | None
 
 
+def describe_error(exc: Exception) -> str:
+    """What failed, for a person reading a log or Settings. Most of httpx's transport errors (a
+    timeout, a refused connection) carry no message, so `str(exc)` alone is an empty string; the
+    type is what says which."""
+    detail = str(exc)
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+
+
 async def send_telegram(
     config: NotificationChannelConfig,
     text: str,
@@ -59,7 +67,7 @@ async def send_telegram(
             )
         return SendResult(NotificationChannel.TELEGRAM, True, resp.status_code, None)
     except httpx.HTTPError as exc:
-        return SendResult(NotificationChannel.TELEGRAM, False, None, str(exc))
+        return SendResult(NotificationChannel.TELEGRAM, False, None, describe_error(exc))
 
 
 async def send_discord(
@@ -79,7 +87,7 @@ async def send_discord(
             return SendResult(NotificationChannel.DISCORD, False, resp.status_code, resp.text[:500])
         return SendResult(NotificationChannel.DISCORD, True, resp.status_code, None)
     except httpx.HTTPError as exc:
-        return SendResult(NotificationChannel.DISCORD, False, None, str(exc))
+        return SendResult(NotificationChannel.DISCORD, False, None, describe_error(exc))
 
 
 async def send_slack(
@@ -99,7 +107,7 @@ async def send_slack(
             return SendResult(NotificationChannel.SLACK, False, resp.status_code, resp.text[:500])
         return SendResult(NotificationChannel.SLACK, True, resp.status_code, None)
     except httpx.HTTPError as exc:
-        return SendResult(NotificationChannel.SLACK, False, None, str(exc))
+        return SendResult(NotificationChannel.SLACK, False, None, describe_error(exc))
 
 
 SENDERS = {

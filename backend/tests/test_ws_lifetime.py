@@ -89,6 +89,63 @@ async def test_what_the_work_raises_is_raised():
         )
 
 
+# What uvicorn raises for a send that races the browser leaving.
+CLOSED_SOCKET_SEND = RuntimeError(
+    "Unexpected ASGI message 'websocket.send', after sending 'websocket.close' "
+    "or response already completed."
+)
+
+
+async def test_a_send_that_races_the_browser_leaving_is_the_browser_leaving():
+    websocket = FakeWebSocket()
+    websocket.incoming.put_nowait({"type": "websocket.disconnect"})
+
+    async def send_as_the_browser_goes() -> None:
+        # fails in the same pass of the loop in which the reader sees the disconnect
+        raise CLOSED_SOCKET_SEND
+
+    await asyncio.wait_for(
+        serve_until_client_leaves(websocket, send_as_the_browser_goes()), timeout=2
+    )
+
+
+async def test_the_reader_may_see_the_browser_go_just_after_the_failed_send(monkeypatch):
+    monkeypatch.setattr("src.api.ws_lifetime.CLIENT_LEFT_GRACE_SECONDS", 1.0)
+    websocket = FakeWebSocket()
+
+    async def send_to_a_socket_that_just_closed() -> None:
+        asyncio.get_running_loop().call_later(
+            0.05, websocket.incoming.put_nowait, {"type": "websocket.disconnect"}
+        )
+        raise CLOSED_SOCKET_SEND
+
+    await asyncio.wait_for(
+        serve_until_client_leaves(websocket, send_to_a_socket_that_just_closed()), timeout=2
+    )
+
+
+async def test_the_same_error_with_the_browser_still_there_is_a_fault(monkeypatch):
+    monkeypatch.setattr("src.api.ws_lifetime.CLIENT_LEFT_GRACE_SECONDS", 0.05)
+    websocket = FakeWebSocket()  # nothing ever arrives: the browser is connected
+
+    async def failing_send() -> None:
+        raise CLOSED_SOCKET_SEND
+
+    with pytest.raises(RuntimeError, match="Unexpected ASGI message"):
+        await asyncio.wait_for(serve_until_client_leaves(websocket, failing_send()), timeout=2)
+
+
+async def test_other_errors_are_raised_even_as_the_browser_leaves():
+    websocket = FakeWebSocket()
+    websocket.incoming.put_nowait({"type": "websocket.disconnect"})
+
+    async def broken() -> None:
+        raise ValueError("a real bug")
+
+    with pytest.raises(ValueError, match="a real bug"):
+        await asyncio.wait_for(serve_until_client_leaves(websocket, broken()), timeout=2)
+
+
 async def test_stopping_the_handler_stops_the_work_too():
     websocket, work = FakeWebSocket(), Work()
     serving = asyncio.ensure_future(serve_until_client_leaves(websocket, work.idle_forever()))
