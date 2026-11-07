@@ -132,6 +132,7 @@ inject a clock.
 - [`docs/CLAUDE.md`](docs/CLAUDE.md): the project memory: rules that never bend, decisions, and a dated
   entry for every phase and follow-up, with what was verified live and what was not. **Start here.**
 - [`docs/gap-analysis-2026-10-30.md`](docs/gap-analysis-2026-10-30.md): what is still pending and where the gaps are.
+- [`docs/runbooks/first-session.md`](docs/runbooks/first-session.md): the first session on real data (brokers, the paper-trading numbers to read, the open data questions); [`docs/runbooks/postgres-restore.md`](docs/runbooks/postgres-restore.md): backups and restore.
 - `docs/TradingOS_2.0_Build_Specification.md`, `…_Blueprint.md`, `…_Build_Prompt_Pack.md`: the design and build plan.
 - `docs/phase16-wiring-audit.md`, `phase19-audit.md`, `phase20-*.md`: the audits and the old-app comparison backlog.
 - [`e2e/README.md`](e2e/README.md): the end-to-end suite and how to run it.

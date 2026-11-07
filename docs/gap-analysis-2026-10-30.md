@@ -311,6 +311,10 @@ MFA, multi-tenancy, Vault, Kubernetes, a Casbin-style policy engine.
 
 ## 3. Items only the operator can close
 
+`docs/runbooks/first-session.md` walks through these in order (rebuilding the stack first, the morning broker
+sign-in, a small real-data paper trade, the Grafana panels to read, both Upstox recordings, the INFY comparison,
+the holiday file, the restore drill) and ends with a table to record the results in.
+
 - Reconnect the brokers each trading morning (their tokens end around 06:00 IST).
 - The JWT signing-key rotation click in Settings.
 - Run the real-data acceptance session and the Phase 17 live checks; read the results off the
