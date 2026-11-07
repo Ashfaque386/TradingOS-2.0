@@ -20,34 +20,48 @@ The live path stays untouched until the paper numbers below are in hand (Part 8)
 
 Write the findings of each part into the table at the end (**Record**) as you go. Part 9 turns it into doc updates.
 
-## Part 0: bring the live stack up to date
+## Part 0: make sure the live stack runs the current code
 
-First find out what is running. The backend image's build date and the commit it matches tell you:
+The stack has to run what is on `main` before you start, above all for Part 5: `scripts/record_broker_quote.py` ships
+in the backend image, and an older image does not have it. Check, from the repository root:
 
 ```bash
-docker inspect TradingOS-2.0-Backend --format '{{.Created}}'
+git log -1 --format='%h %cI' -- backend app components lib
+docker image inspect tradingos-2.0-backend:latest --format '{{.Created}}'
+docker image inspect tradingos-2.0-frontend:latest --format '{{.Created}}'
+docker exec TradingOS-2.0-Backend ls scripts/record_broker_quote.py
 docker exec TradingOS-2.0-Backend python -m alembic current
 ```
 
-On 2026-11-07 the image was built on 2 November at about 21:10 IST, which is Phase 9's slice 7b, and the database
-was at the repository's head revision (`f1a8c5d2e9b7`). It already has the named volumes (the data lake, its
-backups and the audit archive survive a rebuild), the nightly Postgres backup, the sign-in rules and the Paper
-Desk. It **does not** have what was committed after that: the WebSocket connection leak fix (`e7c3b54`), the
-refresh fix for a reload (`9ba2814`), the paged lists (slice 8), the pinned and scanned build (Phase 10) and
-Phase 11, which holds the cash-equity cost schedule and **`scripts/record_broker_quote.py`, which Part 5 needs**.
-So rebuild before Part 5, and preferably before the session. Migrations are additive, so a rebuild is safe.
+The stack is current when both images were built **after** the commit on the first line (that time is IST, the image
+times are UTC, 5 hours 30 minutes apart), the script is listed, and alembic prints `(head)`. Do not use
+`docker inspect TradingOS-2.0-Backend --format '{{.Created}}'` for this: that is when the *container* was made, which
+changes on every recreate and says nothing about the code in it.
+
+**State on 2026-11-07.** In the morning the stack ran the 2 November build (Phase 9's slice 7b). It lacked the
+WebSocket connection leak fix (`e7c3b54`), the refresh fix for a reload (`9ba2814`), the paged lists (slice 8), the
+pinned and scanned build (Phase 10) and Phase 11, which holds the cash-equity cost schedule and the quote recorder. It
+was rebuilt that afternoon at 14:34 IST from `ae913b4`. Read afterwards, every Python file in the backend container
+matched the repository, the recorder was there, the database was at the head revision `f1a8c5d2e9b7`, the named
+volumes (the data lake, its backups, the audit archive, Postgres, the secrets) were intact with both Postgres dumps
+on the backups volume (2 and 7 November), and the only warning in the log was the weak signing key (Part 6). So on that
+day this part was already done, and steps 1 to 3 below are for the next time `main` has moved on (new commits
+pulled, a Dependabot pull request merged) before a session.
 
 1. **Take a backup first, and keep a copy off this machine.** The stack makes one at 22:45 IST **only while the
    machine and Docker are running**: on 2026-11-07 the volume held dumps from 2 and 7 November and none for the
-   nights between, because nothing was running then (the job does not catch up). Press **Back up now** in
-   Settings > System and backups (or run the dump below), then copy the newest file out:
+   nights between, because nothing was running then (the job does not catch up). There is no command-line dump:
+   press **Back up now** in Settings > System and backups, then check the newest file and copy it out:
 
    ```bash
    docker exec TradingOS-2.0-Backend python -m scripts.restore_postgres list
-   docker cp TradingOS-2.0-Backend:/app/backups/. ./offsite-backups/
+   docker exec TradingOS-2.0-Backend python -m scripts.restore_postgres verify latest
+   docker cp TradingOS-2.0-Backend:/app/backups/. ../offsite-backups/
    ```
 
-   Keep the copy outside the repository. The dump holds password hashes and the login signing keys.
+   `../offsite-backups/` is beside the repository, not in it: the folder is not git-ignored, and the dumps hold
+   password hashes and the login signing keys, so they must never sit where a `git add .` finds them. Then move the
+   copy off this machine.
 2. **Keep `SECRETS_ENCRYPTION_KEY`.** It is in `.env`. If the saved broker credentials are to survive, the same
    key must be there after the rebuild. Copy it somewhere that is not this machine.
 3. **Rebuild:**
