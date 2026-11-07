@@ -22,33 +22,45 @@ Write the findings of each part into the table at the end (**Record**) as you go
 
 ## Part 0: bring the live stack up to date
 
-The running stack was last rebuilt on commit `43c0ee2`. It does not have the tick-age fix, futures and options, the
-Paper Desk, the automatic kill switch, the engine alerts, the Postgres backup or the new sign-in rules. Migrations
-are additive, so a rebuild is safe, but three things need care.
+First find out what is running. The backend image's build date and the commit it matches tell you:
 
-1. **Back up what a rebuild could lose.** The data lake, its backups and the audit archive were inside the container
-   until recently; the new image keeps them on named volumes, but **the first rebuild deletes the old copies** unless
-   you copy them out first. And the live stack has never made a Postgres backup, so take one by hand:
+```bash
+docker inspect TradingOS-2.0-Backend --format '{{.Created}}'
+docker exec TradingOS-2.0-Backend python -m alembic current
+```
+
+On 2026-11-07 the image was built on 2 November at about 21:10 IST, which is Phase 9's slice 7b, and the database
+was at the repository's head revision (`f1a8c5d2e9b7`). It already has the named volumes (the data lake, its
+backups and the audit archive survive a rebuild), the nightly Postgres backup, the sign-in rules and the Paper
+Desk. It **does not** have what was committed after that: the WebSocket connection leak fix (`e7c3b54`), the
+refresh fix for a reload (`9ba2814`), the paged lists (slice 8), the pinned and scanned build (Phase 10) and
+Phase 11, which holds the cash-equity cost schedule and **`scripts/record_broker_quote.py`, which Part 5 needs**.
+So rebuild before Part 5, and preferably before the session. Migrations are additive, so a rebuild is safe.
+
+1. **Take a backup first, and keep a copy off this machine.** The stack makes one at 22:45 IST **only while the
+   machine and Docker are running**: on 2026-11-07 the volume held dumps from 2 and 7 November and none for the
+   nights between, because nothing was running then (the job does not catch up). Press **Back up now** in
+   Settings > System and backups (or run the dump below), then copy the newest file out:
 
    ```bash
-   for d in data_lake data_lake_backups audit_archive; do docker cp TradingOS-2.0-Backend:/app/$d ./$d.keep; done
-   docker exec TradingOS-2.0-Backend pg_dump -U tradingos -Fc -f /tmp/tradingos-before-rebuild.dump tradingos
-   docker cp TradingOS-2.0-Backend:/tmp/tradingos-before-rebuild.dump .
+   docker exec TradingOS-2.0-Backend python -m scripts.restore_postgres list
+   docker cp TradingOS-2.0-Backend:/app/backups/. ./offsite-backups/
    ```
 
-   (The dump is written inside the container and copied out, not redirected: a shell redirect can corrupt a binary
-   file on Windows.) Keep both outside the repository. The dump holds password hashes and the login signing keys.
+   Keep the copy outside the repository. The dump holds password hashes and the login signing keys.
 2. **Keep `SECRETS_ENCRYPTION_KEY`.** It is in `.env`. If the saved broker credentials are to survive, the same
    key must be there after the rebuild. Copy it somewhere that is not this machine.
-3. **Rebuild, then put the lake back:**
+3. **Rebuild:**
 
    ```bash
    API_HOST_PORT=8001 node scripts/docker-up.js -d
-   for d in data_lake data_lake_backups audit_archive; do docker cp ./$d.keep/. TradingOS-2.0-Backend:/app/$d; done
    ```
 
-   Rebuilding signs everyone out once (the session cookie replaces the stored token). The first sign-in after is
-   normal.
+   The volumes are kept, so nothing needs copying back. Rebuilding signs everyone out once; the first sign-in after
+   is normal.
+
+Leave the machine and Docker running overnight on a trading day if you want the 22:45 IST backup, the 07:30
+history repair and the 08:00 signals to happen.
 
 **Check:** the sign-in page loads, you can sign in with your existing account, and Settings > System and backups opens.
 Do not create an account on the sign-in page: registration is closed after the first account on purpose, and a

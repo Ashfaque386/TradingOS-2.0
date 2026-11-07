@@ -152,9 +152,10 @@ the four fixture users, and 60 audit entries. The same sequence was run once as 
 | One byte flipped in the dump | `verify`: "checksum mismatch", exit 1; `restore`: "damaged and was not restored", exit 1, target untouched |
 | Counts read straight from the restored database | `users 4`, `audit_log 60`, `alembic_version b4f7d2a8c1e3`; `alembic current` says `(head)` |
 
-Not yet done: a drill on the live database's real data and size (the live stack still runs the build from before Phase 7,
-so it has no backups to restore), and a restore through the container with `docker exec` rather than the test harness.
-Both belong to the first operator session.
+Not yet done: a drill on the live database's real data and size, and a restore through the container with `docker exec`
+rather than the test harness. Both belong to the first operator session. (The live stack has made backups since its
+2026-11-02 rebuild, so there is a real dump to drill on; on 2026-11-07 the volume held two, about 0.5 MB each, from 2 and
+7 November. The nights between are missing because the machine was off: the job does not catch up on a missed run.)
 
 ## Troubleshooting
 
