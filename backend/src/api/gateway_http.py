@@ -48,7 +48,7 @@ def gateway_edit_error(exc: Exception) -> HTTPException:
     if isinstance(exc, UnknownAgent):
         return HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
     if isinstance(exc, InvalidEdit):
-        return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     if isinstance(exc, NothingToChange):
         return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, ConfigLoadError):

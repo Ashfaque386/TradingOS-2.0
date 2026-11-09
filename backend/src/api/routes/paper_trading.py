@@ -316,7 +316,7 @@ async def enroll_subscription_endpoint(
     listed = await symbol_listing(provider, body.symbol)
     if listed is False:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"no connected broker lists an NSE equity or index named {body.symbol!r}: paper "
                 "trading runs on real symbols"
@@ -379,7 +379,7 @@ async def _check_options_listed(provider: AnyMarketDataProvider, underlying: str
     lister = getattr(provider, "option_contracts", None)
     if lister is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "options need a connected broker: its instrument master is the only source of "
                 "the contracts and their lot sizes"
@@ -389,7 +389,7 @@ async def _check_options_listed(provider: AnyMarketDataProvider, underlying: str
         contracts = await lister(underlying)
     except NoRealDataSourceError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"options need a connected broker ({exc})",
         ) from exc
     settings = get_settings()
@@ -402,7 +402,7 @@ async def _check_options_listed(provider: AnyMarketDataProvider, underlying: str
         is None
     ):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"no listed {underlying} option expires more than "
                 f"{settings.paper_options_min_days_to_expiry} days from now"
@@ -421,7 +421,7 @@ async def _future_contract_for(
     resolver = getattr(provider, "futures_contract", None)
     if resolver is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "futures need a connected broker: its instrument master is the only source of "
                 "the contract and its lot size"
@@ -439,11 +439,11 @@ async def _future_contract_for(
         )
     except NoRealDataSourceError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"futures need a connected broker ({exc})",
         ) from exc
     except NoFuturesContractError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     price = await provider.indicative_price(contract.symbol)  # type: ignore[union-attr]
     if price:
         margin = check_futures_margin(
@@ -455,7 +455,7 @@ async def _future_contract_for(
         )
         if not margin.ok:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"{body.lots} lot(s) of {contract.symbol} ({contract.lot_size} each) do not "
                     f"fit this account: {margin.reason}. Raise initial_capital or trade fewer lots."
@@ -565,7 +565,7 @@ def _control_error(exc: Exception) -> HTTPException:
     if isinstance(exc, SubscriptionNotFoundError):
         return HTTPException(status.HTTP_404_NOT_FOUND, detail="Subscription not found")
     if isinstance(exc, PriceUnavailableError):
-        return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     return HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
 
 

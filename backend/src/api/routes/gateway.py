@@ -174,7 +174,7 @@ async def put_llm_provider_order_endpoint(
     except (EditRefused, StaleConfigError, ConfigLoadError) as exc:
         raise gateway_edit_error(exc) from exc
     if result.status.value != "active":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(result.errors))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "; ".join(result.errors))
     return ApplyResultResponse(
         status=result.status.value, version_id=result.version_id, errors=result.errors
     )

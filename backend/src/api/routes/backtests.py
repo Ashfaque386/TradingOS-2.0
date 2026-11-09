@@ -84,7 +84,7 @@ def _lake_prices(symbol: str, start: date, end: date) -> tuple[pd.DataFrame, str
     )
     if len(prices) < MIN_LAKE_BARS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"The data lake holds {len(prices)} daily "
                 f"{'bar' if len(prices) == 1 else 'bars'} of {symbol} between {start} and {end}"
@@ -304,7 +304,7 @@ async def optimize_endpoint(
         if body.symbol is None or body.start_date is None or body.end_date is None:
             # the request's validator already refuses this; the check is for the types
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="give the bars, or a symbol with its dates",
             )
         prices, _source = _lake_prices(body.symbol, body.start_date, body.end_date)

@@ -146,7 +146,7 @@ async def update_notification_channel_endpoint(
     changes = body.model_dump(exclude_none=True)
     if not changes:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "send at least one of enabled, alert_levels, allowed_sender_ids",
         )
     stored = store.get_config(parsed_channel)

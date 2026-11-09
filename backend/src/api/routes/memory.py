@@ -115,7 +115,7 @@ def _translate(exc: Exception) -> HTTPException:
     if isinstance(exc, MemoryUnavailableError):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
     if isinstance(exc, MemoryValidationError):
-        return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     # MemoryStoreError, notably a changed embedding dimension.
     return HTTPException(status.HTTP_409_CONFLICT, str(exc))
 
@@ -175,11 +175,11 @@ async def put_memory_settings(
     model = body.model.strip()
     if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"unsupported provider {provider!r} (one of: {', '.join(SUPPORTED_PROVIDERS)})",
         )
     if not model:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "model must not be empty")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "model must not be empty")
     await save_choice(db, provider=provider, model=model, actor=current_user.email)
     return await _settings_response(service)
 

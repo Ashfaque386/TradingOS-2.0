@@ -100,7 +100,7 @@ async def generate_investor_report_endpoint(
             body.period_start, body.period_end, body.cadence, today=datetime.now(IST).date()
         )
     except ReportPeriodError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     report = await generate_investor_report(
         db,
         period_start=body.period_start,

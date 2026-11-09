@@ -58,7 +58,7 @@ async def create_order_intent_endpoint(
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=str(exc)) from exc
     except OrderIntentRejectedError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="; ".join(exc.reasons)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="; ".join(exc.reasons)
         ) from exc
 
     return OrderIntentResponse(

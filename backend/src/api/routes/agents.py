@@ -264,7 +264,7 @@ async def update_agent_settings_endpoint(
     except (EditRefused, StaleConfigError, ConfigLoadError) as exc:
         raise gateway_edit_error(exc) from exc
     if result.status.value != "active":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(result.errors))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "; ".join(result.errors))
     return UpdateAgentSettingsResponse(
         status=result.status.value,
         version_id=result.version_id,

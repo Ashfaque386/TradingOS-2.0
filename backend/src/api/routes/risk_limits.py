@@ -110,13 +110,13 @@ async def stage_risk_limit_change_endpoint(
     spec = limit_spec(body.limit_name)
     if spec is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"unknown risk limit {body.limit_name!r} (known: "
             f"{', '.join(s.name for s in RISK_LIMIT_CATALOG)})",
         )
     if not spec.minimum <= body.proposed_value <= spec.maximum:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"{spec.label} must be between {spec.minimum:g} and {spec.maximum:g} {spec.unit}",
         )
     change = await stage_risk_limit_change(

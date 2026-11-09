@@ -19,7 +19,7 @@ import httpx
 import pandas as pd
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.paging import set_total_count
@@ -269,7 +269,7 @@ async def indicators_endpoint(
     the parameters it was computed with, so what a chart says is what it drew."""
     if macd_fast >= macd_slow:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"The MACD's fast average ({macd_fast}) must be shorter than its slow one "
                 f"({macd_slow})."
@@ -430,7 +430,7 @@ async def live_option_chain_endpoint(
     try:
         entries = await adapter.get_option_chain(underlying, expiry)
     except NotImplementedError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     underlying_ltp: float | None = None
     atm_strike: float | None = None
@@ -521,7 +521,7 @@ async def live_option_expiries_endpoint(
     try:
         return await adapter.get_expiries(underlying)
     except NotImplementedError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @router.get("/provenance")
@@ -533,6 +533,33 @@ async def provenance_endpoint(
         select(MarketDataProvenance).order_by(MarketDataProvenance.completed_at.desc()).limit(50)
     )
     return [_provenance_response(row) for row in result.scalars().all()]
+
+
+def _latest_run_per_pipeline(*conditions: ColumnElement[bool]) -> Select[Any]:
+    """Each pipeline's most recent provenance row (among those matching
+    `conditions`). Ranked with `row_number()` rather than Postgres's
+    `DISTINCT ON`, whose `.distinct(column)` spelling SQLAlchemy 2.1
+    deprecates and whose replacement (`postgresql.distinct_on`) 2.0 does
+    not have; the ordering, NULL `completed_at` first as with DESC, is the
+    same as before."""
+    ranked = (
+        select(
+            MarketDataProvenance.id,
+            func.row_number()
+            .over(
+                partition_by=MarketDataProvenance.pipeline,
+                order_by=MarketDataProvenance.completed_at.desc(),
+            )
+            .label("rank"),
+        )
+        .where(*conditions)
+        .subquery()
+    )
+    return (
+        select(MarketDataProvenance)
+        .join(ranked, MarketDataProvenance.id == ranked.c.id)
+        .where(ranked.c.rank == 1)
+    )
 
 
 @router.get("/datalake/status")
@@ -550,26 +577,12 @@ async def datalake_status_endpoint(
     every pipeline in `_KNOWN_PIPELINES` is always listed, even one that
     has never run, rather than silently omitted."""
     latest_by_pipeline = {
-        row.pipeline: row
-        for row in (
-            await db.execute(
-                select(MarketDataProvenance)
-                .distinct(MarketDataProvenance.pipeline)
-                .order_by(MarketDataProvenance.pipeline, MarketDataProvenance.completed_at.desc())
-            )
-        )
-        .scalars()
-        .all()
+        row.pipeline: row for row in (await db.execute(_latest_run_per_pipeline())).scalars().all()
     }
     latest_success_by_pipeline = {
         row.pipeline: row
         for row in (
-            await db.execute(
-                select(MarketDataProvenance)
-                .where(MarketDataProvenance.status == "success")
-                .distinct(MarketDataProvenance.pipeline)
-                .order_by(MarketDataProvenance.pipeline, MarketDataProvenance.completed_at.desc())
-            )
+            await db.execute(_latest_run_per_pipeline(MarketDataProvenance.status == "success"))
         )
         .scalars()
         .all()
