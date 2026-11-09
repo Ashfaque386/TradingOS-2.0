@@ -13,6 +13,7 @@ from datetime import timedelta
 from httpx import AsyncClient
 from sqlalchemy import select, update
 
+from src.api.routes import auth as auth_routes
 from src.core.config import get_settings
 from src.core.roles import Role
 from src.core.web_session import REFRESH_COOKIE_NAME
@@ -109,6 +110,33 @@ async def test_two_copies_of_one_token_arriving_together_both_get_a_session(
 
     assert sorted(a.status_code for a in answers) == [200, 200]
     assert _cookie(answers[0]) != _cookie(answers[1])
+
+
+async def test_a_copy_waiting_on_the_lock_never_sees_the_old_token_retired_without_its_replacement(
+    client: AsyncClient, make_user, db_session_factory, monkeypatch
+):
+    """Retiring the old token and storing its replacement are one transaction, so the row lock is
+    held until the replacement exists. Issuing is slowed here to hold that moment open: when the
+    two were committed separately, the waiting copy got the lock in between, found no replacement,
+    took itself for a stolen token and ended the session."""
+    first = await _signed_in(client, make_user)
+    issue = auth_routes.create_access_token
+
+    async def slow_issue(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        return await issue(*args, **kwargs)
+
+    monkeypatch.setattr(auth_routes, "create_access_token", slow_issue)
+    client.cookies.clear()
+    headers = {"Cookie": f"{REFRESH_COOKIE_NAME}={first}"}
+
+    answers = await asyncio.gather(
+        client.post(REFRESH, headers=headers), client.post(REFRESH, headers=headers)
+    )
+
+    assert sorted(a.status_code for a in answers) == [200, 200]
+    assert not await _actions(db_session_factory, "auth.refresh_token_reuse_detected")
+    assert len(await _actions(db_session_factory, "auth.refresh_token_retried")) == 1
 
 
 # ---- where it stops ----

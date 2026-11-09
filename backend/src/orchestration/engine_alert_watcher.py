@@ -101,7 +101,7 @@ async def refresh_gauges(db: AsyncSession) -> None:
                 .where(EngineAlertEvent.resolved_at.is_(None))
                 .group_by(EngineAlertEvent.severity)
             )
-        ).tuples()
+        ).all()
     }
     for severity in SEVERITY_RANK:
         engine_alerts_open.labels(severity=severity).set(counts.get(severity, 0))

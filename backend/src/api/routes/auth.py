@@ -374,9 +374,12 @@ async def refresh(
         logger.info("auth.refresh_token_retried", user_id=str(user_id))
         skip_audit_entry(request, because="the retry is recorded by its own entry above")
     else:
+        # Not committed here: `_start_session` stores the replacement and commits both together.
+        # Committing now would release the row lock while no replacement exists yet, and a second
+        # copy waiting on that lock would find none, take itself for a stolen token and end the
+        # session (and the family revoke would also miss the replacement stored just after it).
         stored.used_at = now
         stored.revoked_at = now
-        await db.commit()
         skip_audit_entry(
             request, because="a session's token rotating; the sign-in is what is recorded"
         )

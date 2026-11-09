@@ -86,7 +86,7 @@ async def list_engine_alerts_endpoint(
                 .where(EngineAlertEvent.resolved_at.is_(None))
                 .group_by(EngineAlertEvent.severity)
             )
-        ).tuples()
+        ).all()
     }
     return EngineAlertListResponse(
         open_count=sum(counts.values()),
