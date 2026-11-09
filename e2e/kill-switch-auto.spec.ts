@@ -29,7 +29,14 @@ test('the monitor trips the paper switch on a real drawdown, the banner says why
   await expect(banner).toBeVisible({ timeout: 15_000 })
   await expect(banner).toContainText('reached the 15.00% limit')
   await expect(banner).toContainText('peak equity of 50,000,000.00')
-  await expect(page.getByText('Measured now: the limit was reached and the kill switch tripped.')).toBeVisible()
+  // While the market is open the backend's own minute-by-minute reading can get to the seeded fall
+  // before the click does. Then the click finds the switch already tripped, and the panel says so.
+  // Either way the switch tripped on the drawdown; the banner above and the audit row below prove it.
+  await expect(
+    page.getByText(
+      /^Measured now(: the limit was reached and the kill switch tripped\.|\. The kill switch was already tripped and stays tripped until it is reset\.)$/,
+    ),
+  ).toBeVisible()
 
   // The trip is on the permanent record, attributed to the monitor and not to a person.
   const audit = await api<AuditEntry[]>(adminToken, '/api/v1/audit/entries?limit=100')
