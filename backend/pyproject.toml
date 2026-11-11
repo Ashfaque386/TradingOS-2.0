@@ -108,7 +108,7 @@ tradingos-cli = "src.gateway.cli:cli"
 # Agent memory embeddings computed inside the backend itself (MEMORY_EMBEDDING_PROVIDER=
 # sentence-transformers): no embedding server and no API key. Pulls in PyTorch, so it is
 # deliberately not part of the default image or of `dev`.
-local-embeddings = ["sentence-transformers>=3.0,<6.0"]
+local-embeddings = ["sentence-transformers>=3.0,<7.0"]
 dev = [
     "pytest>=9.0.3,<10.0",
     "pytest-asyncio>=1.3,<2.0",
