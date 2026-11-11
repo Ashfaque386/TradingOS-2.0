@@ -39,7 +39,11 @@ from src.observability.scheduler_registry import (
 )
 from src.observability.security_headers import SecurityHeadersMiddleware
 from src.orchestration.audit_scheduler import start_audit_scheduler
-from src.orchestration.backup_scheduler import backup_gauge_updater, start_backup_scheduler
+from src.orchestration.backup_scheduler import (
+    backup_catch_up,
+    backup_gauge_updater,
+    start_backup_scheduler,
+)
 from src.orchestration.engine_alert_watcher import start_engine_alert_watcher
 from src.orchestration.investor_reporting_scheduler import start_investor_reporting_scheduler
 from src.orchestration.job_schedule_store import apply_stored_overrides
@@ -203,6 +207,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     backup_gauge_task = backup_gauge_updater(
         Path(settings.postgres_backup_path), Path(settings.data_lake_backup_path)
     )
+    # A night the machine was off made no backup; once started, a backup over a day old is made up.
+    backup_catch_up_task = backup_catch_up(
+        AsyncSessionLocal,
+        Path(settings.postgres_backup_path),
+        database_url=settings.database_url,
+    )
 
     # Automatic kill switch (Phase 3): reads each mode's equity every minute while the market is
     # open and once at the close, and trips the switch when the drawdown reaches the applied limit.
@@ -279,6 +289,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     heartbeat_task.cancel()
     trading_holiday_task.cancel()
     backup_gauge_task.cancel()
+    backup_catch_up_task.cancel()
     for task in recovery_tasks:
         task.cancel()
     market_data_scheduler.shutdown(wait=False)

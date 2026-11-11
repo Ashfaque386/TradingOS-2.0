@@ -142,6 +142,55 @@ def start_backup_scheduler(
     return scheduler
 
 
+# A night the process was not running at 22:45 IST makes no backup, and APScheduler does not run a
+# cron job for a time that passed while it was down. So, once the app has finished starting, a
+# backup more than a day old is made up for. With no backup at all nothing is owed: a fresh install
+# makes its first one at the scheduled time (and the end-to-end tests start from nothing).
+CATCH_UP_JOB_NAME = "postgres_backup_catch_up"
+CATCH_UP_DELAY_SECONDS = 120.0
+CATCH_UP_AFTER_SECONDS = 24 * 3600 + 300  # a day, and a few minutes for the dump's own length
+
+
+def backup_is_owed(root: Path, now: datetime) -> bool:
+    """Whether a scheduled night was missed: the newest usable backup is more than a day old."""
+    newest = next((info for info in list_backups(root) if info.status == "ok"), None)
+    if newest is None:
+        return False
+    return (now - newest.created_at).total_seconds() > CATCH_UP_AFTER_SECONDS
+
+
+async def _catch_up(
+    session_factory: async_sessionmaker[AsyncSession],
+    root: Path,
+    database_url: str,
+    delay_seconds: float,
+) -> None:
+    await asyncio.sleep(delay_seconds)
+    # Judged after the wait, not at boot: a backup made in between (by hand) settles it.
+    if not await asyncio.to_thread(backup_is_owed, root, datetime.now(UTC)):
+        return
+    logger.info("pg_backup.catching_up_a_missed_night")
+    try:
+        await with_job_correlation_id(CATCH_UP_JOB_NAME, run_postgres_backup_job)(
+            session_factory, root, database_url
+        )
+    except BackupAlreadyRunningError:
+        return  # someone pressed "Back up now" first
+    except Exception:  # noqa: BLE001 - the failure is already an engine alert; never crash startup
+        logger.exception("pg_backup.catch_up_failed")
+
+
+def backup_catch_up(
+    session_factory: async_sessionmaker[AsyncSession],
+    root: Path,
+    *,
+    database_url: str,
+    delay_seconds: float = CATCH_UP_DELAY_SECONDS,
+) -> asyncio.Task[None]:
+    """Starts the one-off check described above; the caller cancels the task at shutdown."""
+    return asyncio.create_task(_catch_up(session_factory, root, database_url, delay_seconds))
+
+
 def update_backup_gauges(
     postgres_root: Path, lake_root: Path, *, now: datetime | None = None
 ) -> None:

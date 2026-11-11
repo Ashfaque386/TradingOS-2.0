@@ -1,6 +1,7 @@
 'use client'
 
-import { usePathname, useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import type { LucideIcon } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { navFor } from '@/lib/search-index'
@@ -45,7 +46,6 @@ interface SidebarProps {
 }
 
 export function Sidebar({ isCollapsed = false, onCollapsedChange }: SidebarProps) {
-  const router = useRouter()
   const pathname = usePathname()
   const { role } = useAuth()
   const navItems = navFor(role).map((target) => ({ ...target, icon: NAV_ICONS[target.href] ?? Home }))
@@ -66,10 +66,12 @@ export function Sidebar({ isCollapsed = false, onCollapsedChange }: SidebarProps
           const Icon = item.icon
           const active = isActive(item.href)
           return (
-            <button
+            // A link, not a button: it can be opened in a new tab, copied and middle-clicked.
+            <Link
               key={item.href}
-              onClick={() => router.push(item.href)}
+              href={item.href}
               aria-current={active ? 'page' : undefined}
+              aria-label={item.label}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                 active
                   ? 'bg-[var(--current-accent)]/20 text-[var(--current-accent)] border border-[var(--current-accent)]/50'
@@ -79,7 +81,7 @@ export function Sidebar({ isCollapsed = false, onCollapsedChange }: SidebarProps
             >
               <Icon className="w-5 h-5 flex-shrink-0" />
               {!isCollapsed && <span className="text-sm font-medium">{item.label}</span>}
-            </button>
+            </Link>
           )
         })}
       </nav>

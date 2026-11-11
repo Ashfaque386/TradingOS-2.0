@@ -248,7 +248,7 @@ test('the auditor can export the log as a file', async ({ page }) => {
 
 test('a portfolio manager is told the log is restricted, and the sidebar does not offer it', async ({ page }) => {
   await login(page, E2E_USERS.pm)
-  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Audit Log' })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Audit Log' })).toHaveCount(0)
 
   await page.goto('/audit')
 

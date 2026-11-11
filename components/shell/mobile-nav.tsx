@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import type { LucideIcon } from 'lucide-react'
 import { useAuth } from '@/components/auth/auth-provider'
 import { navFor } from '@/lib/search-index'
@@ -42,7 +43,6 @@ const NAV_ICONS: Record<string, LucideIcon> = {
 }
 
 export function MobileNav() {
-  const router = useRouter()
   const pathname = usePathname()
   const { role } = useAuth()
   const NAV_ITEMS = navFor(role).map((target) => ({ ...target, icon: NAV_ICONS[target.href] ?? Home }))
@@ -52,10 +52,6 @@ export function MobileNav() {
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href))
 
-  const navigate = (href: string) => {
-    router.push(href)
-    setDrawerOpen(false)
-  }
 
   return (
     <>
@@ -73,15 +69,16 @@ export function MobileNav() {
                 const Icon = item.icon
                 const active = isActive(item.href)
                 return (
-                  <button
+                  <Link
                     key={item.href}
+                    href={item.href}
                     className={`mobile-drawer-item ${active ? 'mobile-drawer-item-active' : ''}`}
                     aria-current={active ? 'page' : undefined}
-                    onClick={() => navigate(item.href)}
+                    onClick={() => setDrawerOpen(false)}
                   >
                     <Icon className="size-5 shrink-0" />
                     <span>{item.label}</span>
-                  </button>
+                  </Link>
                 )
               })}
             </div>
@@ -94,15 +91,17 @@ export function MobileNav() {
           const Icon = item.icon
           const active = isActive(item.href)
           return (
-            <button
+            <Link
               key={item.href}
+              href={item.href}
               className={`mobile-tab ${active ? 'mobile-tab-active' : ''}`}
               aria-current={active ? 'page' : undefined}
-              onClick={() => navigate(item.href)}
+              aria-label={item.label}
+              onClick={() => setDrawerOpen(false)}
             >
               <Icon className="size-5" />
               <span>{item.label.split(' ')[0]}</span>
-            </button>
+            </Link>
           )
         })}
         <button

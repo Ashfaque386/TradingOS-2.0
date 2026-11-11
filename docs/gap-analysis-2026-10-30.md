@@ -13,8 +13,8 @@ penetration test was run. Where a claim rests on a vendor's documentation, it sa
 ## Status on 2026-11-11 (commit `be0a91c`)
 
 The twelve-phase plan that followed this analysis is done: phases 1-11 in code, phase 12 as the operator's
-runbook (`docs/runbooks/first-session.md`). Every gap in section 2 is closed except G10, G28 and parts of G3,
-G16 and G17, and all of W1-W23 are closed except one detail of W21. The per-phase tables below say what
+runbook (`docs/runbooks/first-session.md`). Every gap in section 2 is closed except G10, G28 and parts of G3
+and G17, and all of W1-W23 are closed (the last detail of W21, and G16's watch item, on 2026-11-11). The per-phase tables below say what
 changed; closed gaps in section 2 are struck through and name the phase that closed them.
 
 **Re-checked today:**
@@ -35,15 +35,13 @@ changed; closed gaps in section 2 are struck through and name the phase that clo
 |---|---|---|
 | JWT signing key | The live stack signs sessions with the key this repository ships as its default, so anyone who has read the repository can forge a session for any account. Settings > Security > Rotate (it signs everyone out once). Do this first. | operator |
 | G10 (Phase 17) | The live path has never met a real broker or real money. The first session, as the runbook lays it out. | operator |
-| G3 (data) | NSE's 2027 movable holidays (published in December). The 2026 dates came from broker pages because NSE's circular could not be opened; re-check them against NSE. | operator |
+| G3 (data) | NSE's 2027 movable holidays, published in December. (The 2026 dates, taken from broker pages, were checked against NSE's own holiday master on 2026-11-11 and match it.) | operator |
 | G17 | Upstox's exchange stamp (two recorded quote answers, market open and after the close) and the INFY adjusted-price gap between the brokers. | operator, with a connected broker |
-| Backups (phase 7) | No restore drill on the live database's real data yet; no WAL archiving, so up to a day of changes can be lost; the dumps sit on the same machine; Qdrant, Redis and the monitoring volumes have no backup; custody of `SECRETS_ENCRYPTION_KEY`. | operator |
+| Backups (phase 7) | No WAL archiving, so up to a day of changes can be lost; the dumps sit on the same machine (copy the newest off it); Qdrant, Redis and the monitoring volumes have no backup; custody of `SECRETS_ENCRYPTION_KEY`. (Closed on 2026-11-11: the first restore drill on the live data, 3.4 s, every check passing; and a night the machine was off is now made up once the app starts, instead of waiting for the next 22:45.) | operator |
 | Exposure (phase 8) | No TLS or HSTS: put a proxy in front before the stack is reachable from anywhere but this machine, then set `TRUSTED_PROXIES` and `HSTS_ENABLED`. An XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock). | before exposing it |
 | Alerts (phase 5) | An alert about the backend being down cannot be delivered by the backend; Prometheus and Grafana show it. | accepted |
 | G28 | The fundamentals, valuation and macro agents have no data source. | code, not scheduled |
-| G16 | Four tests that read IST "today" twice can flake if a run straddles 00:00 IST. | watch |
-| W21 (part) | The sidebar's items are buttons, not links, so a page cannot be opened in a new tab from it. | code, small |
-| Unproven versions | Alertmanager v0.34.2 has loaded the config and Prometheus reaches it, but no real alert has gone through it yet. sentence-transformers 6 (allowed since #59) is installed by no build: the `local-embeddings` extra is in neither image nor CI. | watch |
+| Unproven version | Alertmanager v0.34.2 has loaded the config and Prometheus reaches it, but no real alert has gone through it yet. (sentence-transformers 6 was checked on 2026-11-11: 6.2.0 installs with the backend's pinned packages, numpy 1.26 included, and has the two calls the provider makes; a model was not downloaded.) | watch |
 | Telegram | A live send failed once with no reason in the log; the rebuilt stack logs the reason, and "Send test message" in Settings shows it. | watch |
 | P3 | The known limits at the end of section 2 are unchanged. | accepted |
 
@@ -78,7 +76,7 @@ this is where it stands.
 | W11-W13 | A section that cannot load says so; Provider Status shows a refused token; Backtests filters by all of a strategy's versions and shows `refusal_reason`; the client types carry the fields the server sends. |
 | W14, W15 | Identity fields can be cleared; a prompt is read in full before activation; every page reports a failed read (Orders, Audit, Portfolio, Strategies, Agent Fleet, Backtests, Mission Control, Analysis, Investor Reports, Chat) and polls through one hook. |
 | W16, W20 (part) | Sign-in messages (slice 2); a 429 now exposes `Retry-After` to the browser. **Not done:** pagination and the summary variant of the heavy list endpoints (Phase 9). |
-| W17, W21, W22 | Dead buttons removed or wired; the pages offered follow the role; tab lists, focus traps, keyboard-reachable cards and reorder buttons; Vercel Analytics and the `v0.app` tag removed; preferences read defensively; the orb honours the OS reduced-motion setting. **Not done:** the sidebar items are buttons, not links. |
+| W17, W21, W22 | Dead buttons removed or wired; the pages offered follow the role; tab lists, focus traps, keyboard-reachable cards and reorder buttons; Vercel Analytics and the `v0.app` tag removed; preferences read defensively; the orb honours the OS reduced-motion setting. **Not done then:** the sidebar items were buttons, not links (they are links since 2026-11-11). |
 | W23 | The console shell is mounted once (a route group) and the market and kill-switch reads are shared. |
 | Tooling | `ignoreBuildErrors` is off (`next build` type-checks); ESLint ratchet, `pnpm typecheck` and the logic specs in the frontend job; seven new page specs and an auditor fixture. |
 | Wiring guard | `tests/test_frontend_wiring.py` (every client call has a route and every route a call or a reason) and generated permissions (`lib/permissions.generated.json`, `can()`). |
@@ -179,7 +177,7 @@ this is where it stands.
 - **G28** fundamentals, valuation and macro agents have no data source. (Per-agent narration and the `"cli"` audit actor were closed in phase 9, slice 7a.) **Still open.**
 - ~~**G29** `/admin/users*` has no UI.~~ Closed in phase 8.
 
-**Backend/frontend wiring audit (2026-10-30, static read of 182 endpoints and 153 client exports).** All of the defects below were closed in phases 2 and 9 (the tables above), except that the sidebar's items are still buttons, not links (W21); the 20 capabilities without a screen all have one, and `tests/test_frontend_wiring.py` keeps the two sides matched in CI. As found then: No frontend call lacks a backend
+**Backend/frontend wiring audit (2026-10-30, static read of 182 endpoints and 153 client exports).** All of the defects below were closed in phases 2 and 9 (the tables above), and the sidebar's items became links on 2026-11-11 (the last of W21); the 20 capabilities without a screen all have one, and `tests/test_frontend_wiring.py` keeps the two sides matched in CI. As found then: No frontend call lacks a backend
 route (138 of 138 method+path pairs, query parameters and WebSocket paths match). 46 backend endpoints have no frontend caller: 26 by
 design (webhooks, OAuth callbacks, health/metrics, scheduler triggers that Mission Control's "Run now" covers, redundant single-item
 GETs) and 20 that are user-facing capabilities with no UI (admin users; backtest create / walk-forward / optimize; the kill-switch
@@ -329,7 +327,7 @@ Phase 0 stubs that raise `NotImplementedError("... ships in a later phase")`. No
 (the real code lives in `engine/` and `orchestration/`); they only confuse a reader about where
 order placement lives. Delete them. *Effort: S.*
 
-**G16. Time-bomb tests.** **Closed in phase 1, except a watch item (see the status table).** One was found this session: a market-data test used a fixed July date and
+~~**G16. Time-bomb tests.**~~ **Closed in phase 1; its watch item (tests that read IST "today" twice) on 2026-11-11.** One was found this session: a market-data test used a fixed July date and
 failed once real time moved 120 days past it (CI #70). Another, earlier, built "tomorrow" in UTC
 where the code judges IST. There has been no sweep for the pattern. *Fix:* grep for fixed dates
 against a `datetime.now()` window, and inject a clock. *Effort: S.*

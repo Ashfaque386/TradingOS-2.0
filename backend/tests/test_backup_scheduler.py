@@ -31,7 +31,9 @@ from src.orchestration.backup_scheduler import (
     BACKUP_ALERT_PREFIX,
     POSTGRES_BACKUP_JOB_ID,
     BackupAlreadyRunningError,
+    backup_catch_up,
     backup_gauge_updater,
+    backup_is_owed,
     run_postgres_backup,
     run_postgres_backup_job,
     start_backup_scheduler,
@@ -395,3 +397,83 @@ async def test_the_updater_sets_the_gauges_on_start_and_survives_a_failed_update
     finally:
         again.cancel()
     assert len(calls) >= 2  # it kept going after the first failure
+
+
+# ---- making up a night the machine was off ----
+
+
+def _stamp_hours(hours_ago: float) -> str:
+    return (datetime.now(UTC) - timedelta(hours=hours_ago)).strftime("%Y%m%dT%H%M%SZ")
+
+
+def test_a_backup_is_owed_only_when_the_newest_good_one_is_more_than_a_day_old(tmp_path):
+    now = datetime.now(UTC)
+    assert backup_is_owed(tmp_path / "none-yet", now) is False  # a fresh install owes nothing
+
+    _write_backup(tmp_path, _stamp_hours(23))
+    assert backup_is_owed(tmp_path, now) is False  # last night's: tonight's run is still ahead
+
+    old = tmp_path / "old"
+    _write_backup(old, _stamp_hours(4 * 24))
+    assert backup_is_owed(old, now) is True
+
+
+def test_an_unfinished_newer_backup_does_not_settle_what_is_owed(tmp_path):
+    _write_backup(tmp_path, _stamp_hours(3 * 24))
+    dump_path(tmp_path, _stamp_hours(1)).write_bytes(b"a dump with no manifest")
+
+    assert backup_is_owed(tmp_path, datetime.now(UTC)) is True
+
+
+async def test_after_start_a_missed_night_is_made_up_with_one_backup(
+    db_session_factory, tmp_path, monkeypatch, sent
+):
+    calls = _make_backups(monkeypatch)
+    _write_backup(tmp_path, _stamp_hours(4 * 24))
+
+    await backup_catch_up(db_session_factory, tmp_path, database_url="x", delay_seconds=0)
+
+    assert len(calls) == 1
+    assert backup_is_owed(tmp_path, datetime.now(UTC)) is False
+
+
+@pytest.mark.parametrize("newest_hours_ago", [None, 2.0])
+async def test_nothing_is_made_when_nothing_is_owed(
+    db_session_factory, tmp_path, monkeypatch, newest_hours_ago
+):
+    calls = _make_backups(monkeypatch)
+    if newest_hours_ago is not None:
+        _write_backup(tmp_path, _stamp_hours(newest_hours_ago))
+
+    await backup_catch_up(db_session_factory, tmp_path, database_url="x", delay_seconds=0)
+
+    assert calls == []
+
+
+async def test_a_failed_catch_up_is_an_alert_and_never_an_error_at_startup(
+    db_session_factory, tmp_path, monkeypatch, sent
+):
+    _make_backups(monkeypatch, fail_with=PostgresBackupError("pg_dump exited with 1"))
+    _write_backup(tmp_path, _stamp_hours(4 * 24))
+
+    await backup_catch_up(db_session_factory, tmp_path, database_url="x", delay_seconds=0)
+
+    async with db_session_factory() as db:
+        [alert] = (await db.execute(select(EngineAlertEvent))).scalars().all()
+    assert alert.key == f"{BACKUP_ALERT_PREFIX}:failed" and alert.severity == "critical"
+
+
+async def test_a_backup_already_running_is_left_to_finish(
+    db_session_factory, tmp_path, monkeypatch
+):
+    calls = _make_backups(monkeypatch, delay=0.2)
+    _write_backup(tmp_path, _stamp_hours(4 * 24))
+    by_hand = asyncio.create_task(
+        run_postgres_backup(db_session_factory, tmp_path, database_url="x")
+    )
+    await asyncio.sleep(0.05)
+
+    await backup_catch_up(db_session_factory, tmp_path, database_url="x", delay_seconds=0)
+    await by_hand
+
+    assert len(calls) == 1

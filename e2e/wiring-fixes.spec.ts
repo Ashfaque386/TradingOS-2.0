@@ -102,7 +102,7 @@ test('the pages share one read of the kill switches and market hours instead of 
   const afterShell = { ...seen }
   expect(afterShell.paper).toBeGreaterThan(0) // the shell did read them (twice in dev, where React mounts effects twice)
 
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Paper Desk' }).click()
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Paper Desk' }).click()
   await expect(page.getByRole('heading', { name: 'Paper desk' })).toBeVisible()
   await page.waitForTimeout(1500)
 

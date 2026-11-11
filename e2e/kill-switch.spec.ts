@@ -41,7 +41,7 @@ test('kill switch trips on a real drawdown and a risk manager can reset it from 
   await expect(page.getByText('TRIPPED', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   // The banner is on every page, not only the Overview, and says why and by how much.
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Orders & Trades' }).click()
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Orders & Trades' }).click()
   const banner = page.getByRole('alert').filter({ hasText: 'The paper kill switch is tripped' })
   await expect(banner).toBeVisible()
   await expect(banner).toContainText('Drawdown 20.0% against a')
@@ -57,7 +57,7 @@ test('kill switch trips on a real drawdown and a risk manager can reset it from 
   await confirm.click()
 
   await expect(banner).toHaveCount(0, { timeout: 15_000 })
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Overview' }).click()
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Overview' }).click()
   await expect(page.getByText('OFF · ARMED', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   // The reset must be truthfully attributed -- never self-clears, always

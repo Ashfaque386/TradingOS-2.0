@@ -1,4 +1,5 @@
 import os
+import time
 
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos_test"
@@ -22,6 +23,8 @@ from src.core.security import hash_password
 from src.main import app
 from src.models import Base
 from src.models.user import User
+from tests.ist_midnight import now_utc as ist_now_utc
+from tests.ist_midnight import seconds_to_wait
 
 
 @pytest_asyncio.fixture
@@ -74,6 +77,15 @@ async def redis_client() -> AsyncIterator[Redis]:
     client = Redis.from_url(settings.redis_url, decode_responses=True)
     yield client
     await client.aclose()
+
+
+@pytest.fixture(autouse=True)
+def _not_across_midnight_ist():
+    """Waits out the last minute before midnight IST before a test starts (tests/ist_midnight.py):
+    a test that reads "today in IST" and lets the code read it again must see one day, not two."""
+    wait = seconds_to_wait(ist_now_utc())
+    if wait:
+        time.sleep(wait)
 
 
 @pytest.fixture(autouse=True)
