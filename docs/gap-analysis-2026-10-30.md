@@ -10,7 +10,44 @@ compose, CI, the frontend pages and the E2E specs, plus the earlier audits
 was measured against a live broker or a live market session, and no security scan, load test or
 penetration test was run. Where a claim rests on a vendor's documentation, it says so.
 
-## 0. Progress and corrections (updated 2026-10-31)
+## Status on 2026-11-11 (commit `be0a91c`)
+
+The twelve-phase plan that followed this analysis is done: phases 1-11 in code, phase 12 as the operator's
+runbook (`docs/runbooks/first-session.md`). Every gap in section 2 is closed except G10, G28 and parts of G3,
+G16 and G17, and all of W1-W23 are closed except one detail of W21. The per-phase tables below say what
+changed; closed gaps in section 2 are struck through and name the phase that closed them.
+
+**Re-checked today:**
+- **Wiring.** The 2026-10-30 audit was a read by hand; `backend/tests/test_frontend_wiring.py` now does it in CI,
+  both ways: every call in `lib/api.ts` matches a route, and every route is called by the console or carries one
+  of 25 written reasons (inbound webhooks, OAuth callbacks, scheduled jobs that Mission Control's "Run now"
+  covers, health and metrics, an RBAC probe, single-item reads the lists already serve). A stale reason fails
+  too. The 20 user-facing capabilities the audit found without a screen all have one. CI #141 ran it green.
+- **The numbers** in section 1, re-counted.
+- **The live stack** was rebuilt on 2026-11-11 with the merged Dependabot updates (FastAPI 0.162, SQLAlchemy
+  2.1.8, Alembic 1.20.1, Alertmanager v0.34.2, Grafana 13.3.0, Prometheus v3.15.1, Qdrant v1.19.2) and is
+  healthy, its database intact at the code's migration head. Its log still says
+  `security.jwt_signing_key_weak`: it signs sessions with the public placeholder key.
+
+**Still open:**
+
+| Item | What remains | Who |
+|---|---|---|
+| JWT signing key | The live stack signs sessions with the key this repository ships as its default, so anyone who has read the repository can forge a session for any account. Settings > Security > Rotate (it signs everyone out once). Do this first. | operator |
+| G10 (Phase 17) | The live path has never met a real broker or real money. The first session, as the runbook lays it out. | operator |
+| G3 (data) | NSE's 2027 movable holidays (published in December). The 2026 dates came from broker pages because NSE's circular could not be opened; re-check them against NSE. | operator |
+| G17 | Upstox's exchange stamp (two recorded quote answers, market open and after the close) and the INFY adjusted-price gap between the brokers. | operator, with a connected broker |
+| Backups (phase 7) | No restore drill on the live database's real data yet; no WAL archiving, so up to a day of changes can be lost; the dumps sit on the same machine; Qdrant, Redis and the monitoring volumes have no backup; custody of `SECRETS_ENCRYPTION_KEY`. | operator |
+| Exposure (phase 8) | No TLS or HSTS: put a proxy in front before the stack is reachable from anywhere but this machine, then set `TRUSTED_PROXIES` and `HSTS_ENABLED`. An XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock). | before exposing it |
+| Alerts (phase 5) | An alert about the backend being down cannot be delivered by the backend; Prometheus and Grafana show it. | accepted |
+| G28 | The fundamentals, valuation and macro agents have no data source. | code, not scheduled |
+| G16 | Four tests that read IST "today" twice can flake if a run straddles 00:00 IST. | watch |
+| W21 (part) | The sidebar's items are buttons, not links, so a page cannot be opened in a new tab from it. | code, small |
+| Unproven versions | Alertmanager v0.34.2 has loaded the config and Prometheus reaches it, but no real alert has gone through it yet. sentence-transformers 6 (allowed since #59) is installed by no build: the `local-embeddings` extra is in neither image nor CI. | watch |
+| Telegram | A live send failed once with no reason in the log; the rebuilt stack logs the reason, and "Send test message" in Settings shows it. | watch |
+| P3 | The known limits at the end of section 2 are unchanged. | accepted |
+
+## 0. Progress and corrections (2026-10-31 to 2026-11-09, phase by phase)
 
 A second pass (six read-only explorers over the gaps, the backend/frontend wiring and the UI) checked every
 claim below against commit `4d32fa2` and found more. The plan to close everything is a twelve-phase one;
@@ -53,7 +90,7 @@ this is where it stands.
 | G1 | The kill switch trips by itself: `equity_snapshots`, a monitor that reads each mode's equity every minute while the market is open and at 15:45 IST, trips the switch at the applied limit (audit row `kill_switch.tripped` by `system:drawdown-monitor`, alert, row lock), never clears it, and re-bases its peak at a human reset. `POST /kill-switch/{mode}/evaluate` measures and judges now. |
 | G11 | Equity history exists (`GET /equity/{mode}`) and is charted on the Paper Desk and Overview, with unmeasurable readings drawn as gaps and explained. |
 | G23 | The monitor and the drill's default read the applied `max_drawdown_pct` (`get_effective_risk_limit` now has callers); a supplied threshold is used for that check and never stored. A catalog bounds what can be staged, and staged changes can be rejected or cancelled. |
-| G22 (ledger part) | The live position moves only on a broker-confirmed fill, at the broker's price, with estimated costs; a rejected or cancelled order moves nothing; one row per strategy and symbol. **Still open (Phase 6):** the live adapter is resolved once at boot, live intents have no staleness guard, and the live circuit-band check compares a price with itself. |
+| G22 (ledger part) | The live position moves only on a broker-confirmed fill, at the broker's price, with estimated costs; a rejected or cancelled order moves nothing; one row per strategy and symbol. The rest of G22 (adapter resolved once at boot, no staleness guard, a circuit-band check against the quote's own price) was closed in phase 6. |
 | W10 | The risk-limit screen offers real limits and their range, shows every change with who and when, and can reject. |
 
 **Closed in phase 4 (Go-Live evidence from the records):**
@@ -64,7 +101,7 @@ this is where it stands.
 | G24 | A clean Shadow Mode day is defined (a dry run for the strategy that worked and none that failed, on an NSE trading day) and derivable: runs carry their strategy and outcome, a failed run is stored, and a daily job makes the check. |
 | (approvals) | Sign-off cards name the strategy and the asker, a decision can carry a reason, and decided requests stay in a history. |
 
-**Still open from this phase:** until backtests can be run from the data lake (Phase 9) a backtest on real data does not exist, so the win-rate condition can only be met through the override.
+**Still open from this phase, when it closed:** until backtests could be run from the data lake, a backtest on real data did not exist, so the win-rate condition could only be met through the override. Phase 9 added backtests on the lake's own prices (`POST /backtests/from-lake`, with walk-forward and the parameter search); a real-data backtest now needs only real daily bars in the lake, which come from a connected broker.
 
 **Closed in phase 5 (alerts):**
 
@@ -103,9 +140,9 @@ this is where it stands.
 | G21 | `/docs`, `/redoc` and `/openapi.json` exist only with `API_DOCS_ENABLED`. |
 | G29 | Settings > Users: create, change role, deactivate and reactivate (typed confirm), sign out everywhere, unlock; the six admin routes are off the wiring allowlist. |
 
-**Still open from this phase:** TLS and HSTS (put a proxy in front before exposing the stack, then set `TRUSTED_PROXIES`/`HSTS_ENABLED`); an XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock); the live stack has not been rebuilt, and rebuilding signs everyone out once.
+**Still open from this phase:** TLS and HSTS (put a proxy in front before exposing the stack, then set `TRUSTED_PROXIES`/`HSTS_ENABLED`); an XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock). The live stack has since been rebuilt (last on 2026-11-11).
 
-**Closed in phase 9 (page completion), so far:**
+**Closed in phases 9-11 (page completion, supply chain, data quality):**
 
 | Gap | What changed |
 |---|---|
@@ -133,16 +170,16 @@ this is where it stands.
 - `reconcile_pending_trades` exists (every 15 s), so "live trades never reach `filled`" is out of date; what is still missing is that it never corrects the position of a rejected or cancelled order.
 - The heartbeat stubs existed so the isolation proof had something to refer to; the proof is now stronger without them.
 
-**Found since (new gaps, not yet fixed):**
-- **G20** the rate limiter trusts a client-supplied `X-Forwarded-For`; an unknown e-mail returns faster than a wrong password; argon2 hashing blocks the event loop.
-- **G21** `/docs`, `/redoc` and `/openapi.json` are unauthenticated.
-- **G22** live path: `LivePosition` keeps the phantom quantity of rejected/cancelled orders; the live adapter is chosen once at boot; live intents have no staleness guard; the live circuit-band check compares a price with itself; one position row per strategy, not per symbol.
-- **G23** the kill-switch threshold ignores the dual-control limit (`get_effective_risk_limit` has no caller), `POST /check` can overwrite it, and an automatic trip would write no audit row.
-- **G24** the "clean shadow-mode streak" the Go-Live gate asks for is undefined and cannot be derived (`shadow_mode_runs` has no strategy or outcome).
-- **G28** fundamentals, valuation and macro agents have no data source. (Per-agent narration and the `"cli"` audit actor were closed in phase 9, slice 7a.)
-- **G29** `/admin/users*` has no UI.
+**Found on 2026-10-31 (new gaps then; all but G28 since closed):**
+- ~~**G20** the rate limiter trusts a client-supplied `X-Forwarded-For`; an unknown e-mail returns faster than a wrong password; argon2 hashing blocks the event loop.~~ Closed in phase 8.
+- ~~**G21** `/docs`, `/redoc` and `/openapi.json` are unauthenticated.~~ Closed in phase 8.
+- ~~**G22** live path: `LivePosition` keeps the phantom quantity of rejected/cancelled orders; the live adapter is chosen once at boot; live intents have no staleness guard; the live circuit-band check compares a price with itself; one position row per strategy, not per symbol.~~ Closed in phases 3 and 6.
+- ~~**G23** the kill-switch threshold ignores the dual-control limit (`get_effective_risk_limit` has no caller), `POST /check` can overwrite it, and an automatic trip would write no audit row.~~ Closed in phase 3.
+- ~~**G24** the "clean shadow-mode streak" the Go-Live gate asks for is undefined and cannot be derived (`shadow_mode_runs` has no strategy or outcome).~~ Closed in phase 4.
+- **G28** fundamentals, valuation and macro agents have no data source. (Per-agent narration and the `"cli"` audit actor were closed in phase 9, slice 7a.) **Still open.**
+- ~~**G29** `/admin/users*` has no UI.~~ Closed in phase 8.
 
-**Backend/frontend wiring audit (2026-10-30, static read of 182 endpoints and 153 client exports).** No frontend call lacks a backend
+**Backend/frontend wiring audit (2026-10-30, static read of 182 endpoints and 153 client exports).** All of the defects below were closed in phases 2 and 9 (the tables above), except that the sidebar's items are still buttons, not links (W21); the 20 capabilities without a screen all have one, and `tests/test_frontend_wiring.py` keeps the two sides matched in CI. As found then: No frontend call lacks a backend
 route (138 of 138 method+path pairs, query parameters and WebSocket paths match). 46 backend endpoints have no frontend caller: 26 by
 design (webhooks, OAuth callbacks, health/metrics, scheduler triggers that Mission Control's "Run now" covers, redundant single-item
 GETs) and 20 that are user-facing capabilities with no UI (admin users; backtest create / walk-forward / optimize; the kill-switch
@@ -162,13 +199,13 @@ audit trade-trace and actor-summary; approvals history). Defects, most serious f
 
 ## 1. Where the app stands
 
-| | |
-|---|---|
-| Backend | 31 route files, 182 endpoints, 51 models, 28 migrations, 8 schedulers, ~39,500 lines in `backend/src` |
-| Tests | 176 backend test files; the last full run: 2,323 passed, 1 skipped. 14 Playwright specs (the paper-desk logic spec alone has 38 cases) |
-| Frontend | 13 pages (Overview, Mission Control, Chat, Agent Fleet, Strategies, Backtests, Orders & Trades, Paper Desk, Portfolio, Market Analysis, Investor Reports, Audit Log, Settings), all wired to the real backend |
-| CI | secrets scan, ruff, bandit, `mypy --strict`, pip-audit, pytest with coverage floors, mutation testing of the safety layer, Playwright E2E, tsc, image builds and GHCR publish |
-| Plans | Phases 0–26 of the build (Phase 17, the real-world pass, is still open); the real-data paper-trading plan, phases 0–7, and the desk follow-up |
+| | On 2026-10-30 (`3bed570`) | On 2026-11-11 (`be0a91c`) |
+|---|---|---|
+| Backend | 31 route files, 182 endpoints, 51 models, 28 migrations, 8 schedulers, ~39,500 lines in `backend/src` | 34 route files, 214 route handlers (HTTP and WebSocket), 54 model files, 37 migrations, 12 scheduler modules, ~47,600 lines |
+| Tests | 176 backend test files; the last full run: 2,323 passed, 1 skipped. 14 Playwright specs (the paper-desk logic spec alone has 38 cases) | 231 backend test files, about 3,300 tests, green in CI #141; 56 Playwright spec files, 584 passed and 3 skipped (the memory specs, which need Qdrant and Ollama); 18 mutation-gated modules |
+| Frontend | 13 pages (Overview, Mission Control, Chat, Agent Fleet, Strategies, Backtests, Orders & Trades, Paper Desk, Portfolio, Market Analysis, Investor Reports, Audit Log, Settings), all wired to the real backend | the same 13, plus a page per strategy; ESLint, `tsc` and the logic specs in CI |
+| CI | secrets scan, ruff, bandit, `mypy --strict`, pip-audit, pytest with coverage floors, mutation testing of the safety layer, Playwright E2E, tsc, image builds and GHCR publish | the same, plus `pnpm audit`, a Trivy scan, SBOM and provenance, the wiring guard, and a planner that runs only the jobs a change needs |
+| Plans | Phases 0–26 of the build (Phase 17, the real-world pass, is still open); the real-data paper-trading plan, phases 0–7, and the desk follow-up | the same, plus the twelve-phase gap-closing plan (done; its phase 12 is the operator's) |
 
 What is solid: the audit trail (hash-chained, trigger-enforced), RBAC on every route, the sandbox
 around strategy code, the paper engine on real quotes and real depth with the Indian cost model,
@@ -178,7 +215,7 @@ the subscription controls, the hardening of CI, and the habit of refusing to inv
 
 ### P0 — before any real money is at stake
 
-**G1. The max-drawdown kill switch never trips by itself.**
+~~**G1. The max-drawdown kill switch never trips by itself.**~~ **Closed in phase 3.**
 `check_drawdown` (`backend/src/orchestration/kill_switch.py:63`) is called from exactly one place:
 `POST /kill-switch/{mode}/check` (`backend/src/api/routes/kill_switch.py:53`), which takes
 `current_equity` and `peak_equity` **from the request body**. No scheduler or risk-gate path
@@ -189,7 +226,7 @@ drawdown rule that is currently a person calling an endpoint. The E2E spec trips
 *Fix:* persist equity snapshots (see G11), evaluate drawdown on a schedule in market hours and
 after every fill, trip the paper and live switches from it, and notify (G4). *Effort: M.*
 
-**G2. The Go-Live readiness evidence is typed by the approver.**
+~~**G2. The Go-Live readiness evidence is typed by the approver.**~~ **Closed in phase 4.**
 `POST /strategies/{id}/approve-live-eligibility` (`backend/src/api/routes/strategies.py:235`)
 passes `num_trades`, `calendar_days_running`, `clean_shadow_mode_streak_days`, `live_win_rate` and
 `backtest_win_rate` straight from the request body into the gate. The thresholds are fixed (30
@@ -198,7 +235,7 @@ paper engine now records real fills with their data source, so the system can co
 counting only fills whose data was `real`. *Fix:* derive the inputs from `paper_fills` and the
 shadow-mode record; keep the body only for an explicit, audited override. *Effort: M.*
 
-**G3. Trading-holiday calendar is out of date, and nothing checks the exchange's own timestamp.**
+**G3. Trading-holiday calendar is out of date, and nothing checks the exchange's own timestamp.** **Code closed in phases 1 and 6; the 2027 dates are still to come (see the status table).**
 `config/nse_holidays.json` holds nine holidays, all 2025. Fixed-date holidays are generated for any
 year, but the movable ones for 2026 (the Diwali period and Guru Nanak Jayanti among them) are
 absent, so `is_market_open_ist` (`backend/src/engine/paper_trading/market_hours.py:28`) reports an
@@ -209,7 +246,7 @@ supply the 2026 (and 2027) dates from NSE's circular; refuse to act on a quote w
 stamp is older than a limit; do the same for Upstox once its field is settled. *Effort: S (data) +
 S (guard).*
 
-**G4. Nobody is told.**
+~~**G4. Nobody is told.**~~ **Closed in phase 5.**
 Prometheus rules are evaluated but there is no Alertmanager, so none of them (including
 `PaperTicksStale`) reaches anyone (`observability/prometheus/prometheus.yml:26`). In the app, the
 notification dispatcher has four fixed levels, `kill-switch`, `sign-off`, `go-live` and `daily`,
@@ -222,14 +259,14 @@ Alertmanager route for the Prometheus rules. *Effort: M.*
 
 ### P1 — operations and security
 
-**G5. No backup of the system of record.** The data lake has a nightly checksummed backup; Postgres
+~~**G5. No backup of the system of record.**~~ **Closed in phase 7 (what remains is in the status table at the top).** The data lake has a nightly checksummed backup; Postgres
 (users, the audit log, subscriptions, positions, fills, approvals) has none: no `pg_dump`, no WAL
 archive, no restore procedure, no test of one. The encrypted-secrets key (`SECRETS_ENCRYPTION_KEY`)
 and the JWT signing key have no documented custody either; losing the first loses every stored
 broker and LLM credential. *Fix:* a scheduled dump to a mounted path with retention, a restore
 runbook that has been run once, and a short key-custody note. *Effort: S–M.*
 
-**G6. Registration is open, and the first registrant becomes administrator.**
+~~**G6. Registration is open, and the first registrant becomes administrator.**~~ **Closed in phase 8.**
 `POST /auth/register` (`backend/src/api/routes/auth.py:41`) has no off switch. On a fresh
 deployment the first person to register is a SystemAdministrator; after that, anyone who can reach
 the API can create a ReadOnlyAuditor account, which can read positions, orders and the audit log.
@@ -238,7 +275,7 @@ the API can create a ReadOnlyAuditor account, which can read positions, orders a
 administrator. Add a per-account failed-login limit; today only the blanket 300/min per IP applies.
 *Effort: S.*
 
-**G7. Browser-side hardening is absent.** No Content-Security-Policy, `X-Frame-Options`,
+~~**G7. Browser-side hardening is absent.**~~ **Closed in phase 8 (TLS and HSTS wait for a proxy; see the status table).** No Content-Security-Policy, `X-Frame-Options`,
 `X-Content-Type-Options`, `Referrer-Policy` or HSTS anywhere (API, Next.js, nginx). Access and
 refresh tokens live in `localStorage` (`lib/api.ts`), so any script injection is a session theft.
 WebSocket tokens travel in the URL query (redacted in the app's own logs, not in a proxy's). The
@@ -246,13 +283,13 @@ containers run as root (no `USER` in `Dockerfile`, `backend/Dockerfile`, `Docker
 *Fix:* security headers in `next.config.mjs` and the API middleware, a strict CSP, tokens in an
 `HttpOnly` cookie or at least a short-lived in-memory access token, non-root users. *Effort: M.*
 
-**G8. The paper-trading tunables could not be changed in Docker.** `docker-compose.yml` forwarded
+~~**G8. The paper-trading tunables could not be changed in Docker.**~~ **Closed on 2026-10-30.** `docker-compose.yml` forwarded
 only `PAPER_TRADING_SYNTHETIC`; the other eleven `PAPER_*` settings (tick and depth age limits,
 futures margin and roll, options expiry rules, product, cost overrides) never reached the
 container, so "tune `PAPER_TICK_MAX_AGE_SECONDS` from the panel" was not possible. **Closed in this
 pass:** all are forwarded with the code's own defaults and documented in `.env.example`.
 
-**G9. The regulatory data is a placeholder.** `ReferenceTableRegulatoryDataProvider`
+~~**G9. The regulatory data is a placeholder.**~~ **Closed in phase 6.** `ReferenceTableRegulatoryDataProvider`
 (`backend/src/engine/risk/compliance.py:36`) gives every symbol a 10% position limit and a 20%
 circuit band unless it is NIFTY or BANKNIFTY. Real circuit bands are per stock and change; Kite's
 quote carries `lower_circuit_limit` and `upper_circuit_limit` (checked against its documentation),
@@ -260,7 +297,7 @@ and the position limits come from exchange circulars. This was item 25 of the Ph
 is still open. *Fix:* take the band from the live quote, keep the table only as a fallback that
 says it is one. *Effort: S–M.*
 
-**G10. The live path has never met a real broker or real money.** Phase 17 (the real-world pass) is
+**G10. The live path has never met a real broker or real money.** **Still open (operator).** Phase 17 (the real-world pass) is
 still unchecked in `CLAUDE.md`: its broker/LLM/notification setup and live-market smoke test need
 the operator at a keyboard during a session. Paper trading on real quotes (phases 3–7) has not run
 in a session either, as far as the repository records. Until it does, no number in the Phase 3–7
@@ -269,30 +306,30 @@ record the tick-age and quote-call numbers. *Effort: operator.*
 
 ### P2 — completeness and quality
 
-**G11. No equity history.** There is no model for equity, NAV or daily P&L snapshots. The desk
+~~**G11. No equity history.**~~ **Closed in phase 3.** There is no model for equity, NAV or daily P&L snapshots. The desk
 shows today's realized result and the current unrealized figure; nothing can answer "what is this
 subscription's drawdown, Sharpe or equity curve", and G1 and G2 cannot be built without it.
 *Fix:* an `equity_snapshots` table written at each fill and at the close, per subscription and in
 total. *Effort: M.*
 
-**G12. The frontend has a thin safety net.** No ESLint or Prettier, no unit-test runner,
+~~**G12. The frontend has a thin safety net.**~~ **Closed in phase 2.** No ESLint or Prettier, no unit-test runner,
 `typescript.ignoreBuildErrors: true` in `next.config.mjs` (CI's `tsc` job is what catches type
 errors). Seven of the thirteen pages have no E2E spec at all: Agent Fleet, Market Analysis, Audit
 Log, Backtests, Chat, Investor Reports, Portfolio. *Effort: M, spread out.*
 
-**G13. Supply-chain coverage is partial.** Dependabot watches only GitHub Actions
+~~**G13. Supply-chain coverage is partial.**~~ **Closed in phase 10.** Dependabot watches only GitHub Actions
 (`.github/dependabot.yml`), not Python, pnpm or Docker bases. There is no `pnpm audit`, image scan
 or SBOM; only the backend has `pip-audit`. *Effort: S.*
 
-**G14. No migration-drift check.** CI runs `alembic upgrade head` for the E2E database but never
+~~**G14. No migration-drift check.**~~ **Closed in phase 1.** CI runs `alembic upgrade head` for the E2E database but never
 `alembic check`, so a model change without a migration is found by hand. *Effort: S.*
 
-**G15. Dead scaffolding.** `backend/src/execution/orders.py` and `backend/src/risk/limits.py` are
+~~**G15. Dead scaffolding.**~~ **Closed in phase 1.** `backend/src/execution/orders.py` and `backend/src/risk/limits.py` are
 Phase 0 stubs that raise `NotImplementedError("... ships in a later phase")`. Nothing imports them
 (the real code lives in `engine/` and `orchestration/`); they only confuse a reader about where
 order placement lives. Delete them. *Effort: S.*
 
-**G16. Time-bomb tests.** One was found this session: a market-data test used a fixed July date and
+**G16. Time-bomb tests.** **Closed in phase 1, except a watch item (see the status table).** One was found this session: a market-data test used a fixed July date and
 failed once real time moved 120 days past it (CI #70). Another, earlier, built "tomorrow" in UTC
 where the code judges IST. There has been no sweep for the pattern. *Fix:* grep for fixed dates
 against a `datetime.now()` window, and inject a clock. *Effort: S.*
@@ -316,15 +353,17 @@ sign-in, a small real-data paper trade, the Grafana panels to read, both Upstox 
 the holiday file, the restore drill) and ends with a table to record the results in.
 
 - Reconnect the brokers each trading morning (their tokens end around 06:00 IST).
-- The JWT signing-key rotation click in Settings.
+- The JWT signing-key rotation click in Settings. Still not done on 2026-11-11: the live stack signs sessions with the public placeholder key.
 - Run the real-data acceptance session and the Phase 17 live checks; read the results off the
   tick-age, quote-call and exchange-lag panels.
-- Supply NSE's 2026 and 2027 holiday dates for `config/nse_holidays.json`.
+- Supply NSE's 2027 holiday dates for `config/nse_holidays.json` (published in December), and re-check the 2026 ones against NSE's own circular (they came from broker pages).
 - Record Upstox's quote answer twice, so its exchange stamp can be read: with Upstox connected, in the backend container, `python -m scripts.record_broker_quote /tmp/upstox-open.json INFY RELIANCE` while the market is open and again after the close, and keep both files (they hold no credentials).
 - Settle the INFY adjusted-price gap: fetch INFY's daily bars from both brokers across a corporate action (Zerodha's historical data, Upstox's historical candles), compare them with NSE's adjusted close, and note the ex-date and which broker is right; until then each symbol stays pinned to one broker's history.
 - Keep the browser pane signed in to GitHub if CI is to be read from there: the Actions page was readable for some of the session and returned "Page not found" at other times, which is what a private repository does to a signed-out visitor.
 
 ## 4. Suggested order
+
+*Followed, as the twelve-phase plan, and done; G10 remains, with the operator. Kept as it was written.*
 
 1. **G11 then G1** (equity snapshots, then automatic drawdown): the safety rule that is currently
    manual, and the data that G2 and the desk's performance views also need.
