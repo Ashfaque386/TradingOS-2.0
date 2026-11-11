@@ -233,7 +233,7 @@ MEMORY_EMBEDDING_MODEL=nomic-embed-text      # ollama pull nomic-embed-text firs
 OLLAMA_BASE_URL=http://localhost:11434       # wherever that Ollama is reachable from the backend
 ```
 
-e.g. `docker run -d -p 6333:6333 qdrant/qdrant:v1.19.1`. Use a **throwaway**
+e.g. `docker run -d -p 6333:6333 qdrant/qdrant:v1.19.2`. Use a **throwaway**
 Qdrant: `agent-memory.spec.ts` writes (and deletes) test memories in whatever
 Qdrant the backend points at. With memory online the pipeline specs also read
 from it (they recall lessons) but a normal run records nothing -- only generated

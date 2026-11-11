@@ -63,12 +63,32 @@ def test_a_frontend_change_skips_the_backend_and_the_mutation_jobs():
     assert plan.mutation_modules == []
 
 
-@pytest.mark.parametrize("path", ["lib/api.ts", "lib/permissions.generated.json"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "lib/api.ts",
+        "lib/permissions.generated.json",
+        "docker-compose.yml",
+        "docker-compose.postgres-port.yml",
+        "observability/alertmanager/alertmanager.yml",
+        "observability/prometheus/alert_rules.yml",
+        "Dockerfile.allinone",
+    ],
+)
 def test_a_change_to_a_file_the_backend_tests_read_runs_the_backend(path):
     plan = cp.plan([path], MODULES)
 
     assert _jobs(plan) == {"backend", "frontend", "e2e", "images"}
     assert plan.mutation_modules == []
+
+
+def test_the_shared_attention_fixture_runs_the_backend_as_well_as_the_browser_suite():
+    # An e2e/ file, so it builds no image, but tests/test_paper_attention.py reads it too.
+    assert _jobs(cp.plan(["e2e/fixtures/paper-attention.json"], MODULES)) == {
+        "backend",
+        "frontend",
+        "e2e",
+    }
 
 
 def test_a_test_only_change_does_not_build_images():

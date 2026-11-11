@@ -43,10 +43,23 @@ CI_DEFINITION = frozenset({".github/workflows/ci.yml", "backend/scripts/ci_plan.
 # and the e2e backend run under; `config/` is the gateway config the backend loads.
 BACKEND_PREFIXES = ("backend/", "config/", "deploy/")
 
-# Frontend files the backend's own tests read: the console's API client (checked against the routes
-# by tests/test_frontend_wiring.py) and the RBAC export (tests/test_frontend_permissions.py).
-# Changing one of them is a backend-contract change even though no backend file moved.
-BACKEND_CONTRACT_FILES = frozenset({"lib/api.ts", "lib/permissions.generated.json"})
+# Files outside backend/ that the backend's own tests read. Changing one is a backend change even
+# though no backend file moved: the console's API client (checked against the routes by
+# tests/test_frontend_wiring.py), the RBAC export (tests/test_frontend_permissions.py), the
+# all-in-one Dockerfile (tests/test_docker_compose_images.py), the paper-attention parity fixture
+# (tests/test_paper_attention.py), and by prefix the compose files (the test_docker_compose_* files,
+# test_container_settings_persistence.py, test_docker_sandbox_seccomp.py) and the Prometheus and
+# Alertmanager configs (tests/test_alertmanager_wiring.py). A compose-only image bump once skipped
+# the backend suite here, and the test that pins those images failed on the next backend change.
+BACKEND_CONTRACT_FILES = frozenset(
+    {
+        "lib/api.ts",
+        "lib/permissions.generated.json",
+        "Dockerfile.allinone",
+        "e2e/fixtures/paper-attention.json",
+    }
+)
+BACKEND_CONTRACT_PREFIXES = ("docker-compose", "observability/")
 
 # Not part of any Docker image (so a change here needs no image build).
 NOT_IN_IMAGES_PREFIXES = ("backend/tests/", "e2e/", ".github/")
@@ -140,7 +153,11 @@ def plan(
     plan_ = Plan()
 
     backend_files = [
-        f for f in relevant if f.startswith(BACKEND_PREFIXES) or f in BACKEND_CONTRACT_FILES
+        f
+        for f in relevant
+        if f.startswith(BACKEND_PREFIXES)
+        or f in BACKEND_CONTRACT_FILES
+        or f.startswith(BACKEND_CONTRACT_PREFIXES)
     ]
     # Everything else that is not CI plumbing is the frontend side (app, components, lib, e2e,
     # package manifests, Dockerfiles, root scripts): conservative on purpose.
@@ -167,7 +184,11 @@ def plan(
         )
 
     plan_.reasons = {
-        "backend": "backend/, config/ or deploy/ changed" if plan_.backend else "nothing backend",
+        "backend": (
+            "backend/, config/, deploy/ or a file the backend tests read changed"
+            if plan_.backend
+            else "nothing backend"
+        ),
         "frontend": "frontend or root files changed" if plan_.frontend else "nothing frontend",
         "e2e": "backend or frontend changed" if plan_.e2e else "nothing to exercise",
         "images": "image contents changed" if plan_.images else "only tests/CI-only files changed",

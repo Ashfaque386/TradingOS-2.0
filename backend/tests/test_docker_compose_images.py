@@ -6,8 +6,10 @@ today with nothing in the repository saying why. The images this project builds 
 `latest` allowed (`tradingos-2.0-*:latest` is the tag compose gives its own builds).
 """
 
+import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 COMPOSE_PATH = Path(__file__).resolve().parent.parent.parent / "docker-compose.yml"
@@ -32,12 +34,18 @@ def test_no_third_party_image_is_latest_or_untagged():
     assert floating == {}
 
 
-def test_the_images_that_were_latest_are_named_by_version():
-    images = _images()
-
-    assert images["prometheus"] == "prom/prometheus:v3.15.0"
-    assert images["grafana"] == "grafana/grafana:13.2.2"
-    assert images["temporal"] == "temporalio/temporal:1.9.1"
+@pytest.mark.parametrize(
+    ("service", "pinned"),
+    [
+        ("prometheus", r"prom/prometheus:v\d+\.\d+\.\d+"),
+        ("grafana", r"grafana/grafana:\d+\.\d+\.\d+"),
+        ("temporal", r"temporalio/temporal:\d+\.\d+\.\d+"),
+    ],
+)
+def test_the_images_that_were_latest_are_named_by_version(service, pinned):
+    # Which version is Dependabot's to move (the stack-images group); that it is a full version,
+    # and not a floating tag such as `latest` or `v3`, is what is checked here.
+    assert re.fullmatch(pinned, _images()[service])
 
 
 def test_the_python_dependencies_are_pinned_where_every_build_reads_them():
