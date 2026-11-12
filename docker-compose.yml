@@ -310,7 +310,7 @@ services:
     # egress policy, confirmed live via the identical `docker pull`
     # failure pattern seen on `temporalio/temporal:latest` in Phase 5.
     # Please confirm `docker compose up` once in a normal environment.
-    image: prom/prometheus:v3.15.1
+    image: prom/prometheus:v3.16.0
     container_name: TradingOS-2.0-Prometheus
     restart: unless-stopped
     depends_on:
