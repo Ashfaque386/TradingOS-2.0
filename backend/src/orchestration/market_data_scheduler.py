@@ -41,6 +41,7 @@ from src.notifications.dispatch import notify
 from src.notifications.types import AlertLevel
 from src.observability.correlation import with_job_correlation_id
 from src.orchestration import market_data as market_data_orch
+from src.orchestration.job_schedule import RUN_LATE_IF_MISSED
 
 logger = structlog.get_logger(__name__)
 
@@ -253,6 +254,7 @@ def start_market_data_scheduler(
         args=[session_factory, root],
         id=CATALOG_REFRESH_JOB_ID,
         replace_existing=True,
+        **RUN_LATE_IF_MISSED,  # housekeeping: still worth doing if the host slept through it
     )
     scheduler.add_job(
         with_job_correlation_id(BACKUP_JOB_ID, run_backup_job),
@@ -260,6 +262,7 @@ def start_market_data_scheduler(
         args=[session_factory, root, backup_root],
         id=BACKUP_JOB_ID,
         replace_existing=True,
+        **RUN_LATE_IF_MISSED,  # housekeeping: still worth doing if the host slept through it
     )
 
     scheduler.start()

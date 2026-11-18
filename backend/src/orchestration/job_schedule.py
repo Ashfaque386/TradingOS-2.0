@@ -18,6 +18,21 @@ from apscheduler.triggers.interval import IntervalTrigger
 TriggerKind = Literal["interval", "cron"]
 
 
+RUN_LATE_GRACE_SECONDS = 23 * 3600
+
+# APScheduler skips a run whose time passed more than a second ago ("was missed by ..."), which is
+# what happens to every nightly job when the host sleeps through it: the process keeps running, so
+# the start-up catch-up never fires either. A job that does the night's housekeeping (a backup, the
+# catalog refresh) is still worth doing late, so it runs once on waking -- `coalesce` folds several
+# missed nights into one run. Not for anything that reads "today" (ingestion, signals, reports) or
+# acts on the market: run late, those would act on the wrong day or in the middle of a session.
+# A schedule change (`job.reschedule`) replaces only the trigger, so these options survive it.
+RUN_LATE_IF_MISSED: dict[str, int | bool] = {
+    "misfire_grace_time": RUN_LATE_GRACE_SECONDS,
+    "coalesce": True,
+}
+
+
 class ScheduleRefused(ValueError):
     """The schedule asked for cannot be used; the message says why."""
 

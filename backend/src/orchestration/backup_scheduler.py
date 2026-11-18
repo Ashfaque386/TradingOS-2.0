@@ -35,6 +35,7 @@ from src.engine.paper_trading.market_hours import IST
 from src.observability.correlation import with_job_correlation_id
 from src.observability.metrics import backup_newest_ok_age_seconds, backup_stale
 from src.orchestration.engine_alerts import AlertCandidate, sync_conditions_safely
+from src.orchestration.job_schedule import RUN_LATE_IF_MISSED
 
 logger = structlog.get_logger(__name__)
 
@@ -137,15 +138,18 @@ def start_backup_scheduler(
         args=[session_factory, root, database_url],
         id=POSTGRES_BACKUP_JOB_ID,
         replace_existing=True,
+        **RUN_LATE_IF_MISSED,  # a night the host slept through is backed up when it wakes
     )
     scheduler.start()
     return scheduler
 
 
 # A night the process was not running at 22:45 IST makes no backup, and APScheduler does not run a
-# cron job for a time that passed while it was down. So, once the app has finished starting, a
-# backup more than a day old is made up for. With no backup at all nothing is owed: a fresh install
-# makes its first one at the scheduled time (and the end-to-end tests start from nothing).
+# cron job for a time that passed while it was down. (A night the host slept through while the
+# process kept running is covered by the job's own `RUN_LATE_IF_MISSED`.) So, once the app has
+# finished starting, a backup more than a day old is made up for. With no backup at all nothing is
+# owed: a fresh install makes its first one at the scheduled time (and the end-to-end tests start
+# from nothing).
 CATCH_UP_JOB_NAME = "postgres_backup_catch_up"
 CATCH_UP_DELAY_SECONDS = 120.0
 CATCH_UP_AFTER_SECONDS = 24 * 3600 + 300  # a day, and a few minutes for the dump's own length
