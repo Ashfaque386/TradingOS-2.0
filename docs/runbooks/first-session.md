@@ -48,9 +48,11 @@ on the backups volume (2 and 7 November), and the only warning in the log was th
 day this part was already done, and steps 1 to 3 below are for the next time `main` has moved on (new commits
 pulled, a Dependabot pull request merged) before a session.
 
-1. **Take a backup first, and keep a copy off this machine.** The stack makes one at 22:45 IST **only while the
-   machine and Docker are running**: on 2026-11-07 the volume held dumps from 2 and 7 November and none for the
-   nights between, because nothing was running then (the job does not catch up). There is no command-line dump:
+1. **Take a backup first, and keep a copy off this machine.** The stack makes one at 22:45 IST. A night it misses
+   is made up once, not night by night: if the machine slept through 22:45, the backup runs when it wakes (up to 23
+   hours late, since 2026-11-18); if the backend was not running, one is made about two minutes after it starts and
+   finds the newest backup more than a day old (since 2026-11-11). On 2026-11-07, before either, the volume held
+   dumps from 2 and 7 November and none for the nights between. Still take one now. There is no command-line dump:
    press **Back up now** in Settings > System and backups, then check the newest file and copy it out:
 
    ```bash
@@ -73,8 +75,15 @@ pulled, a Dependabot pull request merged) before a session.
    The volumes are kept, so nothing needs copying back. Rebuilding signs everyone out once; the first sign-in after
    is normal.
 
-Leave the machine and Docker running overnight on a trading day if you want the 22:45 IST backup, the 07:30
-history repair and the 08:00 signals to happen.
+Leave the machine and Docker running overnight on a trading day if you want the 07:30 history repair and the 08:00
+signals to happen: if the machine sleeps through them they are skipped, because each reads "today" and run late
+would act on the wrong day. The night's housekeeping is different: the 22:45 IST Postgres backup and the data
+lake's 22:00 catalog refresh and 22:15 backup run once when the machine wakes.
+
+If port 8000 is taken by another project, the launcher moves the backend to 8001 by itself (both the "port is
+already allocated" and Docker Desktop's "ports are not available" wordings, since 2026-11-21). Norton has
+quarantined `scripts\docker-up.cmd` once (it starts PowerShell with `-ExecutionPolicy Bypass`); restore it from
+Norton's quarantine, or use `node scripts/docker-up.js -d`, which does the same.
 
 **Check:** the sign-in page loads, you can sign in with your existing account, and Settings > System and backups opens.
 Do not create an account on the sign-in page: registration is closed after the first account on purpose, and a

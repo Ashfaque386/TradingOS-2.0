@@ -13,7 +13,7 @@ and the restore checks itself.
 | Where | the `tradingos-2.0_backups` volume, mounted at `/app/backups` in the backend container. A volume of its own, apart from `tradingos-2.0_pgdata`, so rebuilding or losing the database volume does not take the backups with it. |
 | Kept | the newest 7 (`POSTGRES_BACKUP_KEEP_COUNT`) and any younger than 14 days (`POSTGRES_BACKUP_RETENTION_DAYS`). The newest complete backup is never removed. A dump with no manifest is an unfinished backup: it is listed as not usable and removed after a day. |
 | Checked | each backup is checked as it is made: SHA-256, size, and `pg_restore --list` of the finished file must agree with what was written. A backup that does not check out is not kept. |
-| If it fails | a critical engine alert (`The Postgres backup failed`) goes to the channels subscribed to Engine alerts, and clears itself, with a notice, the night a backup goes through. A night the job never ran (the backend was down at 22:45 IST) cannot raise its own alert: Settings warns when the newest backup is more than 36 hours old (`BACKUP_STALE_AFTER_HOURS`), and Prometheus's `PostgresBackupStale` rule (critical; `LakeBackupStale` is a warning) sends the same through Alertmanager to the Engine-alerts channels. |
+| If it fails | a critical engine alert (`The Postgres backup failed`) goes to the channels subscribed to Engine alerts, and clears itself, with a notice, the night a backup goes through. A night the machine slept through 22:45 is backed up when it wakes (up to 23 hours late, once however many nights were missed), and a night the backend was not running is made up about two minutes after it starts, when the newest backup is more than a day old. A night the job never ran at all cannot raise its own alert: Settings warns when the newest backup is more than 36 hours old (`BACKUP_STALE_AFTER_HOURS`), and Prometheus's `PostgresBackupStale` rule (critical; `LakeBackupStale` is a warning) sends the same through Alertmanager to the Engine-alerts channels. |
 
 The files are readable by their owner only. **The dump holds the login signing keys and password hashes in plain
 text**: copy it as carefully as you would the keys.
@@ -155,7 +155,8 @@ the four fixture users, and 60 audit entries. The same sequence was run once as 
 Not yet done: a drill on the live database's real data and size, and a restore through the container with `docker exec`
 rather than the test harness. Both belong to the first operator session. (The live stack has made backups since its
 2026-11-02 rebuild, so there is a real dump to drill on; on 2026-11-07 the volume held two, about 0.5 MB each, from 2 and
-7 November. The nights between are missing because the machine was off: the job does not catch up on a missed run.)
+7 November. The nights between are missing because the machine was off: the job did not catch up on a missed run then.
+It does now: see "If it fails" above. The drill on the live data was done on 2026-11-11, 3.4 s, every check passing.)
 
 ## Troubleshooting
 
@@ -163,6 +164,7 @@ rather than the test harness. Both belong to the first operator session. (The li
   server. The backend image installs PostgreSQL 16 from the same repository as its server; CI installs `postgresql-client-16`.
 - **The failed-backup alert says `pg_dump exited with ...`**: the text after it is what `pg_dump` printed. A full volume is the
   usual cause; `df` on the volume, then `Back up now`.
-- **The stale warning or `PostgresBackupStale` with no failed alert**: the job did not run (the backend was down at 22:45 IST). The scheduler does not
-  catch up on a missed run; `Back up now`, or wait for the next night.
+- **The stale warning or `PostgresBackupStale` with no failed alert**: the job did not run. A night the machine slept through is made when it
+  wakes, and a backend that was down makes one about two minutes after it starts, so this means neither has happened yet (the
+  machine is still off or asleep, or the backend has not been started). `Back up now` makes one at once.
 - **A dump with no manifest**: an unfinished backup (the process died mid-dump). It is not usable and is removed after a day.

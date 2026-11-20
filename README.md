@@ -65,7 +65,10 @@ expiry rules, cost overrides) is in `.env.example`, forwarded by `docker-compose
 
 If port 8000 or 3000 is taken, use `pnpm docker:up` instead of `docker compose up`: it walks forward to
 the next free port for whichever one is busy and passes extra flags through (`pnpm docker:up -d`).
-Without Node installed, `.\scripts\docker-up.cmd -d --build` does the same on Windows. Behind a
+Without Node installed, `.\scripts\docker-up.cmd -d --build` does the same on Windows. Both recognise Docker's
+"port is already allocated" and Docker Desktop's "ports are not available" for a busy port. Norton has quarantined
+`docker-up.cmd` once (it starts PowerShell with `-ExecutionPolicy Bypass`): restore it from Norton, or use
+`node scripts/docker-up.js -d`. Behind a
 TLS-intercepting antivirus or proxy, put its root certificate at `.local/extra-ca.pem` (git-ignored);
 both launchers pass it to the image build and the running backend.
 

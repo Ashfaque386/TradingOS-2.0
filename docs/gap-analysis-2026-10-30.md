@@ -10,6 +10,43 @@ compose, CI, the frontend pages and the E2E specs, plus the earlier audits
 was measured against a live broker or a live market session, and no security scan, load test or
 penetration test was run. Where a claim rests on a vendor's documentation, it says so.
 
+## Status on 2026-11-21 (commit `e3d869d`, live stack rebuilt on it)
+
+**Changed since 2026-11-11:**
+- **Versions.** Dependabot's Python group (#66: temporalio 1.36.0 with nexus-rpc 1.5.0, FastAPI 0.162.7, and pins for
+  narwhals 2.29.0 and opentelemetry-api 1.45.2, which every build installed unpinned), frontend group (#67) and stack
+  images (#68: Prometheus v3.16.0, Alertmanager v0.35.0, Grafana 13.3.1) are merged; #65 was superseded by #68. CI
+  #153 to #158 green. The live stack runs all of it; `pip list` in the backend confirms the Python versions.
+- **Closed:** a nightly backup the machine slept through is made when it wakes (`e59d665`); the CI image builds
+  install the day's Debian security fixes instead of a cached layer (`c62a3d7`); the launchers recognise Docker
+  Desktop's "ports are not available" wording for a busy port and move to the next one (`e3d869d`, seen live: 8000
+  held by another project, the backend landed on 8001 by itself).
+- **Alertmanager round trip, proven.** Between 11 and 20 November, v0.34.2 carried real alerts into the backend and
+  resolved them: `PostgresBackupStale` (critical), `LakeBackupStale` (warning, repeatedly, the nights the machine
+  slept) and the engine-alert watcher stopping (critical, two minutes during a rebuild). v0.35.0 has not carried one
+  yet. The "Unproven version" row below is closed for the path, open for the new version.
+- **Upstox** was reconnected on 2026-11-21; Zerodha's token has expired (it needs the morning sign-in).
+
+**Added to the open list by the 2026-11-21 review** (pages read in the console signed in as the administrator,
+nothing pressed that changes state; database read-only):
+
+| Item | What remains | Who |
+|---|---|---|
+| Test accounts on the live stack | `e2e.admin@example.com` (SystemAdministrator), `e2e.pm`, `e2e.risk` and `e2e.auditor` have been active on the live database since 2026-09-23. Test accounts' passwords are written for tests, not kept secret. Deactivate them in Settings > Users. Do this with the signing-key rotation. | operator |
+| Live equity has no baseline | `LIVE_STARTING_CAPITAL` is unset, so every live equity reading is "could not be measured" and the live kill switch cannot judge drawdown. Set it in `.env` before live autonomy is switched on for any strategy. | operator |
+| Test residue in the live data | Two "Phase17 smoke" strategies (Coding, Backtesting) and the `DEMOSTOCK` paper subscription (off, net -₹605, which is why paper equity reads ₹99,395). Delete or keep, deliberately, before the first session. | operator |
+| Weekly investor report skipped while the machine slept | Reports exist for 18-25 Sep and 26 Oct-1 Nov only; the Monday 07:00 runs of 9 and 16 Nov were missed. The report covers a closed past week, so it is safe to run late: a candidate for `RUN_LATE_IF_MISSED`. | code |
+| Portfolio recommendation shows raw Markdown | The LLM narrative on the Portfolio page prints `**...**`; Investor Reports renders the same kind of text properly. | code |
+| Per-request API latency is not measured | `/metrics` has tick, quote, agent-node and dispatch timings, but nothing per HTTP route. Measured from the browser: most reads 40-190 ms; `/portfolio/risk-metrics` 588 ms and `/portfolio/summary` 363 ms. | code |
+| Overview loads three.js up front | The Overview (the landing page) imports `@react-three/fiber` and `drei` statically: a 958 KB chunk, 253 KB gzipped, before the page is interactive. Load the orb lazily (`next/dynamic`, no SSR) with a still fallback. | code |
+| Smaller UI points | The activity feed is mostly `anonymous · POST /webhooks/alertmanager` and sign-ins (Alertmanager should be named as the actor); the audit filter lists two spellings of several entity types (`broker-credentials`/`broker_credentials`, `notification-channels`/`notification_channel`); every restart adds a config version even when nothing changed, and every version is labelled "active"; Mission Control's schedule shows raw trigger text (`interval[0:00:03]`, `cron[hour='7', minute='30']`) and mixes `risk_monitor` with `Paper Trading`; Market Analysis offers "Try again" on a pulse that is not sourced yet; an investor report's text refers the reader to "this module's own docstring"; `heartbeat_logs` is never pruned (about 576 rows a day). | code |
+
+Fixed during the review: the Orders page widened to 847 px on a phone (below 1100 px its grid column was `1fr`,
+which cannot shrink under the ledger table's width); it is `minmax(0,1fr)` now and the table scrolls in its own box.
+
+Not measurable yet: the trading path's own timings (tick to decision, quote calls, agent nodes) have no data, because
+no broker session has run. They are the first session's to read (`docs/runbooks/first-session.md`).
+
 ## Status on 2026-11-11 (commit `be0a91c`)
 
 The twelve-phase plan that followed this analysis is done: phases 1-11 in code, phase 12 as the operator's
@@ -37,11 +74,11 @@ changed; closed gaps in section 2 are struck through and name the phase that clo
 | G10 (Phase 17) | The live path has never met a real broker or real money. The first session, as the runbook lays it out. | operator |
 | G3 (data) | NSE's 2027 movable holidays, published in December. (The 2026 dates, taken from broker pages, were checked against NSE's own holiday master on 2026-11-11 and match it.) | operator |
 | G17 | Upstox's exchange stamp (two recorded quote answers, market open and after the close) and the INFY adjusted-price gap between the brokers. | operator, with a connected broker |
-| Backups (phase 7) | No WAL archiving, so up to a day of changes can be lost; the dumps sit on the same machine (copy the newest off it); Qdrant, Redis and the monitoring volumes have no backup; custody of `SECRETS_ENCRYPTION_KEY`. (Closed on 2026-11-11: the first restore drill on the live data, 3.4 s, every check passing; and a night the machine was off is now made up once the app starts, instead of waiting for the next 22:45.) | operator |
+| Backups (phase 7) | No WAL archiving, so up to a day of changes can be lost; the dumps sit on the same machine (copy the newest off it); Qdrant, Redis and the monitoring volumes have no backup; custody of `SECRETS_ENCRYPTION_KEY`. (Closed on 2026-11-11: the first restore drill on the live data, 3.4 s, every check passing; and a night the machine was off is now made up once the app starts, instead of waiting for the next 22:45. Closed on 2026-11-18: a night the machine slept through is made when it wakes.) | operator |
 | Exposure (phase 8) | No TLS or HSTS: put a proxy in front before the stack is reachable from anywhere but this machine, then set `TRUSTED_PROXIES` and `HSTS_ENABLED`. An XSS can still use the session while its page is open; styles keep `'unsafe-inline'`; anyone who knows an email can lock that account for 15 minutes (an administrator can unlock). | before exposing it |
 | Alerts (phase 5) | An alert about the backend being down cannot be delivered by the backend; Prometheus and Grafana show it. | accepted |
 | G28 | The fundamentals, valuation and macro agents have no data source. | code, not scheduled |
-| Unproven version | Alertmanager v0.34.2 has loaded the config and Prometheus reaches it, but no real alert has gone through it yet. (sentence-transformers 6 was checked on 2026-11-11: 6.2.0 installs with the backend's pinned packages, numpy 1.26 included, and has the two calls the provider makes; a model was not downloaded.) | watch |
+| Unproven version | *(2026-11-21: v0.34.2 carried real alerts end to end between 11 and 20 November; v0.35.0, live since 2026-11-21, has not carried one yet.)* Alertmanager v0.34.2 has loaded the config and Prometheus reaches it, but no real alert has gone through it yet. (sentence-transformers 6 was checked on 2026-11-11: 6.2.0 installs with the backend's pinned packages, numpy 1.26 included, and has the two calls the provider makes; a model was not downloaded.) | watch |
 | Telegram | A live send failed once with no reason in the log; the rebuilt stack logs the reason, and "Send test message" in Settings shows it. | watch |
 | P3 | The known limits at the end of section 2 are unchanged. | accepted |
 
