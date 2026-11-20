@@ -10,8 +10,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PGDATA=/var/lib/postgresql/data \
     PATH="/usr/lib/postgresql/16/bin:${PATH}"
 
+# CI passes a value that changes on every run (ci.yml), so the apt layer below is rebuilt and installs
+# Debian's current security updates instead of reusing a layer cached before they were published: on
+# 2026-11-20 a cached layer kept nginx 1.26.3-3+deb13u10 after deb13u11 fixed four critical CVEs, and
+# Trivy failed the image. Unset in a local build, which keeps its own layer cache.
+ARG APT_REFRESH=
+
 # Postgres 16 via the PGDG apt repo (Debian bookworm ships PG15 by default).
-RUN apt-get update \
+RUN echo "apt refresh: ${APT_REFRESH:-local build}" \
+    && apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates gnupg lsb-release supervisor \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \

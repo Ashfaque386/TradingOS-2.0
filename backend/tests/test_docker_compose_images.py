@@ -59,3 +59,30 @@ def test_the_python_dependencies_are_pinned_where_every_build_reads_them():
         commands = " ".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         assert "-c requirements.txt" in commands, build_file
         assert "pip install ." not in commands.replace("-c requirements.txt .", ""), build_file
+
+
+@pytest.mark.parametrize("dockerfile", ["backend/Dockerfile", "Dockerfile.allinone"])
+def test_the_apt_layer_is_rebuilt_on_every_ci_run(dockerfile):
+    """A cached apt layer keeps packages from before Debian's security fixes (nginx deb13u10 on
+    2026-11-20, four critical CVEs fixed in deb13u11): `APT_REFRESH` comes before the first apt
+    line, which uses it, so a new value rebuilds that layer."""
+    lines = (COMPOSE_PATH.parent / dockerfile).read_text(encoding="utf-8").splitlines()
+    arg = lines.index("ARG APT_REFRESH=")
+    first_apt = next(i for i, line in enumerate(lines) if "apt-get update" in line)
+    assert arg < first_apt
+    assert "${APT_REFRESH" in " ".join(lines[first_apt - 1 : first_apt + 1])
+
+
+def test_ci_gives_both_image_builds_a_new_apt_refresh_each_run():
+    workflow = yaml.safe_load((COMPOSE_PATH.parent / ".github/workflows/ci.yml").read_text("utf-8"))
+    steps = [
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("docker/build-push-action")
+    ]
+    assert len(steps) == 2  # the build Trivy scans, and the one that publishes it
+    for step in steps:
+        assert step["with"]["build-args"] == (
+            "APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}"
+        )

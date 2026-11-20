@@ -624,6 +624,9 @@ jobs:
           load: true
           push: false
           tags: scan-${{ matrix.image.name }}:ci
+          # A new value each run rebuilds the apt layer (APT_REFRESH in the Dockerfiles), so the scan reads
+          # today's Debian packages; the publishing build below passes the same value and reuses the layer.
+          build-args: APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=${{ matrix.image.name }}
 
       - name: Trivy, HIGH (for reading, does not fail)
@@ -659,5 +662,6 @@ jobs:
           provenance: ${{ github.event_name == 'push' && 'mode=max' || 'false' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=${{ matrix.image.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}
