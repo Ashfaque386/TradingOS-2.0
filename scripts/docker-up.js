@@ -136,6 +136,9 @@ function isPortPublished(containerName, containerPort) {
   })
 }
 
+const PORT_BUSY =
+  /Bind for [\d.]+:(\d+) failed: port is already allocated|ports are not available: exposing port (?:TCP|UDP) [\d.]+:(\d+)/
+
 function parsePortConflict(output) {
   // Only the specific line naming the failing endpoint may be checked for
   // which service it is — `docker compose up`'s surrounding output lists
@@ -146,11 +149,15 @@ function parsePortConflict(output) {
   // conflict to whichever service happened to be mentioned first (nearly
   // always the frontend) and only ever bumped that one port, silently
   // never fixing the real conflict.
-  const conflictLine = output.split('\n').find((line) => /port is already allocated/.test(line))
+  //
+  // Docker words a busy port two ways: "Bind for 0.0.0.0:8000 failed: port is already allocated"
+  // (another container holds it) and, on Docker Desktop for Windows, "ports are not available:
+  // exposing port TCP 127.0.0.1:8000 -> ... bind: Only one usage of each socket address ..."
+  // (seen 2026-11-20 with another project's container on 0.0.0.0:8000). Both are retried.
+  const conflictLine = output.split('\n').find((line) => PORT_BUSY.test(line))
   if (!conflictLine) return null
-  const match = conflictLine.match(/Bind for [\d.]+:(\d+) failed: port is already allocated/)
-  if (!match) return null
-  const port = Number(match[1])
+  const match = conflictLine.match(PORT_BUSY)
+  const port = Number(match[1] ?? match[2])
   const service = SERVICES.find((s) => new RegExp(s.containerName.replace(/\./g, '\\.'), 'i').test(conflictLine))
   return { port, serviceKey: service ? service.key : null }
 }

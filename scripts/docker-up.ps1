@@ -156,10 +156,15 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     # misattributed any conflict to whichever service happened to be
     # mentioned first (nearly always the frontend) and only ever bumped
     # that one port, silently never fixing the real conflict.
-    $conflictLine = ($result.Output -split "`n") | Where-Object { $_ -match 'port is already allocated' } | Select-Object -First 1
+    # Docker words a busy port two ways: "Bind for 0.0.0.0:8000 failed: port is already allocated"
+    # (another container holds it) and, on Docker Desktop for Windows, "ports are not available:
+    # exposing port TCP 127.0.0.1:8000 -> ... bind: Only one usage of each socket address ..."
+    # (seen 2026-11-20 with another project's container on 0.0.0.0:8000). Both are retried.
+    $portBusy = 'Bind for [\d\.]+:(\d+) failed: port is already allocated|ports are not available: exposing port (?:TCP|UDP) [\d\.]+:(\d+)'
+    $conflictLine = ($result.Output -split "`n") | Where-Object { $_ -match $portBusy } | Select-Object -First 1
 
-    if ($conflictLine -and $conflictLine -match 'Bind for [\d\.]+:(\d+) failed: port is already allocated') {
-        $conflictPort = [int]$Matches[1]
+    if ($conflictLine -and $conflictLine -match $portBusy) {
+        $conflictPort = if ($Matches[1]) { [int]$Matches[1] } else { [int]$Matches[2] }
         $matchedService = $Services | Where-Object { $conflictLine -match [regex]::Escape($_.ContainerName) } | Select-Object -First 1
         if (-not $matchedService) {
             $matchedService = $Services | Where-Object { $ports[$_.Key] -eq $conflictPort } | Select-Object -First 1
