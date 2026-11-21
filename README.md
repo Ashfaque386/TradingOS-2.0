@@ -21,7 +21,7 @@ self-hosted, single-operator system, not a multi-tenant product.
 | **The Paper Desk** (`/paper-trading`) | Today's result as *price result − costs = net*, what needs attention, one lane per subscription (legs, payoff at expiry, costs and fills, settings), add / switch off / close / edit dialogs with live previews and typed confirmation. |
 | **Live trading** | Order-intent pipeline with the safety layer in front of the broker, per-strategy autonomy switch, standing rate and notional caps, Zerodha Kite and Upstox adapters. |
 | **Safety and audit** | Kill switch, compliance checker, naked-options scanner, correlation constraint, dual-control risk limits, a hash-chained append-only audit log with a WORM archive. |
-| **Operations** | Prometheus + Alertmanager + Grafana (tick age, quote-call latency, order dispatch), notifications to Telegram / Discord / Slack, **engine alerts** (a position nobody is watching, a stopped price feed, a stop-loss exit, a roll or square-off that could not be done, a broker refusing its credentials; listed on the Paper Desk, counted in the top bar), scheduled market-data ingestion into a DuckDB/Parquet lake, nightly lake backup. |
+| **Operations** | Prometheus + Alertmanager + Grafana (tick age, quote-call latency, order dispatch, API latency per route), notifications to Telegram / Discord / Slack, **engine alerts** (a position nobody is watching, a stopped price feed, a stop-loss exit, a roll or square-off that could not be done, a broker refusing its credentials; listed on the Paper Desk, counted in the top bar), scheduled market-data ingestion into a DuckDB/Parquet lake, nightly lake backup. |
 
 ## Running it
 

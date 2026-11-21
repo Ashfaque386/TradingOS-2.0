@@ -78,7 +78,8 @@ pulled, a Dependabot pull request merged) before a session.
 Leave the machine and Docker running overnight on a trading day if you want the 07:30 history repair and the 08:00
 signals to happen: if the machine sleeps through them they are skipped, because each reads "today" and run late
 would act on the wrong day. The night's housekeeping is different: the 22:45 IST Postgres backup and the data
-lake's 22:00 catalog refresh and 22:15 backup run once when the machine wakes.
+lake's 22:00 catalog refresh and 22:15 backup run once when the machine wakes, and so does the Monday 07:00
+weekly investor report (since 2026-11-21; it reports the week before that Monday however late it runs).
 
 If port 8000 is taken by another project, the launcher moves the backend to 8001 by itself (both the "port is
 already allocated" and Docker Desktop's "ports are not available" wordings, since 2026-11-21). Norton has
