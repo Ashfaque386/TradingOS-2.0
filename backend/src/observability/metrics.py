@@ -23,6 +23,17 @@ from src.engine.paper_trading.market_hours import IST
 
 logger = structlog.get_logger(__name__)
 
+# How long each HTTP request took, by route template (never the raw path, so an id in a URL does
+# not become a new series; requests that matched no route are one "unmatched" series). Recorded by
+# src.observability.request_metrics.RequestMetricsMiddleware. Added after the 2026-11-21 review:
+# until then API latency could only be read off a browser's network panel.
+http_request_duration_seconds = Histogram(
+    "tradingos_http_request_duration_seconds",
+    "HTTP request duration, by method, route template and status class",
+    ["method", "route", "status_class"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
 # WebSocket / tick-relay latency (Build Spec §8's WebSocketLatencyGuard,
 # 100ms default threshold -- see src.engine.risk.latency_guard).
 ws_latency_seconds = Histogram(

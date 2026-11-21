@@ -52,6 +52,7 @@ from src.notifications.verification import (
     verify_slack_signature,
     verify_telegram_secret,
 )
+from src.observability.audit_middleware import set_audit_actor
 
 logger = structlog.get_logger(__name__)
 
@@ -87,6 +88,7 @@ async def telegram_webhook(
 
     if not verify_telegram_secret(config, x_telegram_bot_api_secret_token):
         return _reject("invalid secret token", "telegram")
+    set_audit_actor(request, "webhook:telegram")
 
     try:
         payload = json.loads(body)
@@ -144,6 +146,7 @@ async def discord_webhook(
         body=body,
     ):
         return _reject("invalid Ed25519 signature", "discord")
+    set_audit_actor(request, "webhook:discord")
 
     try:
         payload = json.loads(body)
@@ -212,6 +215,7 @@ async def slack_webhook(
         body=body,
     ):
         return _reject("invalid HMAC signature", "slack")
+    set_audit_actor(request, "webhook:slack")
 
     try:
         payload = json.loads(body)

@@ -31,6 +31,7 @@ from src.observability.correlation import CorrelationIdMiddleware
 from src.observability.logging import configure_logging
 from src.observability.metrics import trading_holiday_gauge_updater
 from src.observability.rate_limit_middleware import RateLimitMiddleware
+from src.observability.request_metrics import RequestMetricsMiddleware
 from src.observability.scheduled_job_history import attach_run_history_listener
 from src.observability.scheduler_registry import (
     get_all_schedulers,
@@ -347,6 +348,8 @@ app.add_middleware(
 # before AuditLoggingMiddleware or any route does real work.
 app.add_middleware(AuditLoggingMiddleware)
 app.add_middleware(RateLimitMiddleware)
+# Times every request, the rate-limited ones included (it wraps RateLimitMiddleware).
+app.add_middleware(RequestMetricsMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 # Outermost, so even a response built by a middleware inside it (the rate limiter's 429) carries
 # them.

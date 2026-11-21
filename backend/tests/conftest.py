@@ -104,6 +104,17 @@ def _reset_jwt_signing_key_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_portfolio_margin_cache():
+    """The Portfolio routes keep the broker's margin for 30 s (5 min after a refused token) in a
+    module-level cache; one test's broker must not answer for another's."""
+    from src.api.routes.portfolio import reset_margin_cache
+
+    reset_margin_cache()
+    yield
+    reset_margin_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_broker_feed_health():
     """`src.brokers.feed_health` is a process-global registry of what a broker last
     said about its credentials; a rejection recorded by one test must not show up

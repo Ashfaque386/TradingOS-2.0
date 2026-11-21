@@ -28,6 +28,7 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.audit.service import write_audit_entry
+from src.observability.route_template import route_template
 
 logger = structlog.get_logger(__name__)
 
@@ -45,6 +46,17 @@ def skip_audit_entry(request: Request, *, because: str) -> None:
     Endpoints with no such documented behaviour should refuse (404/409) instead
     -- a refusal is never audited."""
     setattr(request.state, _AUDIT_SKIP_KEY, because)
+
+
+# Set on `request.state` by a route no signed-in user calls, so its row names who did call it.
+_AUDIT_ACTOR_KEY = "audit_actor"
+
+
+def set_audit_actor(request: Request, actor: str) -> None:
+    """Names the caller of a route that has no signed-in user: an inbound webhook (verified by
+    its token or signature) or a sign-in (the account, once known). Without it the row says
+    "anonymous", which on 2026-11-21 was most of what the console's activity feed showed."""
+    setattr(request.state, _AUDIT_ACTOR_KEY, actor)
 
 
 class AuditLoggingMiddleware:
@@ -79,18 +91,9 @@ class AuditLoggingMiddleware:
             logger.debug("audit_middleware.skipped_no_change", because=skipped)
             return
 
-        route = scope.get("route")
-        path_template = route.path if route is not None else scope.get("path", "")
-        # Same real fix as src.core.rbac.require_role: Phase 26's dependency-
-        # CVE pass (docs/phase20-old-vs-new-comparison.md item 28) bumped
-        # FastAPI/Starlette, and `route.path` on a nested APIRoute can now
-        # come back missing an ancestor `include_router` prefix (confirmed
-        # live for /api/v1/broker-credentials/*) -- reconstruct it from the
-        # real request path (`scope["path"]`, unaffected) rather than
-        # writing a truncated action string to the permanent audit trail.
-        real_path = scope.get("path", "")
-        if not path_template.startswith("/api/v1") and real_path.startswith("/api/v1"):
-            path_template = "/api/v1" + path_template
+        # `route_template` restores an `/api/v1` prefix a nested route can lose, so a truncated
+        # action string never reaches the permanent audit trail.
+        path_template = route_template(scope) or scope.get("path", "")
 
         try:
             async with request.app.state.db_session_factory() as db:
@@ -114,7 +117,11 @@ class AuditLoggingMiddleware:
 
     @staticmethod
     def _extract_actor(scope: Scope) -> str:
-        user = scope.get("state", {}).get("current_user")
+        state = scope.get("state", {})
+        named = state.get(_AUDIT_ACTOR_KEY)
+        if named:
+            return str(named)
+        user = state.get("current_user")
         return user.email if user is not None else "anonymous"
 
     @staticmethod

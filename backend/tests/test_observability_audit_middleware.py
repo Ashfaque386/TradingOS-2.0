@@ -68,12 +68,12 @@ async def test_middleware_entry_carries_the_authenticated_actor(
     async with db_session_factory() as db:
         rows = (await db.execute(select(AuditLog).order_by(AuditLog.sequence))).scalars().all()
 
-    # Row 1: the login itself (unauthenticated -> "anonymous"). Row 2: the
-    # verify call, made with a real Bearer token -- the middleware's actor
-    # extraction reads it off request.state.current_user (set by
-    # src.api.deps.get_current_user), proving it isn't hardcoded to
-    # "anonymous".
-    assert rows[0].actor == "anonymous"
+    # Row 1: the login itself, named after the account that signed in (the route sets the actor
+    # once the password checks out; before 2026-11-21 this row said "anonymous"). Row 2: the
+    # verify call, made with a real Bearer token -- the middleware's actor extraction reads it
+    # off request.state.current_user (set by src.api.deps.get_current_user), proving it isn't
+    # hardcoded to "anonymous".
+    assert rows[0].actor == "admin@example.com"
     assert rows[0].action == "POST /api/v1/auth/login"
     assert rows[1].actor == "admin@example.com"
     assert rows[1].action == "POST /api/v1/audit/verify"

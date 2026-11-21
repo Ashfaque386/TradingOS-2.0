@@ -7,7 +7,10 @@ real broker margin (when a broker is configured) into one view -- none of
 which existed as a single endpoint before this phase.
 """
 
+import asyncio
+import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import structlog
@@ -22,7 +25,7 @@ from src.api.schemas import (
     PortfolioRiskMetricsResponse,
     PortfolioSummaryResponse,
 )
-from src.brokers.base import BrokerAdapter
+from src.brokers.base import BrokerAdapter, BrokerAuthError, MarginInfo
 from src.brokers.factory import build_configured_adapter
 from src.core.db import get_db
 from src.core.rbac import Role, register_policy, require_role
@@ -64,6 +67,55 @@ register_policy(
 register_policy(
     "POST", "/api/v1/portfolio/recommendations/{recommendation_id}/reject", roles=_MANAGE_ROLES
 )
+
+
+# The broker's margin, shared by the Portfolio page's two parallel calls and its 30 s refresh.
+# Before 2026-11-21 each call went to the broker afresh (a new TLS connection every time), and
+# with Zerodha's daily token expired each went on failing: 360-590 ms per page load, for nothing.
+# A result is kept 30 s; a refused token is not asked again for 5 minutes (the morning sign-in
+# replaces it, and the tick source backs off the same way); any other failure, 30 s.
+MARGIN_TTL_SECONDS = 30.0
+MARGIN_AUTH_FAILURE_TTL_SECONDS = 300.0
+
+
+@dataclass(slots=True)
+class _MarginEntry:
+    expires_at: float
+    margin: MarginInfo | None = None
+    error: Exception | None = None
+
+
+_margin_cache: dict[str, _MarginEntry] = {}
+_margin_locks: dict[str, asyncio.Lock] = {}
+
+
+def reset_margin_cache() -> None:
+    _margin_cache.clear()
+    _margin_locks.clear()
+
+
+async def cached_margin(adapter: BrokerAdapter) -> MarginInfo:
+    """`adapter.get_margin()`, at most once per broker per TTL. Raises the broker's error when
+    the last attempt failed and its back-off has not run out."""
+    key = adapter.broker_name
+    lock = _margin_locks.setdefault(key, asyncio.Lock())
+    async with lock:  # the page's two parallel calls share one broker call
+        entry = _margin_cache.get(key)
+        if entry is None or entry.expires_at <= time.monotonic():
+            try:
+                margin = await adapter.get_margin()
+            except BrokerAuthError as exc:
+                entry = _MarginEntry(time.monotonic() + MARGIN_AUTH_FAILURE_TTL_SECONDS, error=exc)
+            except Exception as exc:  # noqa: BLE001 - kept, and raised again, below
+                entry = _MarginEntry(time.monotonic() + MARGIN_TTL_SECONDS, error=exc)
+            else:
+                entry = _MarginEntry(time.monotonic() + MARGIN_TTL_SECONDS, margin=margin)
+            _margin_cache[key] = entry
+    if entry.error is not None:
+        raise entry.error
+    if entry.margin is None:  # one of the two is always set above
+        raise RuntimeError("margin cache entry holds neither a margin nor an error")
+    return entry.margin
 
 
 def get_portfolio_broker_adapter() -> BrokerAdapter | None:
@@ -198,7 +250,7 @@ async def portfolio_summary_endpoint(
     used_margin: float | None = None
     if adapter is not None:
         try:
-            margin = await adapter.get_margin()
+            margin = await cached_margin(adapter)
             available_margin = margin.available_margin
             used_margin = margin.used_margin
         except Exception as exc:  # noqa: BLE001 - a broker hiccup must never break the dashboard
@@ -289,7 +341,7 @@ async def portfolio_risk_metrics_endpoint(
     margin_utilization_pct: float | None = None
     if adapter is not None:
         try:
-            margin = await adapter.get_margin()
+            margin = await cached_margin(adapter)
             total_margin = margin.available_margin + margin.used_margin
             if total_margin > 0:
                 margin_utilization_pct = margin.used_margin / total_margin * 100.0

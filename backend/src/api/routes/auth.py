@@ -73,7 +73,7 @@ from src.core.web_session import (
 from src.core.ws_ticket import issue_ws_ticket
 from src.models.refresh_token import RefreshToken
 from src.models.user import User
-from src.observability.audit_middleware import skip_audit_entry
+from src.observability.audit_middleware import set_audit_actor, skip_audit_entry
 
 logger = structlog.get_logger(__name__)
 
@@ -270,6 +270,7 @@ async def login(
 
     if state != SignInState():
         _store_state(user, after_success(state))
+    set_audit_actor(request, user.email)  # the trail names who signed in, not "anonymous"
     return await _start_session(request, response, db, user)
 
 
@@ -430,6 +431,9 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)) -> Respon
         await db.execute(select(RefreshToken).where(RefreshToken.id == token_id))
     ).scalar_one_or_none()
     if stored is not None:
+        email = await db.scalar(select(User.email).where(User.id == stored.user_id))
+        if email:
+            set_audit_actor(request, email)
         # The family, not just this token: a retried refresh leaves two live tokens in it, and
         # signing out must end both.
         await db.execute(

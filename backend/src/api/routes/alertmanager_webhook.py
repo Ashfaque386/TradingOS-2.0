@@ -31,6 +31,7 @@ from src.core.config import get_settings
 from src.core.db import get_session_factory
 from src.models.engine_alert_event import EngineAlertEvent
 from src.notifications.alertmanager_token import token_matches
+from src.observability.audit_middleware import set_audit_actor
 from src.orchestration.engine_alerts import (
     AlertCandidate,
     announce_opened,
@@ -94,6 +95,7 @@ async def alertmanager_webhook(
     if not token_matches(_bearer(authorization), get_settings().alertmanager_token_path):
         logger.warning("webhooks.rejected", channel="alertmanager", reason="bad or missing token")
         return Response(status_code=status.HTTP_401_UNAUTHORIZED, content="invalid token")
+    set_audit_actor(request, "alertmanager")
 
     body = await request.body()
     if len(body) > _MAX_BODY_BYTES:
