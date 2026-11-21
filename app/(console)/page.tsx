@@ -1,9 +1,7 @@
 'use client'
 
-import { Canvas, useFrame } from '@react-three/fiber'
-import { Float, OrbitControls, Sparkles } from '@react-three/drei'
+import dynamic from 'next/dynamic'
 import { useCallback, useMemo, useState } from 'react'
-import type { Mesh } from 'three'
 import { Activity, AlertTriangle, Bot, Cpu, LineChart, MemoryStick, Radio, ShieldAlert, Timer, TrendingUp, Wifi, Zap } from 'lucide-react'
 import { roleLabel, useAuth } from '@/components/auth/auth-provider'
 import { usePreferences } from '@/components/providers/preferences-provider'
@@ -27,10 +25,19 @@ import {
 import { EquityPanel } from '@/components/equity/equity-panel'
 import { useConsoleState } from '@/components/shell/console-state'
 import { ErrorNotice } from '@/components/ui/error-notice'
+import type { PulseState } from '@/components/overview/pulse-scene'
+import { describeEvent, entityLabel, isRoutineEvent } from '@/lib/activity-feed'
 import { usePolling } from '@/lib/use-polling'
 import { useWebSocketChannel } from '@/lib/ws'
 
-type PulseState = 'IDLE' | 'RESEARCHING' | 'EXECUTING' | 'AWAITING APPROVAL' | 'RISK ALERT'
+// three.js loads after the page is interactive; until then, and if WebGL never comes, a still orb
+// in the state's colour (`.pulse-orb-still`) holds its place.
+const PulseScene = dynamic(() => import('@/components/overview/pulse-scene'), {
+  ssr: false,
+  loading: () => <div className="pulse-orb-still" aria-hidden="true" />,
+})
+
+const ROUTINE_CHIP = 'Sign-ins and webhooks'
 
 const stateConfig: Record<PulseState, { color: string; glow: string; copy: string }> = {
   IDLE: { color: '#67e8f9', glow: 'rgba(34,211,238,.35)', copy: 'All systems nominal' },
@@ -67,43 +74,6 @@ function relativeTime(iso: string): string {
   if (minutes < 60) return `${minutes}m ago`
   const hours = Math.round(minutes / 60)
   return `${hours}h ago`
-}
-
-function PulseOrb({ state, reduceMotion }: { state: PulseState; reduceMotion: boolean }) {
-  const mesh = useMemo(() => ({ current: null as Mesh | null }), [])
-  const config = stateConfig[state]
-  useFrame((_, delta) => {
-    // In reduced-motion / power-save mode the orb holds a static pose — the state
-    // color and the text status pill still communicate the current state.
-    if (reduceMotion || !mesh.current) return
-    mesh.current.rotation.y += delta * (state === 'RISK ALERT' ? 1.8 : state === 'RESEARCHING' ? 0.8 : 0.28)
-    mesh.current.rotation.x = Math.sin(Date.now() / 1300) * 0.08
-    const pulse = state === 'AWAITING APPROVAL' ? 1 + Math.sin(Date.now() / 260) * .08 : state === 'RISK ALERT' ? 1 + Math.sin(Date.now() / 110) * .045 : 1
-    mesh.current.scale.setScalar(pulse)
-  })
-  return (
-    <group>
-      <Float enabled={!reduceMotion} speed={state === 'RISK ALERT' ? 4 : 1.2} rotationIntensity={.3} floatIntensity={.35}>
-        <mesh ref={mesh}>
-          <icosahedronGeometry args={[1.35, 5]} />
-          <meshStandardMaterial color={config.color} emissive={config.color} emissiveIntensity={state === 'RISK ALERT' ? 2.2 : 1.2} metalness={.75} roughness={.2} wireframe={state === 'RESEARCHING'} />
-        </mesh>
-      </Float>
-      <mesh scale={1.58}>
-        <sphereGeometry args={[1, 32, 32]} />
-        <meshBasicMaterial color={config.color} transparent opacity={.07} />
-      </mesh>
-      {/* Particle flourishes are decorative — dropped in reduced-motion / power-save. */}
-      {!reduceMotion && (
-        <Sparkles count={state === 'RISK ALERT' ? 180 : 90} scale={state === 'RISK ALERT' ? 5.2 : 4.2} size={state === 'RISK ALERT' ? 4 : 2.4} speed={state === 'EXECUTING' ? 2 : state === 'RISK ALERT' ? 4 : .55} color={config.color} />
-      )}
-      <pointLight color={config.color} intensity={state === 'RISK ALERT' ? 9 : 5} distance={6} />
-    </group>
-  )
-}
-
-function PulseScene({ state, reduceMotion }: { state: PulseState; reduceMotion: boolean }) {
-  return <Canvas frameloop={reduceMotion ? 'demand' : 'always'} camera={{ position: [0, 0, 5.4], fov: 42 }} dpr={[1, 1.5]}><ambientLight intensity={.5} /><PulseOrb state={state} reduceMotion={reduceMotion} /><OrbitControls enableZoom={false} enablePan={false} autoRotate={!reduceMotion} autoRotateSpeed={.35} /></Canvas>
 }
 
 function ProviderHealthRow({ entries }: { entries: SystemVitals['llm']['provider_health'] }) {
@@ -227,8 +197,17 @@ export default function Home() {
           : 'IDLE'
 
   const config = stateConfig[state]
-  const filteredActivities = filter === 'All' ? activities : activities.filter((a) => a.entity_type === filter)
-  const entityTypes = useMemo(() => ['All', ...Array.from(new Set(activities.map((a) => a.entity_type)))], [activities])
+  // Sign-ins and webhook deliveries are left out unless their own chip is chosen; the Audit Log keeps all.
+  const filteredActivities =
+    filter === 'All'
+      ? activities.filter((a) => !isRoutineEvent(a))
+      : filter === ROUTINE_CHIP
+        ? activities.filter((a) => isRoutineEvent(a))
+        : activities.filter((a) => !isRoutineEvent(a) && entityLabel(a.entity_type) === filter)
+  const entityTypes = useMemo(() => {
+    const labels = Array.from(new Set(activities.filter((a) => !isRoutineEvent(a)).map((a) => entityLabel(a.entity_type))))
+    return ['All', ...labels, ...(activities.some((a) => isRoutineEvent(a)) ? [ROUTINE_CHIP] : [])]
+  }, [activities])
 
   return <><div className="mx-auto flex w-full max-w-[1700px] flex-col gap-5">
     <div className={`autonomy-banner ${autonomousSubscriptions.length > 0 ? 'autonomy-banner-active' : 'autonomy-banner-idle'}`}>
@@ -240,7 +219,7 @@ export default function Home() {
     </div>
     <section className={`pulse-hero pulse-state-${state.toLowerCase().replaceAll(' ', '-')}`} style={{ '--pulse-color': config.color, '--pulse-glow': config.glow } as React.CSSProperties}>
       <div className="pulse-header"><div><p className="eyebrow">TRADINGOS // ORGANIZATION PULSE</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em]">The intelligence layer is <span style={{ color: config.color }}>{state.toLowerCase()}.</span></h1><p className="mt-2 text-sm text-muted-foreground">{config.copy} · NSE / BSE synchronized</p></div></div>
-      <div className="pulse-orb"><PulseScene state={state} reduceMotion={reduceMotion} /><div className="pulse-status" style={{ borderColor: config.color, color: config.color }}><span className="status-dot" />{state}<small>{state === 'AWAITING APPROVAL' ? `${pendingSignoffs} pending` : state === 'RISK ALERT' ? 'PERIMETER BREACH' : 'LIVE'}</small></div></div>
+      <div className="pulse-orb"><PulseScene state={state} color={config.color} reduceMotion={reduceMotion} /><div className="pulse-status" style={{ borderColor: config.color, color: config.color }}><span className="status-dot" />{state}<small>{state === 'AWAITING APPROVAL' ? `${pendingSignoffs} pending` : state === 'RISK ALERT' ? 'PERIMETER BREACH' : 'LIVE'}</small></div></div>
       <div className="kpi-strip">
         <div><Bot /><span>ACTIVE AGENTS<strong>{agents.length ? `${activeAgentsCount} / ${agents.length}` : '—'}</strong></span></div>
         <div><Radio /><span>LIVE RUNS<strong>{liveRunsCount.toString().padStart(2, '0')}</strong></span></div>
@@ -267,7 +246,7 @@ export default function Home() {
     </section>
     <EquityPanel mode="paper" compact />
     <EquityPanel mode="live" compact />
-    <section className="grid gap-5 xl:grid-cols-[1.35fr_1fr]"><article className="pulse-panel overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 p-5"><div><p className="eyebrow">LIVE ACTIVITY FEED</p><p className="mt-1 text-xs text-muted-foreground">Organization-wide agent events · newest first</p></div><div className="flex gap-1 rounded-lg bg-white/4 p-1">{entityTypes.map((item) => <button key={item} onClick={() => setFilter(item)} className={`filter-chip ${filter === item ? 'filter-chip-active' : ''}`}>{item}</button>)}</div></div><div className="activity-list">{filteredActivities.length === 0 && <div className="p-5 text-xs text-muted-foreground">No activity yet. Actions taken across the organization will appear here in real time.</div>}{filteredActivities.map((event) => <div key={event.id} className={`activity-row severity-${severityFor(event)}`}><span className="activity-avatar">{initialsFor(event.actor)}</span><div className="min-w-0 flex-1"><p className="truncate text-sm text-foreground">{event.actor} · {event.action} {event.entity_type} {event.entity_id}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{relativeTime(event.created_at)}</p></div></div>)}</div></article><Vitals /></section>
+    <section className="grid gap-5 xl:grid-cols-[1.35fr_1fr]"><article className="pulse-panel overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 p-5"><div><p className="eyebrow">LIVE ACTIVITY FEED</p><p className="mt-1 text-xs text-muted-foreground">Organization-wide agent events · newest first</p></div><div className="flex flex-wrap gap-1 rounded-lg bg-white/4 p-1">{entityTypes.map((item) => <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)} className={`filter-chip ${filter === item ? 'filter-chip-active' : ''}`}>{item}</button>)}</div></div><div className="activity-list">{filteredActivities.length === 0 && <div className="p-5 text-xs text-muted-foreground">{filter === 'All' && activities.length > 0 ? `Nothing but sign-ins and webhook deliveries recently; choose “${ROUTINE_CHIP}” to see them.` : 'No activity yet. Actions taken across the organization will appear here in real time.'}</div>}{filteredActivities.map((event) => <div key={event.id} className={`activity-row severity-${severityFor(event)}`}><span className="activity-avatar">{initialsFor(event.actor)}</span><div className="min-w-0 flex-1"><p className="truncate text-sm text-foreground">{describeEvent(event)}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{relativeTime(event.created_at)}</p></div></div>)}</div></article><Vitals /></section>
     <footer className="flex items-center justify-between pb-3 text-[10px] text-muted-foreground"><span className="flex items-center gap-2"><Activity className="size-3" /> Role: {roleLabel(role)} · {isReadOnly ? 'Read-only observability mode' : 'Control plane enabled'}</span><span>TRADINGOS OS · {autonomousSubscriptions.length > 0 ? `LIVE AUTONOMY ON (${autonomousSubscriptions.length})` : 'LIVE AUTONOMY OFF'}</span></footer>
   </div></>
 }

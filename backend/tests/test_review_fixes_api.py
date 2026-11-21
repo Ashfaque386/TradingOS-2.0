@@ -11,6 +11,7 @@ from prometheus_client import REGISTRY
 from sqlalchemy import select
 
 import src.api.routes.portfolio as portfolio_routes
+from src.audit.service import write_audit_entry
 from src.brokers.base import BrokerAuthError, MarginInfo
 from src.core.config import get_settings
 from src.core.roles import Role
@@ -215,3 +216,39 @@ async def test_a_sign_in_is_recorded_under_the_account_that_signed_in(
     assert response.status_code == 200
     row = await _newest_audit_row(db_session_factory, "POST /api/v1/auth/login")
     assert row.actor == "auditor@example.com"
+
+
+# --- the Audit Log's entity filter ------------------------------------------------------------
+
+
+async def test_one_entity_filter_can_ask_for_every_spelling_of_a_thing(
+    client, db_session_factory, make_user
+):
+    async with db_session_factory() as db:
+        for entity_type in ("broker-credentials", "broker_credentials", "strategies"):
+            await write_audit_entry(db, actor="seed", action="seeded", entity_type=entity_type)
+        await db.commit()
+    await make_user("auditor@example.com", "a-long-test-password", Role.READ_ONLY_AUDITOR)
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "auditor@example.com", "password": "a-long-test-password"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    both = await client.get(
+        "/api/v1/audit/entries",
+        params={"entity_type": "broker-credentials,broker_credentials", "action": "seeded"},
+        headers=headers,
+    )
+    one = await client.get(
+        "/api/v1/audit/entries",
+        params={"entity_type": "broker_credentials", "action": "seeded"},
+        headers=headers,
+    )
+
+    assert both.status_code == one.status_code == 200
+    assert sorted(e["entity_type"] for e in both.json()) == [
+        "broker-credentials",
+        "broker_credentials",
+    ]
+    assert [e["entity_type"] for e in one.json()] == ["broker_credentials"]

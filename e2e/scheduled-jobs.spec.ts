@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { describeTrigger } from '../lib/schedule-format'
 import { E2E_USERS, api, login, tokenFor } from './utils'
 
 // A scheduled job's schedule, edited in Mission Control, is kept (it used to change the running job
@@ -32,7 +33,8 @@ test('a changed schedule says it is kept across restarts and what the code\'s ow
 
     const note = page.getByTestId(`customised-${SCHEDULER}-${JOB}`)
     await expect(note).toContainText('Chosen by an administrator and kept across restarts')
-    await expect(note).toContainText(original) // the code's own schedule, named
+    await expect(note).toContainText(describeTrigger(original)) // the code's own schedule, named
+    expect(describeTrigger(original)).toBe('Mondays 07:00 IST') // and read as a person would
     const changed = await job(token)
     expect(changed.overridden).toBe(true)
     expect(changed.default_trigger).toBe(original)
@@ -42,7 +44,7 @@ test('a changed schedule says it is kept across restarts and what the code\'s ow
 
     await row(page).getByRole('button', { name: `Restore the default schedule of ${JOB}` }).click()
     const dialog = page.getByRole('dialog', { name: `Restore the default schedule of ${JOB}?` })
-    await expect(dialog).toContainText(original)
+    await expect(dialog).toContainText(describeTrigger(original))
     await dialog.getByRole('button', { name: 'Restore default' }).click()
 
     await expect(note).toHaveCount(0)

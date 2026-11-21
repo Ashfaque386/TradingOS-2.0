@@ -21,6 +21,7 @@ import {
   verifyChecks,
   verifyFailed,
 } from '@/lib/audit'
+import { entityOptions } from '@/lib/activity-feed'
 import { can } from '@/lib/permissions'
 import { useQuery } from '@/lib/use-query'
 
@@ -49,14 +50,18 @@ function AccessRestricted({ role }: { role: Role }) {
 }
 
 /** A drop-down of the values the log holds. The current choice stays listed even if the server did not offer it (a link can set any value). */
-function FacetSelect({ label, value, values, allLabel, onChange }: { label: string; value: string; values: string[]; allLabel: string; onChange: (value: string) => void }) {
-  const options = value && !values.includes(value) ? [value, ...values] : values
+type FacetOption = { value: string; label: string }
+
+function FacetSelect({ label, value, values, allLabel, onChange }: { label: string; value: string; values: (string | FacetOption)[]; allLabel: string; onChange: (value: string) => void }) {
+  const given = values.map((v) => (typeof v === 'string' ? { value: v, label: v } : v))
+  // A value from the address bar that is not offered (a stored spelling on its own, say) is still shown.
+  const options = value && !given.some((o) => o.value === value) ? [{ value, label: value }, ...given] : given
   return (
     <label className="audit-filter-field">
       <span>{label}</span>
       <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{allLabel}</option>
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
     </label>
   )
@@ -217,7 +222,8 @@ export default function AuditLogPage() {
         <div className="audit-filters">
           <label className="audit-search-box"><Search className="size-3.5" /><input placeholder="Search entity id, actor, action..." aria-label="Search the log" value={typedSearch} onChange={(e) => setTypedSearch(e.target.value)} /></label>
           <FacetSelect label="Actor" value={filter.actor} values={facets?.actors ?? []} allLabel="All actors" onChange={(actor) => change({ actor })} />
-          <FacetSelect label="Entity type" value={filter.entityType} values={facets?.entity_types ?? []} allLabel="All entities" onChange={(entityType) => change({ entityType })} />
+          {/* One option per thing: its stored spellings (the middleware's and the domain code's) are asked for together. */}
+          <FacetSelect label="Entity type" value={filter.entityType} values={entityOptions(facets?.entity_types ?? []).map((o) => ({ value: o.values.join(','), label: o.label }))} allLabel="All entities" onChange={(entityType) => change({ entityType })} />
           <FacetSelect label="Action" value={filter.action} values={facets?.actions ?? []} allLabel="All actions" onChange={(action) => change({ action })} />
         </div>
         <div className="audit-filters">

@@ -97,7 +97,7 @@ def _as_utc(moment: datetime | None) -> datetime | None:
 
 
 def audit_filter(
-    entity_type: str | None = Query(default=None, max_length=64),
+    entity_type: str | None = Query(default=None, max_length=512),
     entity_id: str | None = Query(default=None, max_length=128),
     actor: str | None = Query(default=None, max_length=64),
     action: str | None = Query(default=None, max_length=128),
@@ -116,9 +116,21 @@ def audit_filter(
     )
 
 
+def _entity_types(value: str) -> list[str]:
+    """`entity_type` may name several stored spellings of one thing, comma-separated
+    (`broker-credentials,broker_credentials`): the audit middleware and the domain code write
+    different ones, both permanent, and the console's filter asks for all of them under one label.
+    No stored entity type contains a comma."""
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def _apply_filters(stmt: Select[Any], filters: AuditFilter) -> Select[Any]:
     if filters.entity_type is not None:
-        stmt = stmt.where(AuditLog.entity_type == filters.entity_type)
+        types = _entity_types(filters.entity_type)
+        if len(types) == 1:
+            stmt = stmt.where(AuditLog.entity_type == types[0])
+        else:
+            stmt = stmt.where(AuditLog.entity_type.in_(types))
     if filters.entity_id is not None:
         stmt = stmt.where(AuditLog.entity_id == filters.entity_id)
     if filters.actor is not None:

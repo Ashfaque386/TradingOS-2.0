@@ -96,9 +96,21 @@ function ChangeTile({ name, change }: { name: string; change: number }) {
 }
 
 function PulseTab() {
-  // The server answers 503 with its reason when no broker is connected: say that, not "Loading".
-  const { data: pulse, error, refresh } = usePolling(getMarketPulse, { intervalMs: 30_000 })
+  // The server answers 503 with its reason when there is no source for the pulse (no broker
+  // connected, or the pulse not sourced from broker data at all): that is a state, not a failure,
+  // so it is said plainly and without "Try again", which would only get the same answer. The tab
+  // keeps polling, so it fills in by itself once a source exists. Any other failure offers a retry.
+  const { data: pulse, error, errorStatus, refresh } = usePolling(getMarketPulse, { intervalMs: 30_000 })
 
+  if (error && !pulse && errorStatus === 503) {
+    return (
+      <div className="p-4">
+        <p role="status" className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-xs text-muted-foreground">
+          Not available yet: {error.replace(/\.+$/, '')}.
+        </p>
+      </div>
+    )
+  }
   if (error && !pulse) return <div className="p-4"><ErrorNotice message={error} onRetry={() => void refresh()} /></div>
   if (!pulse) return <p className="p-4 text-xs text-muted-foreground">Loading market pulse…</p>
 

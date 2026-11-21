@@ -8,6 +8,8 @@ export interface PollingState<T> {
   data: T | null
   /** Why the latest request failed; null after any success. */
   error: string | null
+  /** The HTTP status of that failure, when the server answered (null for a network error or a success). */
+  errorStatus: number | null
   /** True until the first request finishes. */
   loading: boolean
   /** When `data` was fetched. */
@@ -28,6 +30,7 @@ export function usePolling<T>(
 ): PollingState<T> {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [errorStatus, setErrorStatus] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
@@ -47,10 +50,13 @@ export function usePolling<T>(
           if (!live) return
           setData(result)
           setError(null)
+          setErrorStatus(null)
           setLastUpdated(new Date())
         } catch (err) {
           if (!live) return
           setError(err instanceof Error && err.message ? err.message : 'Could not load this')
+          const status = (err as { status?: unknown } | null)?.status
+          setErrorStatus(typeof status === 'number' ? status : null)
         } finally {
           if (live) setLoading(false)
         }
@@ -75,5 +81,5 @@ export function usePolling<T>(
     await pollerRef.current?.refresh()
   }, [])
 
-  return { data, error, loading, lastUpdated, refresh }
+  return { data, error, errorStatus, loading, lastUpdated, refresh }
 }

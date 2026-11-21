@@ -348,7 +348,7 @@ function GatewaySection() {
               <span className="set-version-tag mono">v{cv.id}</span>
               <span className="set-version-when mono">{indiaStamp(cv.created_at)}</span>
               <span className="set-version-author">{cv.source}</span>
-              <span className="set-version-note">{cv.status}</span>
+              {/* Every applied version is stored as "active" for good, so the word said nothing; only a rejected one is worth saying. */}<span className="set-version-note">{cv.status === 'rejected' ? 'rejected' : ''}</span>
               {cv.id === config?.version_id ? <span className="set-version-current">Current</span> : canEdit ? <button className="set-rollback" disabled={busy} onClick={() => setRollingBack(cv)}><RotateCcw className="size-3" /> Rollback</button> : null}
             </li>
           ))}

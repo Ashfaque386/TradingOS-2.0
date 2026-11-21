@@ -35,6 +35,35 @@ test('the rollup shows its figures, the P&L labelled as before costs, and the ri
   await expect(page.getByRole('heading', { name: 'Recommendations' })).toBeVisible()
 })
 
+test('a recommendation narrative is drawn from its Markdown, not printed with asterisks', async ({ page }) => {
+  // Seen on 2026-11-21: "**Overall posture: fully in cash**" shown with its asterisks.
+  await page.route('**/api/v1/portfolio/recommendations', (route) =>
+    respond(route, [
+      {
+        id: 'md-1',
+        summary: '**Overall posture: fully in cash.**\n\n- nothing to rebalance\n- no margin in use',
+        allocations: [
+          { strategy_id: 's-1', strategy_name: 'Momentum', strategy_status: 'PaperTrading', action: 'hold', rationale: 'Sharpe is **below** the bar', sharpe: 0.4, max_drawdown: 0.08 },
+        ],
+        based_on: {},
+        llm_source: 'llm',
+        status: 'pending',
+        reviewed_by: null,
+        reviewed_at: null,
+        reviewer_notes: null,
+        created_at: '2026-11-21T10:00:00Z',
+      },
+    ]),
+  )
+  await login(page, E2E_USERS.pm)
+  await page.goto('/portfolio')
+
+  await expect(page.locator('strong', { hasText: 'Overall posture: fully in cash.' })).toBeVisible()
+  await expect(page.getByRole('listitem').filter({ hasText: 'nothing to rebalance' })).toBeVisible()
+  await expect(page.locator('td strong', { hasText: 'below' })).toBeVisible()
+  await expect(page.getByText('**', { exact: false })).toHaveCount(0)
+})
+
 test('a portfolio manager may generate a recommendation, an auditor may not', async ({ page }) => {
   await login(page, E2E_USERS.auditor)
   await page.goto('/portfolio')

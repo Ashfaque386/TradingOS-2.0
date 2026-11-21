@@ -54,9 +54,29 @@ test('Market Analysis says why the pulse is unavailable instead of loading forev
 
   await page.goto('/analysis')
 
-  // Next also renders its own empty role=alert route announcer, so pick ours by its text.
-  await expect(page.getByRole('alert').filter({ hasText: 'No broker is connected' })).toBeVisible()
+  // A 503 is the server saying there is no source yet: a state, said plainly, with no "Try again"
+  // (which would only get the same answer). The tab keeps polling and fills in once there is one.
+  await expect(page.getByRole('status').filter({ hasText: 'Not available yet: No broker is connected' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0)
   await expect(page.getByText('Loading market pulse')).toHaveCount(0)
+})
+
+test('Market Analysis offers to try again when the pulse fails for any other reason', async ({ page }) => {
+  await login(page, E2E_USERS.admin)
+  await page.route('**/api/v1/market-data/pulse', (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'the pulse service fell over' }),
+    }),
+  )
+
+  await page.goto('/analysis')
+
+  // Next also renders its own empty role=alert route announcer, so pick ours by its text.
+  const notice = page.getByRole('alert').filter({ hasText: 'the pulse service fell over' })
+  await expect(notice).toBeVisible()
+  await expect(notice.getByRole('button', { name: 'Try again' })).toBeVisible()
 })
 
 test('the Overview does not call a kill switch it could not read "armed"', async ({ page }) => {

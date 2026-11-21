@@ -17,6 +17,7 @@ import {
 } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorNotice } from '@/components/ui/error-notice'
+import { Markdown } from '@/components/ui/markdown'
 import { section } from '@/lib/errors'
 import { can } from '@/lib/permissions'
 import { type Decision, decisionWords, money, netOfCosts } from '@/lib/portfolio-view'
@@ -84,7 +85,8 @@ function RecommendationCard({
         <span className="font-mono text-[10px] text-muted-foreground">{indiaStamp(recommendation.created_at)} India time</span>
       </div>
 
-      <p className="mt-3 text-xs leading-relaxed text-foreground">{recommendation.summary}</p>
+      {/* The narrative is the LLM's Markdown; drawn, not printed with its asterisks (until 2026-11-21 it was). */}
+      <Markdown source={recommendation.summary} firstHeading={4} className="md-doc-compact mt-3" />
 
       <div className="mt-3 overflow-x-auto">
         <table className="orders-table">
@@ -97,7 +99,7 @@ function RecommendationCard({
                 <td><span className={`outcome ${actionBadgeClass(a.action)}`}>{a.action}</span></td>
                 <td className="mono">{a.sharpe === null ? '—' : a.sharpe.toFixed(2)}</td>
                 <td className="mono">{a.max_drawdown === null ? '—' : `${(a.max_drawdown * 100).toFixed(1)}%`}</td>
-                <td className="text-muted-foreground">{a.rationale}</td>
+                <td className="text-muted-foreground"><Markdown source={a.rationale} firstHeading={5} className="md-doc-compact md-doc-cell" /></td>
               </tr>
             ))}
           </tbody>

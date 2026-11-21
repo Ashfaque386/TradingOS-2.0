@@ -53,6 +53,8 @@ import { TabList } from '@/components/ui/tab-list'
 import { can } from '@/lib/permissions'
 import { useFocusTrap } from '@/lib/use-focus-trap'
 import { usePolling } from '@/lib/use-polling'
+import { entityLabel, isRoutineEvent } from '@/lib/activity-feed'
+import { describeTrigger } from '@/lib/schedule-format'
 
 // Same severity/relative-time/initials conventions as the Overview page's
 // LIVE ACTIVITY FEED panel (app/page.tsx) -- both read the identical real
@@ -103,6 +105,10 @@ const SCHEDULER_LABELS: Record<string, string> = {
   screener: 'Screener',
   post_trade_review: 'Post-Trade Review',
   investor_reporting: 'Investor Reporting',
+  backups: 'Backups',
+  risk_monitor: 'Risk Monitor',
+  shadow_mode: 'Shadow Mode',
+  engine_alerts: 'Engine Alerts',
 }
 
 function schedulerLabel(name: string): string {
@@ -122,7 +128,8 @@ function nextRunLabel(iso: string | null): string {
 }
 
 function LiveActivityPanel({ activities }: { activities: ActivityEvent[] }) {
-  const recent = activities.slice(0, 6)
+  // Sign-ins and webhook deliveries stay in the Audit Log; here they would crowd out the six slots.
+  const recent = activities.filter((event) => !isRoutineEvent(event)).slice(0, 6)
   return (
     <section className="pulse-panel flex flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-white/8 p-4">
@@ -137,7 +144,7 @@ function LiveActivityPanel({ activities }: { activities: ActivityEvent[] }) {
           <div key={event.id} className={`activity-row severity-${severityFor(event)}`}>
             <span className="activity-avatar">{initialsFor(event.actor)}</span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs text-foreground">{event.actor} · {event.action} {event.entity_type}</p>
+              <p className="truncate text-xs text-foreground">{event.actor} · {event.action} {entityLabel(event.entity_type)}</p>
               <p className="mt-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{relativeTime(event.created_at)}</p>
             </div>
             <CheckCircle2 className="size-3 shrink-0 text-emerald-300/70" />
@@ -227,10 +234,10 @@ function ScheduledJobRow({
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-foreground">{schedulerLabel(job.scheduler)} <span className="text-muted-foreground">· {job.job_id}</span></p>
-          <p className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">{job.trigger}</p>
+          <p className="mt-0.5 truncate text-[10px] text-muted-foreground" title={job.trigger}>{describeTrigger(job.trigger)}</p>
           {job.overridden && (
             <p className="mt-0.5 text-[10px] text-amber-200" data-testid={`customised-${key}`}>
-              Chosen by an administrator and kept across restarts. The code&apos;s own schedule is <span className="font-mono">{job.default_trigger ?? 'unknown'}</span>.
+              Chosen by an administrator and kept across restarts. The code&apos;s own schedule is <span title={job.default_trigger ?? undefined}>{job.default_trigger ? describeTrigger(job.default_trigger) : 'unknown'}</span>.
             </p>
           )}
         </div>
@@ -260,7 +267,7 @@ function ScheduledJobRow({
       {restoring && (
         <ConfirmDialog
           title={`Restore the default schedule of ${job.job_id}?`}
-          description={`The schedule an administrator chose is forgotten and the job goes back to the one the code gave it: ${job.default_trigger ?? 'its own'}. This applies at once and after every restart.`}
+          description={`The schedule an administrator chose is forgotten and the job goes back to the one the code gave it: ${job.default_trigger ? describeTrigger(job.default_trigger) : 'its own'}. This applies at once and after every restart.`}
           confirmLabel="Restore default"
           busyLabel="Restoring…"
           onConfirm={async () => { await restoreScheduledJobSchedule(job.scheduler, job.job_id); onChanged() }}
