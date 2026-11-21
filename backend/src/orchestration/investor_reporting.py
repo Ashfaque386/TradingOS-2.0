@@ -147,8 +147,8 @@ async def generate_investor_report(
         "## Live Trading",
         "",
         f"- Live trades filled this period: {live_trades_filled}",
-        f"- Cumulative realized P&L across all live positions (to date, not scoped to "
-        f"this period -- see this module's own docstring): {float(live_cumulative_pnl):.2f}",
+        f"- Cumulative realized P&L across all live positions (all time, not only this "
+        f"period): {float(live_cumulative_pnl):.2f}",
         "",
         "## Post-Trade Review Commentary",
         "",

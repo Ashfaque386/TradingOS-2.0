@@ -408,6 +408,7 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos
           JWT_SECRET_KEY: dev-only-secret-do-not-use-in-production
+          TRADINGOS_E2E_SEED: "1"  # this is the CI service database; the script refuses without it
         run: .venv/bin/python scripts/seed_e2e_users.py
 
       # A pipeline run whose process "died": events that just stop, ten minutes

@@ -183,10 +183,12 @@ You need, running locally (not via Docker):
    ```
    PORT=3010 pnpm dev
    ```
-5. **Fixture users**, once:
+5. **Fixture users**, once, into the **test** database only (the script refuses unless
+   `TRADINGOS_E2E_SEED=1`; never set it against a real deployment, where it would create
+   administrator accounts whose passwords are in this repository):
    ```
    cd backend && DATABASE_URL=postgresql+asyncpg://tradingos:tradingos@localhost:5432/tradingos \
-     JWT_SECRET_KEY=dev-only-secret-do-not-use-in-production \
+     JWT_SECRET_KEY=dev-only-secret-do-not-use-in-production TRADINGOS_E2E_SEED=1 \
      .venv/bin/python scripts/seed_e2e_users.py
    ```
 Then, from the repo root:

@@ -26,6 +26,7 @@ import time
 from typing import Any
 
 import structlog
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.tools.registry import execute_skill
@@ -39,6 +40,9 @@ logger = structlog.get_logger(__name__)
 # Gateway config has been applied yet -- once one is, eligible_agents()
 # below reads the real per-agent heartbeat_enabled flags instead.
 DEFAULT_ELIGIBLE_AGENTS: frozenset[str] = frozenset({"ceo-agent", "risk-manager"})
+
+# Seven days of checks at the default one every five minutes.
+HEARTBEAT_LOGS_KEPT_PER_AGENT = 7 * 24 * 12
 
 
 async def run_heartbeat(db: AsyncSession, agent_id: str) -> HeartbeatLog:
@@ -61,11 +65,33 @@ async def run_heartbeat(db: AsyncSession, agent_id: str) -> HeartbeatLog:
 
     log = HeartbeatLog(agent_id=agent_id, status=status, details=details)
     db.add(log)
+    await db.flush()
+    await _prune_old_logs(db, agent_id)
     await db.commit()
     await db.refresh(log)
     if status == HeartbeatStatus.ALERT:
         logger.warning("agents.heartbeat.alert", agent_id=agent_id, details=details)
     return log
+
+
+async def _prune_old_logs(db: AsyncSession, agent_id: str) -> None:
+    """Keeps the newest HEARTBEAT_LOGS_KEPT_PER_AGENT rows for this agent (the console shows the
+    last 20). Until 2026-11-21 nothing pruned the table: about 576 rows a day for the two default
+    agents, kept for ever. Same keep-N shape as src/observability/scheduled_job_history.py."""
+    stale_ids = (
+        (
+            await db.execute(
+                select(HeartbeatLog.id)
+                .where(HeartbeatLog.agent_id == agent_id)
+                .order_by(HeartbeatLog.checked_at.desc(), HeartbeatLog.id.desc())
+                .offset(HEARTBEAT_LOGS_KEPT_PER_AGENT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if stale_ids:
+        await db.execute(delete(HeartbeatLog).where(HeartbeatLog.id.in_(stale_ids)))
 
 
 def eligible_agents() -> frozenset[str]:

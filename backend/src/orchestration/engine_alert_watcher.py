@@ -20,7 +20,7 @@ from the trading code is pinned by a test.
 
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -54,6 +54,7 @@ from src.orchestration.paper_subscription_controls import list_subscription_view
 logger = structlog.get_logger(__name__)
 
 WATCH_INTERVAL_SECONDS = 60
+FIRST_LOOK_DELAY_SECONDS = 5
 WATCH_JOB_ID = "engine_alert_watch"
 
 BROKER_KEY_PREFIX = "broker:"
@@ -161,6 +162,11 @@ def start_engine_alert_watcher(
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        # The first look comes soon after a start, not a full interval later. Until it has run,
+        # the last-success gauge reads 0, which `EngineAlertWatcherStalled` takes for a watcher
+        # that stopped long ago; with only `for: 2m` between a restart and the alert, a slow first
+        # look raised a false critical on rebuilds (seen 2026-11-18).
+        next_run_time=datetime.now(UTC) + timedelta(seconds=FIRST_LOOK_DELAY_SECONDS),
     )
     scheduler.start()
     return scheduler

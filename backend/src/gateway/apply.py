@@ -7,7 +7,7 @@ raises for a bad config; only for a genuine infra failure (DB down).
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,9 +74,41 @@ async def _sync_agent_to_agent_policy(session: AsyncSession, config: TradingOSCo
         )
 
 
+STARTUP_SOURCE = "startup"
+
+
+async def _unchanged_since_last_apply(session: AsyncSession, raw_text: str) -> int | None:
+    """The id of the newest applied version when its text is exactly `raw_text`, else None."""
+    newest = await session.scalar(
+        select(AgentConfigVersion)
+        .where(AgentConfigVersion.status == ConfigVersionStatus.ACTIVE)
+        .order_by(AgentConfigVersion.id.desc())
+        .limit(1)
+    )
+    if newest is not None and newest.raw_content == raw_text:
+        return newest.id
+    return None
+
+
 async def _record_active(
     session: AsyncSession, *, source: str, actor: str, raw_text: str, config: TradingOSConfig
 ) -> ApplyResult:
+    # A restart reads the same file again. When it is exactly what was last applied, that version
+    # is still the one in force: no new version row and no audit entry (before 2026-11-21 every
+    # boot added one, so the history filled with identical copies). The table syncs still run,
+    # since they are idempotent and cheap, and the in-memory state still has to be set.
+    if source == STARTUP_SOURCE:
+        unchanged_id = await _unchanged_since_last_apply(session, raw_text)
+        if unchanged_id is not None:
+            await _sync_agent_identities(session, config)
+            await _sync_agent_bindings(session, config)
+            await _sync_agent_to_agent_policy(session, config)
+            await session.commit()
+            get_state().set(config, unchanged_id)
+            return ApplyResult(
+                status=ConfigVersionStatus.ACTIVE, version_id=unchanged_id, errors=[]
+            )
+
     version = AgentConfigVersion(
         status=ConfigVersionStatus.ACTIVE,
         source=source[:SOURCE_LENGTH],

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.engine.paper_trading.market_hours import IST
 from src.observability.correlation import with_job_correlation_id
 from src.orchestration.investor_reporting import generate_investor_report
+from src.orchestration.job_schedule import RUN_LATE_IF_MISSED
 
 logger = structlog.get_logger(__name__)
 
@@ -23,9 +24,12 @@ INVESTOR_REPORT_JOB_ID = "investor_report_weekly_run"
 
 
 def _prior_week(today: date) -> tuple[date, date]:
-    # today is a Monday (the job's own cron day); the prior full week ran
-    # Monday..Sunday just before it.
-    period_end = today - timedelta(days=1)
+    """The last complete Monday..Sunday week before `today`. Anchored on the Monday of today's
+    week, not on today itself, so a run made late (the machine slept through Monday 07:00 and
+    the job ran on waking, possibly a day later) still reports the week the Monday run would
+    have."""
+    this_monday = today - timedelta(days=today.weekday())
+    period_end = this_monday - timedelta(days=1)
     period_start = period_end - timedelta(days=6)
     return period_start, period_end
 
@@ -54,6 +58,7 @@ def start_investor_reporting_scheduler(
         args=[session_factory],
         id=INVESTOR_REPORT_JOB_ID,
         replace_existing=True,
+        **RUN_LATE_IF_MISSED,  # a closed past week: still the right report when run on waking
     )
     scheduler.start()
     return scheduler

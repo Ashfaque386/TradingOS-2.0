@@ -21,6 +21,9 @@ Idempotent: safe to run before every E2E suite invocation.
 """
 
 import asyncio
+import os
+import sys
+from collections.abc import Mapping
 
 from sqlalchemy import select
 
@@ -41,7 +44,28 @@ E2E_USERS: dict[str, tuple[str, Role]] = {
 }
 
 
+ALLOW_ENV = "TRADINGOS_E2E_SEED"
+
+
+class SeedRefusedError(RuntimeError):
+    """The seed was not explicitly allowed for this database."""
+
+
+def require_explicit_permission(env: Mapping[str, str] | None = None) -> None:
+    """These accounts have published passwords, and the script activates them (again) wherever
+    DATABASE_URL points -- inside the backend container that is the live database. On 2026-11-21
+    four of them, one an administrator, were found active on the live stack. So it runs only
+    where the caller has said this database is a test one: TRADINGOS_E2E_SEED=1 (set by CI's seed
+    step and the e2e README)."""
+    if (env if env is not None else os.environ).get(ALLOW_ENV) != "1":
+        raise SeedRefusedError(
+            f"refusing to create the e2e accounts: set {ALLOW_ENV}=1 if DATABASE_URL is a test "
+            "database. Never run this against a real deployment."
+        )
+
+
 async def seed() -> None:
+    require_explicit_permission()
     session_factory = get_session_factory()
     async with session_factory() as db:
         for email, (password, role) in E2E_USERS.items():
@@ -67,4 +91,8 @@ async def seed() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(seed())
+    try:
+        asyncio.run(seed())
+    except SeedRefusedError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(2)
