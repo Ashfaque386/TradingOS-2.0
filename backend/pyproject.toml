@@ -9,7 +9,7 @@ dependencies = [
     # starlette>=1.3.1) -- closed in Phase 26's dependency-CVE pass,
     # docs/phase20-old-vs-new-comparison.md item 28, by bumping FastAPI to
     # the version whose own pin resolves a fixed starlette.
-    "fastapi>=0.141,<0.163",
+    "fastapi>=0.141,<0.166",
     "uvicorn[standard]>=0.32,<0.55",
     # [asyncio] is the extra that installs greenlet, which the async engine needs. SQLAlchemy 2.0
     # brought it unasked; 2.1 does not, so a bump to 2.1 failed every import of the async engine.
